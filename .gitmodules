@@ -1,3 +1,12 @@
 [submodule "range-v3"]
 	path = range-v3
 	url = https://github.com/ericniebler/range-v3
+[submodule "BigInt"]
+	path = BigInt
+	url = https://github.com/faheel/BigInt
+[submodule "parallelstl"]
+	path = parallelstl
+	url = https://github.com/intel/parallelstl
+[submodule "tbb"]
+	path = tbb
+	url = https://github.com/intel/tbb
