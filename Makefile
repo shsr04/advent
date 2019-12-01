@@ -2,8 +2,15 @@ IncludeFlags := -I range-v3/include
 LibFlags :=
 Libs := -lgmpxx -lgmp
 
+Default := day1
+$(Default):
+.SILENT: run
+
 %: %.cpp
 	clang++ -std=c++17 -Werror -Ofast -flto $(IncludeFlags) $(LibFlags) -o $@ $^ $(Libs)
+
+run: $(Default)
+	./$< $(Default)_input
 
 # (for high-performance:)
 # IncludeFlags := -I range-v3/include -I parallelstl/include -I tbb/include
