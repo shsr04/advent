@@ -5,6 +5,7 @@
 #include <map>
 #include <optional>
 #include <queue>
+#include <random>
 #include <set>
 #include <string>
 #include <vector>
@@ -20,10 +21,9 @@
 #include <gmpxx.h>
 using big_int = mpz_class;
 #else
-using big_int = int;
+using big_int = ssize_t;
 #endif
 
-#include <range/v3/action.hpp>
 #include <range/v3/algorithm.hpp>
 #include <range/v3/iterator.hpp>
 #include <range/v3/numeric.hpp>
@@ -32,6 +32,5 @@ using big_int = int;
 using namespace std;
 namespace r = ranges;
 namespace v = ranges::views;
-namespace ra = ranges::actions;
 
 #include "_graph.hpp"

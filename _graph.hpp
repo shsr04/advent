@@ -23,7 +23,7 @@ class graph {
 void graph::set_weight(int u, int k, int w) {
     if (w < 2)
         return;
-    int u0 = u, v = head(u, k);
+    int v = head(u, k);
     for (int a = 0; a < w - 1; a++) {
         adj_.push_back({-1});
         adj_.at(u).at(k) = adj_.size() - 1;
