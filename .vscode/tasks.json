@@ -8,7 +8,10 @@
             "type": "shell",
             "command": "make -B",
             "problemMatcher": [],
-            "group": "build",
+            "group": {
+                "kind": "build",
+                "isDefault": false
+            },
             "presentation": {
                 "echo": false,
                 "reveal": "always",

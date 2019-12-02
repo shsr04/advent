@@ -1,5 +1,6 @@
 #include <atomic>
 #include <fstream>
+#include <functional>
 #include <iostream>
 #include <map>
 #include <optional>
@@ -15,8 +16,12 @@
 #include <pstl/numeric>
 #endif
 
+#ifdef USE_GMP
 #include <gmpxx.h>
 using big_int = mpz_class;
+#else
+using big_int = int;
+#endif
 
 #include <range/v3/action.hpp>
 #include <range/v3/algorithm.hpp>
@@ -27,6 +32,6 @@ using big_int = mpz_class;
 using namespace std;
 namespace r = ranges;
 namespace v = ranges::views;
-namespace a = ranges::actions;
+namespace ra = ranges::actions;
 
 #include "_graph.hpp"
