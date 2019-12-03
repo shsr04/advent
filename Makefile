@@ -20,14 +20,15 @@ endif
 ifdef prog
 	Prog := $(prog)
 else
-	Prog := day2
+	Prog := day3
 endif 
 
 default: $(Prog)
 .SILENT: run
 
 %: %.cpp
-	clang++ -std=c++17 -Werror -Ofast $(IncludeFlags) $(LibFlags) $(DefFlags) -o $@ $^ $(Libs)
+	clang++ -std=c++17 -Werror -g -Ofast $(IncludeFlags) $(LibFlags) $(DefFlags) -o $@ $^ $(Libs)
 
 run: $(Prog)
+	echo --- Running $(Prog) ---
 	export LD_LIBRARY_PATH=$(LibraryPath) && ./$< $(Prog)_input

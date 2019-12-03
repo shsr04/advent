@@ -43,32 +43,38 @@ auto operator<<(ostream &o, graph const &g) {
 }
 
 class bfs {
-    struct bfs_elem {
-        int u, dist;
-    };
     graph const &g_;
-    vector<bool> used_;
-    queue<bfs_elem> q_;
+    vector<int> parent_;
+    queue<int> q_;
 
   public:
-    bfs(graph const &g) : g_(g), used_(g_.order()) {}
-    optional<int> distance(int from, int to) {
-        q_.push({from, 0});
-        used_[from] = true;
-        while (!q_.empty()) {
-            auto [u, d] = q_.front();
-            if (u == to)
-                return d;
-            q_.pop();
-            for (int v : g_.adj(u)) {
-                if (used_[v])
-                    continue;
-                q_.push({v, d + 1});
-            }
-        }
-        return {};
-    }
+    bfs(graph const &g) : g_(g), parent_(g_.order(), -1) {}
+    /// Returns the path in reverse order: {to,parent(to),...,from}
+    optional<vector<int>> path(int from, int to);
 };
+
+optional<vector<int>> bfs::path(int from, int to) {
+    q_.push(from);
+    vector<int> r;
+    while (!q_.empty()) {
+        auto u = q_.front();
+        q_.pop();
+        if (u == to) {
+            for (auto a = to; a != from; a = parent_[a]) {
+                r.push_back(a);
+            }
+            r.push_back(from);
+            return r;
+        }
+        for (int v : g_.adj(u)) {
+            if (parent_[v] >= 0)
+                continue;
+            parent_[v] = u;
+            q_.push(v);
+        }
+    }
+    return {};
+}
 
 class dfs {
     struct dfs_elem {
