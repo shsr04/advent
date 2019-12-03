@@ -1,3 +1,6 @@
+#pragma once
+#include "_main.hpp"
+
 class graph {
     vector<vector<int>> adj_;
 

@@ -1,0 +1,19 @@
+[
+    {
+        "arguments": [
+            "clang++",
+            "-c",
+            "-std=c++17",
+            "-Werror",
+            "-g",
+            "-Ofast",
+            "-I",
+            "range-v3/include",
+            "-o",
+            "day3",
+            "day3.cpp"
+        ],
+        "directory": "/home/simon/Documents/Code/cpp/advent",
+        "file": "day3.cpp"
+    }
+]

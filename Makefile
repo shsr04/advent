@@ -23,12 +23,22 @@ else
 	Prog := day3
 endif 
 
-default: $(Prog)
-.SILENT: run
+Default = $(Prog)
+
+ifeq ($(bear),1)
+	Default = bear
+endif
+
+default: $(Default)
+.SILENT: run bear
+.PHONY: run bear
+
+bear:
+	bear make $(Prog)
 
 %: %.cpp
 	clang++ -std=c++17 -Werror -g -Ofast $(IncludeFlags) $(LibFlags) $(DefFlags) -o $@ $^ $(Libs)
 
-run: $(Prog)
+run: $(Default)
 	echo --- Running $(Prog) ---
-	export LD_LIBRARY_PATH=$(LibraryPath) && ./$< $(Prog)_input
+	export LD_LIBRARY_PATH=$(LibraryPath) && ./$(Prog) $(Prog)_input

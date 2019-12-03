@@ -4,29 +4,9 @@
     "version": "2.0.0",
     "tasks": [
         {
-            "label": "build",
+            "label": "default",
             "type": "shell",
-            "command": "make -B",
-            "problemMatcher": [],
-            "group": {
-                "kind": "build",
-                "isDefault": false
-            },
-            "presentation": {
-                "echo": false,
-                "reveal": "always",
-                "focus": false,
-                "panel": "shared",
-                "showReuseMessage": false,
-                "clear": true
-            }
-        },
-        {
-            "label": "run",
-            "type": "shell",
-            "detail": "",
             "command": "make run",
-            "dependsOn": "build",
             "problemMatcher": [],
             "group": {
                 "kind": "build",
@@ -38,7 +18,7 @@
                 "focus": false,
                 "panel": "shared",
                 "showReuseMessage": false,
-                "clear": false
+                "clear": true
             }
         }
     ]
