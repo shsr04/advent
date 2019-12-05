@@ -20,7 +20,7 @@ endif
 ifdef prog
 	Prog := $(prog)
 else
-	Prog := day3
+	Prog := day5
 endif 
 
 Default = $(Prog)
@@ -34,7 +34,7 @@ default: $(Default)
 .PHONY: run bear
 
 bear:
-	bear make $(Prog)
+	bear -a make *
 
 %: %.cpp
 	clang++ -std=c++17 -Werror -g -Ofast $(IncludeFlags) $(LibFlags) $(DefFlags) -o $@ $^ $(Libs)

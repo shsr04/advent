@@ -28,7 +28,7 @@ function<void(int &, int &)> step_function(char dir) {
 int main(int argc, char **argv) {
     if (argc < 2)
         return 99;
-    unordered_map<size_t, vector<int>> grid;
+    map<size_t, vector<int>> grid;
     vector<size_t> intersections;
     string line;
     ifstream in(argv[1]);

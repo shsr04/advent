@@ -1,6 +1,7 @@
 #pragma once
 #include <array>
 #include <fstream>
+#include <bitset>
 #include <functional>
 #include <iostream>
 #include <map>
@@ -8,7 +9,6 @@
 #include <queue>
 #include <set>
 #include <string>
-#include <unordered_map>
 #include <vector>
 
 #ifdef USE_PARALLEL_STL
