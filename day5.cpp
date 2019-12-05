@@ -15,31 +15,30 @@ enum class opcode : int {
 using memory = vector<ssize_t>;
 using mem_val = memory::value_type;
 using mem_index = int;
-using param_mode = string;
+using param_modes = string;
 
 class memory_cell {
     memory &mem_;
-    param_mode const &par_;
-    mem_index const base_;
+    param_modes const &par_;
 
-    int mode(int i) const {
-        if (par_.size() <= i)
+    int mode(int j) const {
+        if (par_.size() <= j)
             return 0;
         else
-            return par_[i]-'0';
+            return par_[j] - '0';
     }
 
   public:
-    memory_cell(memory &mem, param_mode const &par, mem_index base)
+    memory_cell(memory &mem, param_modes const &par, mem_index base)
         : mem_(mem), par_(par), base_(base) {}
 
-    mem_index const i = base_;
+    mem_index const base_;
 
-    mem_val &operator[](int i) {
-        if (mode(i)==1)
-            return mem_[base_ + i];
+    mem_val &operator[](int j) {
+        if (mode(j) == 1)
+            return mem_[base_ + j];
         else
-            return mem_[mem_[base_ + i]];
+            return mem_[mem_[base_ + j]];
     }
 };
 
@@ -47,16 +46,16 @@ class instruction {
   public:
     using func = function<mem_index(memory_cell)>;
     instruction(func p_action) : action(move(p_action)) {}
-    auto operator()(memory_cell c) { return action(move(c)); }
+    auto operator()(memory_cell c) const { return action(move(c)); }
 
   private:
-    const func action;
+    func action;
 };
 
 int const INPUT_AIR_CONDITIONING = 1, INPUT_THERMAL_CONTROL = 5;
 
 /// instruction map
-map<opcode, instruction> instr = {
+const map<opcode, instruction> instr = {
     {opcode::add, {[](auto c) {
          c[2] = c[0] + c[1];
          return 4;
@@ -67,9 +66,7 @@ map<opcode, instruction> instr = {
      }}},
     {opcode::in, {[](auto c) {
          cout << "Input a number: ";
-         mem_val inp;
-         cin >> inp;
-         c[0] = inp;
+         cin >> c[0];
          return 2;
      }}},
     {opcode::out, {[](auto c) {
@@ -78,14 +75,14 @@ map<opcode, instruction> instr = {
      }}},
     {opcode::jnz, {[](auto c) {
          if (c[0] != 0) {
-             auto r = static_cast<mem_index>(-c.i + c[1] + 1);
+             auto r = static_cast<mem_index>(-c.base_ + c[1] + 1);
              return r;
          } else
              return static_cast<mem_index>(3);
      }}},
     {opcode::jz, {[](auto c) {
          if (c[0] == 0)
-             return static_cast<mem_index>(-c.i + c[1] + 1);
+             return static_cast<mem_index>(-c.base_ + c[1] + 1);
          else
              return static_cast<mem_index>(3);
      }}},
@@ -99,12 +96,12 @@ map<opcode, instruction> instr = {
      }}},
 };
 
-pair<opcode, param_mode> parse_mem(mem_val p) {
+pair<opcode, param_modes> parse_mem(mem_val p) {
     auto str = to_string(p);
     string op = {str.back()};
     if (str.size() > 1)
         op = str[str.size() - 2] + op;
-    param_mode par;
+    param_modes par;
     for (int a : v::iota(0, max(0, int(str.size()) - 2)))
         par.push_back(str[a]);
     r::reverse(par);

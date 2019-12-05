@@ -2,14 +2,15 @@ IncludeFlags = -I range-v3/include
 LibFlags =
 Libs = 
 DefFlags = 
-LibraryPath =
+LdLibraryPath =
 
 ifeq ($(parallel),1)
+	TbbPath := tbb/build/$(shell (cd tbb && make info | grep prefix | sed -E 's_(.+)=(.+)_\2_'))_release
 	IncludeFlags += -I parallelstl/include -I tbb/include
-	LibFlags += -L tbb/build/linux_intel64_gcc_cc8.3.0_libc2.28_kernel4.19.0_release
+	LibFlags += -L $(TbbPath)
 	Libs += -ltbb
 	DefFlags += -D USE_PARALLEL_STL
-	LibraryPath = tbb/build/$(shell (cd tbb && make info | grep prefix | sed -E 's_(.+)=(.+)_\2_'))_release
+	LdLibraryPath = $(TbbPath)
 endif
 
 ifeq ($(bigint),1)
@@ -25,20 +26,17 @@ endif
 
 Default = $(Prog)
 
-ifeq ($(bear),1)
-	Default = bear
-endif
-
 default: $(Default)
-.SILENT: run bear
-.PHONY: run bear
+.SILENT: run
+.PHONY: run
 
-bear:
-	bear -a make *
+compile_commands.json:
+	echo --- Rebuilding $@ ---
+	bear make $(patsubst %.cpp, %, $(wildcard day*.cpp)) -B
 
 %: %.cpp
 	clang++ -std=c++17 -Werror -g -Ofast $(IncludeFlags) $(LibFlags) $(DefFlags) -o $@ $^ $(Libs)
 
 run: $(Default)
 	echo --- Running $(Prog) ---
-	export LD_LIBRARY_PATH=$(LibraryPath) && ./$(Prog) $(Prog)_input
+	export LD_LIBRARY_PATH=$(LdLibraryPath) && ./$(Prog) $(Prog)_input
