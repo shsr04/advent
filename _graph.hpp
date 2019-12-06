@@ -9,7 +9,10 @@ class graph {
     graph(vector<vector<int>> adj) : adj_(move(adj)) {}
 
     void add_vertex() { adj_.push_back({}); }
-    void add_adjacency(int u, int v) { adj_.at(u).push_back(v); }
+    void add_adjacency(int u, int v) {
+        adj_.at(u).push_back(v);
+        adj_.at(v).push_back(u);
+    }
     /**
      * Adds vertices of degree 1 between u and u.head(k).
      * This is a cheap way to accomplish weighted edges in combination with BFS.
@@ -36,13 +39,14 @@ void graph::set_weight(int u, int k, int w) {
     adj_.at(u).at(k) = v;
 }
 
-auto operator<<(ostream &o, graph const &g) {
+ostream &operator<<(ostream &o, graph const &g) {
     for (int u = 0; u < g.order(); u++) {
         o << u << ": ";
         for (int v : g.adj(u))
             o << v << " ";
         o << "\n";
     }
+    return o;
 }
 
 class bfs {

@@ -115,6 +115,7 @@ memory run_code(memory mem) {
         //     << params << "\n";
         if (op == opcode::halt)
             break;
+        //find(execution::par, instr.begin(), instr.end(), op);
         if (auto a = instr.find(op); a != instr.end())
             i_mem += a->second(memory_cell(mem, params, i_mem + 1));
         else {

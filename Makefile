@@ -1,6 +1,6 @@
 IncludeFlags = -I range-v3/include
 LibFlags =
-Libs = 
+Libs =
 DefFlags = 
 LdLibraryPath =
 
@@ -10,7 +10,7 @@ ifeq ($(parallel),1)
 	LibFlags += -L $(TbbPath)
 	Libs += -ltbb
 	DefFlags += -D USE_PARALLEL_STL
-	LdLibraryPath = $(TbbPath)
+	LdLibraryPath += $(TbbPath)
 endif
 
 ifeq ($(bigint),1)
@@ -24,9 +24,7 @@ else
 	Prog := day5
 endif 
 
-Default = $(Prog)
-
-default: $(Default)
+default: $(Prog)
 .SILENT: run
 .PHONY: run
 
@@ -37,6 +35,6 @@ compile_commands.json:
 %: %.cpp
 	clang++ -std=c++17 -Werror -g -Ofast $(IncludeFlags) $(LibFlags) $(DefFlags) -o $@ $^ $(Libs)
 
-run: $(Default)
+run: $(Prog)
 	echo --- Running $(Prog) ---
 	export LD_LIBRARY_PATH=$(LdLibraryPath) && ./$(Prog) $(Prog)_input

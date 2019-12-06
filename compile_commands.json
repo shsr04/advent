@@ -27,6 +27,23 @@
             "-I",
             "range-v3/include",
             "-o",
+            "day1",
+            "day1.cpp"
+        ],
+        "directory": "/home/simon/Documents/Code/cpp/advent",
+        "file": "day1.cpp"
+    },
+    {
+        "arguments": [
+            "clang++",
+            "-c",
+            "-std=c++17",
+            "-Werror",
+            "-g",
+            "-Ofast",
+            "-I",
+            "range-v3/include",
+            "-o",
             "day3",
             "day3.cpp"
         ],
@@ -61,23 +78,6 @@
             "-I",
             "range-v3/include",
             "-o",
-            "stub",
-            "stub.cpp"
-        ],
-        "directory": "/home/simon/Documents/Code/cpp/advent",
-        "file": "stub.cpp"
-    },
-    {
-        "arguments": [
-            "clang++",
-            "-c",
-            "-std=c++17",
-            "-Werror",
-            "-g",
-            "-Ofast",
-            "-I",
-            "range-v3/include",
-            "-o",
             "day5",
             "day5.cpp"
         ],
@@ -95,10 +95,10 @@
             "-I",
             "range-v3/include",
             "-o",
-            "day1",
-            "day1.cpp"
+            "day6",
+            "day6.cpp"
         ],
         "directory": "/home/simon/Documents/Code/cpp/advent",
-        "file": "day1.cpp"
+        "file": "day6.cpp"
     }
 ]

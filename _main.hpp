@@ -1,7 +1,7 @@
 #pragma once
 #include <array>
-#include <fstream>
 #include <bitset>
+#include <fstream>
 #include <functional>
 #include <iostream>
 #include <map>
