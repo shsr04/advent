@@ -9,16 +9,17 @@ class graph {
     graph(vector<vector<int>> adj) : adj_(move(adj)) {}
 
     void add_vertex() { adj_.push_back({}); }
-    void add_adjacency(int u, int v) {
+    void add_adjacency(int u, int v, bool both_ways = true) {
         adj_.at(u).push_back(v);
-        adj_.at(v).push_back(u);
+        if (both_ways)
+            adj_.at(v).push_back(u);
     }
     /**
      * Adds vertices of degree 1 between u and u.head(k).
-     * This is a cheap way to accomplish weighted edges in combination with BFS.
-     * @param w weight for the adjacency <u,k> (w=1: no added weight)
+     * This is a cheap way to accomplish weighted edges in combination with DFS/BFS.
+     * @param w added weight for the adjacency <u,k> (w=0: no added weight)
      */
-    void set_weight(int u, int k, int w = 1);
+    void add_weight(int u, int k, int w);
 
     int deg(int u) const { return adj_.at(u).size(); }
     int order() const { return adj_.size(); }
@@ -26,11 +27,11 @@ class graph {
     int head(int u, int k) const { return adj_.at(u).at(k); }
 };
 
-void graph::set_weight(int u, int k, int w) {
-    if (w < 2)
+void graph::add_weight(int u, int k, int w) {
+    if (w < 1)
         return;
     int v = head(u, k);
-    for (int a = 0; a < w - 1; a++) {
+    for (int a = 0; a < w; a++) {
         adj_.push_back({-1});
         adj_.at(u).at(k) = adj_.size() - 1;
         u = adj_.size() - 1;

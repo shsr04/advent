@@ -9,6 +9,7 @@ enum class opcode : int {
     jz = 6,
     lt = 7,
     eq = 8,
+    print = 9, // TODO: remove this (only used for zllx fun file)
     halt = 99,
 };
 
@@ -94,6 +95,11 @@ const map<opcode, instruction> instr = {
          c[2] = c[0] == c[1];
          return 4;
      }}},
+    {opcode::print, {[](auto c) {
+         // TODO: remove this on next intcode puzzle
+         cout << static_cast<char>(c[0]);
+         return 2;
+     }}},
 };
 
 pair<opcode, param_modes> parse_mem(mem_val p) {
@@ -115,7 +121,7 @@ memory run_code(memory mem) {
         //     << params << "\n";
         if (op == opcode::halt)
             break;
-        //find(execution::par, instr.begin(), instr.end(), op);
+        // find(execution::par, instr.begin(), instr.end(), op);
         if (auto a = instr.find(op); a != instr.end())
             i_mem += a->second(memory_cell(mem, params, i_mem + 1));
         else {

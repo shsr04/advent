@@ -32,4 +32,7 @@ using namespace std;
 namespace r = ranges::cpp20;
 namespace v = r::views;
 
+/// Converts int literal to size_t
+size_t operator""_s(unsigned long long p) { return static_cast<size_t>(p); }
+
 #include "_graph.hpp"
