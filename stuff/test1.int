@@ -1,0 +1,17 @@
+in P:200
+add 0 2 P:201
+cr 100
+add 0 0 R:0
+add 0 1 R:1
+add 0 1 R:2
+cr 3
+add 99 0 P:199
+out R:-2
+out R:-1
+loop: lt P:200 P:201 P:205
+jnz P:205 199
+add R:-1 R:-2 R:0
+out R:0
+cr 1
+add P:201 1 P:201
+jz 0 *loop

@@ -45,7 +45,7 @@ class memory_cell {
         relative_mode = 2,
     };
 
-    modes mode(int j) const {
+    modes mode(mem_index j) const {
         if (par_.size() <= j)
             return position_mode;
         else
@@ -61,19 +61,22 @@ class memory_cell {
     mem_index const offset_;
 
     mem_val &operator[](mem_index j) {
-        if (base_ + j >= ssize_t(mem_.size()))
-            mem_.resize(base_ + j + 1);
+        if (base_ + j >= mem_index(mem_.size()))
+            mem_.resize(base_ + j + 1, 0);
         auto &val = mem_.at(base_ + j);
+        //cout << "mem at " << base_ << "+" << j << " = " << val << "\n";
         switch (mode(j)) {
         case position_mode:
-            if (val >= ssize_t(mem_.size()))
-                mem_.resize(val + 1);
+            if (val >= mem_index(mem_.size())) {
+                mem_.resize(val + 1); // invalidates references!
+                val = mem_.at(base_ + j);
+            }
             return mem_.at(val);
         case immediate_mode:
             return val;
         case relative_mode: {
             auto rel = offset_ + val;
-            if (rel >= ssize_t(mem_.size()))
+            if (rel >= mem_index(mem_.size()))
                 mem_.resize(rel + 1);
             return mem_.at(rel);
         }
@@ -113,9 +116,12 @@ const map<opcode, instruction> instr = {
              c[0] = m.input_.front();
              m.input_.pop_back();
          } else {
-             cerr << "No input\n";
-             m.status_ = 2;
-             return 0;
+             cout << "Input a number: ";
+             int inp;
+             cin >> inp;
+             c[0] = inp;
+             // m.status_ = 2;
+             // return 0;
          }
          return 2;
      }}},
@@ -156,7 +162,7 @@ pair<opcode, param_modes> machine::parse_mem(mem_val p) {
     if (str.size() > 1)
         op = str[str.size() - 2] + op;
     param_modes par;
-    for (int a : v::iota(0, max(0, int(str.size()) - 2)))
+    for (auto a : v::iota(0, max(0, int(str.size()) - 2)))
         par.push_back(str[a]);
     r::reverse(par);
     return {static_cast<opcode>(stoi(op)), par};
@@ -197,6 +203,6 @@ int main(int argc, char **argv) {
         ops.push_back(a);
         in.ignore();
     }
-    auto r = machine(ops).run_code({2});
+    auto r = machine(ops).run_code({});
     copy(r.begin(), r.end(), ostream_iterator<long>(cout, " ")), cout << "\n";
 }
