@@ -5,7 +5,7 @@ int main(int argc, char **argv) {
         cerr << "Usage: day8 <image> <width> <height>\n";
         return 99;
     }
-    int WIDTH = stoi(argv[2]), HEIGHT = stoi(argv[3]);
+    int const WIDTH = stoi(argv[2]), HEIGHT = stoi(argv[3]);
     vector<vector<int>> layers;
     auto i_layer = 0, i_pixel = 0;
     ifstream in(argv[1]);
@@ -35,7 +35,7 @@ int main(int argc, char **argv) {
     for (auto i : v::iota(0, WIDTH * HEIGHT)) {
         if (i % WIDTH == 0 && i > 0)
             cout << "\n";
-        cout << (image[i] == 0 ? ' ' : 'X');
+        cout << (image[i] == 0 ? ' ' : '#');
     }
     cout << "\n";
 }
