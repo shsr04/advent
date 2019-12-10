@@ -30,8 +30,6 @@ optional<coord> first_collision(vector<string> const &grid,
         if (step_x < 0 || step_y < 0 || step_y > double(grid.size()) ||
             step_x > double(grid[step_y].size()))
             break;
-        if (step_x == dest_x && step_y == dest_y)
-            break;
         step_x += delta_x / sum_deltas;
         step_y += delta_y / sum_deltas;
         step_x = clamp_to_epsilon(step_x);
@@ -75,7 +73,7 @@ int main(int argc, char **argv) {
         int i_x = 0;
         r::for_each(line, [&sight, &i_x, &i_y](auto x) {
             if (x == '#')
-                sight[coord(i_x, i_y)] = 0;
+                sight[{i_x, i_y}] = 0;
             i_x++;
         });
         grid.push_back(line);
@@ -83,30 +81,47 @@ int main(int argc, char **argv) {
 
     for (auto &[a, n_a] : sight)
         n_a = all_in_sight(grid, sight, a).size();
-    pair<coord, int> max = {{-1, -1}, -1};
+    coord max = {-1, -1};
+    int n_max = -1;
     for (auto &[c, n] : sight) {
         if (DEBUG > 0)
             cout << "asteroid " << c.first << "," << c.second << ": " << n
                  << "\n";
-        if (n > max.second)
-            max = {c, n};
+        if (n > n_max)
+            max = c, n_max = n;
     }
-    cout << "max detection: " << max.first.first << "," << max.first.second
-         << ": " << max.second << "\n";
+    cout << "max detection: " << max.first << "," << max.first << ": " << n_max
+         << "\n";
 
-    auto s = max.first;
     int n_vaporized = 0;
     while (sight.size() > 1) {
         vector<coord> visible;
-        for (auto &&c : all_in_sight(grid, sight, s))
+        for (auto &&c : all_in_sight(grid, sight, max))
             visible.push_back(c);
-        sort(visible.begin(), visible.end(), [&s](auto &x, auto &y) {
-            auto x_angle = atan2(s.second - x.second, s.first - x.first),
-                 y_angle = atan2(s.second - y.second, s.first - y.first);
+        sort(visible.begin(), visible.end(), [&max](auto &x, auto &y) {
+            /// atan2: (y,x) -> phi
+            ///  => r*cos(phi) = x, r*sin(phi) = y
+            ///  where r=sqrt(x^2+y^2) is the length of (x,y)
+            /// Short: angle between (x,y) and the x axis
+            /// In detail:
+            ///     if x>0, atan2 = arctan(y/x)
+            ///     if x<0 and y>=0, atan2 = arctan(y/x)+pi
+            ///     if x<0 and y<0, atan2 = arctan(y/x)-pi
+            ///     if x=0 and y>0, atan2 = pi/2
+            ///     if x=0 and y<0, atan2 = -pi/2
+            /// Explanation:
+            ///     atan2 computes the argument of a complex number x+iy.
+            ///     arg(x+iy) = any real number phi for which
+            ///         x+iy = r(cos(phi)+i*sin(phi)).
+            ///     The arg function is multi-valued (invariant to full-circle rotations),
+            ///     so atan2 restricts itself to the interval [pi,-pi].
+            auto x_angle = atan2(max.second - x.second, max.first - x.first),
+                 y_angle = atan2(max.second - y.second, max.first - y.first);
             return x_angle < y_angle;
         });
-        auto up = r::find_if(visible, [&s](auto &x) {
-            return atan2(s.second - x.second, s.first - x.first) >= M_PI / 2;
+        auto up = r::find_if(visible, [&max](auto &x) {
+            return atan2(max.second - x.second, max.first - x.first) >=
+                   M_PI / 2;
         });
         rotate(visible.begin(), up, visible.end());
         for (auto &c : visible) {
@@ -120,4 +135,33 @@ int main(int argc, char **argv) {
                      << " = " << 100 * c.first + c.second << "\n";
         }
     }
+
+    /*
+    coord laser = {0, -1}; // length is 1
+    int n_vaporized = 0;
+    while (sight.size() > 1) {
+        auto angle = asin(laser.second);
+        auto delta = -M_PI/180;
+        auto x1 = laser.first, y1 = laser.second;
+        // cout << x1 << " " << y1 << " " << angle << " => ";
+        auto x2 = x1 * cos(delta) - y1 * sin(delta),
+             y2 = x1 * sin(delta) + y1 * cos(delta);
+        // cout << x2 << " " << y2 << " " << angle + delta << "\n";
+        auto f = first_collision(
+            grid, sight, max,
+            {max.first + laser.first, max.second + laser.second});
+        laser = {x2, y2};
+        if (!f)
+            continue;
+        auto c = *f;
+        sight.erase(sight.find(c));
+        n_vaporized++;
+        // if (DEBUG > 0)
+        cout << "vaporized " << n_vaporized << " " << c.first << "," << c.second
+             << "\n";
+        if (n_vaporized == 200)
+            cout << "200th vaporized: " << c.first << "," << c.second << " = "
+                 << 100 * c.first + c.second << "\n";
+    }
+    */
 }
