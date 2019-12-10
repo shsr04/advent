@@ -21,7 +21,7 @@ endif
 ifdef prog
 	Prog := $(prog)
 else
-	Prog := day5
+	Prog := day10
 endif
 
 default: $(Prog)

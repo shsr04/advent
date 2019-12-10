@@ -26,57 +26,13 @@ using param_modes = string;
 string const SPECIFIER_POSITION_MODE = "P", SPECIFIER_RELATIVE_MODE = "R";
 
 map<string, opcode> opcode_names = {
-    {
-        "add",
-        opcode::add,
-    },
-    {
-        "mul",
-        opcode::mul,
-    },
-    {
-        "in",
-        opcode::in,
-    },
-    {
-        "out",
-        opcode::out,
-    },
-    {
-        "jnz",
-        opcode::jnz,
-    },
-    {
-        "jz",
-        opcode::jz,
-    },
-    {
-        "lt",
-        opcode::lt,
-    },
-    {
-        "eq",
-        opcode::eq,
-    },
-    {
-        "cr",
-        opcode::crel,
-    },
-    {
-        "halt",
-        opcode::halt,
-    },
+    {"add", opcode::add},   {"mul", opcode::mul}, {"in", opcode::in},
+    {"out", opcode::out},   {"jnz", opcode::jnz}, {"jz", opcode::jz},
+    {"lt", opcode::lt},     {"eq", opcode::eq},   {"cr", opcode::crel},
+    {"halt", opcode::halt},
 };
-
-struct state {
-    string line;
-    int i_line = 0;
-};
-
-map<string, int> labels;
 
 int main(int argc, char **argv) {
-    auto s = string();
     if (argc < 3) {
         cerr << "Usage: asm <input> <output>";
         return 99;
@@ -84,10 +40,12 @@ int main(int argc, char **argv) {
     auto i_line = 1, i_tok = 0;
     ifstream in(argv[1]);
     ofstream out(argv[2]);
+    map<string, int> labels;
+    string s;
     while (in >> s) {
         if (s.back() == ':') {
             labels[s.substr(0, s.size() - 1)] = i_tok;
-            //cout << "label " << s.substr(0, s.size() - 1) << " at " << i_tok
+            // cout << "label " << s.substr(0, s.size() - 1) << " at " << i_tok
             //     << "\n";
             in >> s;
         }
@@ -126,7 +84,7 @@ int main(int argc, char **argv) {
                 params.push_back(stoll(val));
             } catch (...) {
                 cerr << "invalid parameter value '" << val << "' in line "
-                     << i_line << "\n(did mean: '*" << val << "'?)\n";
+                     << i_line << "\n(did you mean: '*" << val << "'?)\n";
                 return 99;
             }
             i_tok++;
