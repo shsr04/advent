@@ -230,7 +230,7 @@ int main(int argc, char **argv) {
     deque<io_buffer> example = {{1, 0}, {0, 0}, {1, 0}, {1, 0},
                                 {0, 1}, {1, 0}, {1, 0}};
     colours[{robot_pos}] = true;
-    do {
+    while (!m.halted_) {
         bool is_fresh = colours.find(robot_pos) == colours.end();
         auto colour = colours[robot_pos];
         auto r = m.run_code({colour});
@@ -262,7 +262,7 @@ int main(int argc, char **argv) {
         default:
             cerr << "invalid direction " << robot_dir << "\n";
         }
-    } while (!m.halted_);
+    }
     cout << "Painted: " << n_coloured << "\n";
     for (auto y = 0; y > -6; y--) {
         for (auto x : v::iota(0, 41)) {
