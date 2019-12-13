@@ -45,27 +45,33 @@ ostream &operator<<(ostream &o, moving_body const &p) {
 }
 
 void pull_gravity(moving_body &a, moving_body &b) {
-    if (a.pos.x > b.pos.x) {
-        a.vel.x -= 1;
-        b.vel.x += 1;
-    } else if (a.pos.x < b.pos.x) {
-        a.vel.x += 1;
-        b.vel.x -= 1;
+    for (int d : v::iota(0, 3)) {
+        if (a.pos[d] > b.pos[d]) {
+            a.vel[d] -= 1;
+            b.vel[d] += 1;
+        } else if (a.pos[d] < b.pos[d]) {
+            a.vel[d] += 1;
+            b.vel[d] -= 1;
+        }
     }
-    if (a.pos.y > b.pos.y) {
-        a.vel.y -= 1;
-        b.vel.y += 1;
-    } else if (a.pos.y < b.pos.y) {
-        a.vel.y += 1;
-        b.vel.y -= 1;
+}
+
+vector<pair<int, int>> power_set;
+template <int I> vector<moving_body> modify_component(vector<moving_body> x) {
+    for (auto &[i_a, i_b] : power_set) {
+        auto &a = x[i_a], &b = x[i_b];
+        if (a.pos[I] > b.pos[I]) {
+            a.vel[I] -= 1;
+            b.vel[I] += 1;
+        } else if (a.pos[I] < b.pos[I]) {
+            a.vel[I] += 1;
+            b.vel[I] -= 1;
+        }
     }
-    if (a.pos.z > b.pos.z) {
-        a.vel.z -= 1;
-        b.vel.z += 1;
-    } else if (a.pos.z < b.pos.z) {
-        a.vel.z += 1;
-        b.vel.z -= 1;
+    for (auto &a : x) {
+        a.pos += a.vel;
     }
+    return x;
 }
 
 auto make_power_set(int to) {
@@ -82,11 +88,11 @@ auto make_power_set(int to) {
     return r;
 }
 
-template <class T> size_t cycle_length(function<T(T)> f, T x0) {
+template <class F, class T> size_t cycle_length(F &&f, T x0) {
     auto slow = f(x0), fast = f(f(x0));
     while (slow != fast)
         slow = f(slow), fast = f(f(fast));
-    cout << "cycle found ";
+    cout << "cycle found: ";
     // find position of first recurring x
     auto pos = 0_s;
     slow = x0;
@@ -117,12 +123,11 @@ int main(int argc, char **argv) {
         line >> b.pos.y;
         getline(line, tmp, '=');
         line >> b.pos.z;
-        cout << b << "\n";
         bodies.push_back(b);
     }
     auto state0 = bodies;
 
-    vector<pair<int, int>> power_set = make_power_set(bodies.size());
+    power_set = make_power_set(bodies.size());
     for (auto step : v::iota(0, 1000)) {
         // cout << "STEP " << (step + 1) << "\n";
         for (auto &[i_a, i_b] : power_set) {
@@ -141,28 +146,8 @@ int main(int argc, char **argv) {
         });
     cout << "Final energy: " << energy << "\n";
 
-    int i_vec = 0;
-    function<vector<moving_body>(vector<moving_body>)> modify_component =
-        [&power_set, &i_vec](auto x) {
-            for (auto &[i_a, i_b] : power_set) {
-                auto &a = x[i_a], &b = x[i_b];
-                if (a.pos[i_vec] > b.pos[i_vec]) {
-                    a.vel[i_vec] -= 1;
-                    b.vel[i_vec] += 1;
-                } else if (a.pos[i_vec] < b.pos[i_vec]) {
-                    a.vel[i_vec] += 1;
-                    b.vel[i_vec] -= 1;
-                }
-            }
-            for (auto &a : x) {
-                a.pos += a.vel;
-            }
-            return x;
-        };
-    auto cycle_x = cycle_length(modify_component, state0);
-    i_vec = 1;
-    auto cycle_y = cycle_length(modify_component, state0);
-    i_vec = 2;
-    auto cycle_z = cycle_length(modify_component, state0);
+    auto cycle_x = cycle_length(modify_component<0>, state0);
+    auto cycle_y = cycle_length(modify_component<1>, state0);
+    auto cycle_z = cycle_length(modify_component<2>, state0);
     cout << "Period: " << lcm(lcm(cycle_x, cycle_y), cycle_z) << "\n";
 }
