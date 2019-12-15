@@ -100,7 +100,7 @@ class dfs {
 
   public:
     enum class time_types { discover, finish };
-    dfs(graph const &g) : g_(g), c_(s(g_.order())) {}
+    dfs(graph const &g) : g_(g), c_(s(g_.order()), WHITE) {}
     optional<int> time(int from, int to,
                        time_types type = time_types::discover) {
         int t = 0;
@@ -114,8 +114,10 @@ class dfs {
             if (u == to && k == g_.deg(u) && type == time_types::finish)
                 return t;
 
-            if (k == g_.deg(u))
+            if (k == g_.deg(u)) {
+                c_[u] = BLACK;
                 continue;
+            }
             s_.push_back({u, k + 1});
             if (int v = g_.head(u, k); c_[s(v)] == WHITE) {
                 s_.push_back({v, 0});
