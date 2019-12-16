@@ -8,20 +8,22 @@ int main(int argc, char **argv) {
     in >> from, in.ignore(), in >> to;
     cout << "passwords from " << from << " to " << to << "\n";
     int sum;
-    for (string digits : v::iota(from, to + 1) |
-                             v::transform([](int x) { return to_string(x); })) {
+    vector<string> digit_list;
+    for (auto n : nums(from, to + 1))
+        digit_list.push_back(to_string(n));
+    for (string digits : digit_list) {
         if (!r::is_sorted(digits))
             continue;
         bool ok = false;
-        for (auto adj = r::adjacent_find(digits); adj != r::end(digits);) {
+        for (auto adj = r::adjacent_find(digits); adj != end(digits);) {
             if (*(adj + 2) != *adj) {
                 ok = true;
                 break;
             }
-            adj = r::adjacent_find(
-                r::find_if(adj + 2, r::end(digits),
+            adj = adjacent_find(
+                find_if(adj + 2, end(digits),
                            [digit = *adj](auto x) { return x != digit; }),
-                r::end(digits));
+                end(digits));
         }
         if (!ok)
             continue;

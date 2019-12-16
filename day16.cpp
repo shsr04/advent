@@ -4,13 +4,13 @@
 vector<char> apply_fft(vector<char> input, int phases) {
     vector<char> phase_in = move(input);
     decltype(phase_in) phase_out(phase_in.size());
-    for (auto i_phase : v::iota(0, phases)) {
+    for (auto i_phase : nums(0, phases)) {
         cout << "Phase " << i_phase << "\n";
         // cout << "IN: ";
         // for (auto a : phase_in)
         //     cout << char(a + '0');
         // cout << "\n";
-        for (auto i_out : v::iota(0_s, phase_in.size())) {
+        for (auto i_out : nums(0_s, phase_in.size())) {
             auto spread = i_out + 1;
 
             auto sum = 0;
@@ -68,7 +68,7 @@ int main(int argc, char **argv) {
     while (buffer.size() < input_size)
         copy(begin(numeric_input), end(numeric_input), back_inserter(buffer));
 
-    for (auto i_phase : v::iota(0, 100)) {
+    for (auto i_phase : nums(0, 100)) {
         for (auto i_num = input_size - 2; i_num >= offset; i_num--) {
             buffer[i_num] += buffer[i_num + 1];
             buffer[i_num] = abs(buffer[i_num]) % 10;

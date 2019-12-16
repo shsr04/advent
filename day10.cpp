@@ -45,8 +45,8 @@ optional<coord> first_collision(vector<string> const &grid,
 set<coord> all_in_sight(vector<string> const &grid,
                         map<coord, int> const &sight, coord a) {
     set<coord> collided;
-    for (auto b_y : v::iota(0, int(grid.size()))) {
-        for (auto b_x : v::iota(0, int(grid[b_y].size()))) {
+    for (auto b_y : nums(0, int(grid.size()))) {
+        for (auto b_x : nums(0, int(grid[b_y].size()))) {
             auto o_coll = first_collision(grid, sight, a, {b_x, b_y});
             if (!o_coll)
                 continue;

@@ -26,13 +26,13 @@ int main(int argc, char **argv) {
     cout << "1*2 in min-0 layer: " << product << "\n";
 
     vector<int> image;
-    for (auto a : v::iota(0, WIDTH * HEIGHT))
+    for (auto a : nums(0, WIDTH * HEIGHT))
         for (auto &l : layers)
             if (l[a] != 2) {
                 image.push_back(l[a]);
                 break;
             }
-    for (auto i : v::iota(0, WIDTH * HEIGHT)) {
+    for (auto i : nums(0, WIDTH * HEIGHT)) {
         if (i % WIDTH == 0 && i > 0)
             cout << "\n";
         cout << (image[i] == 0 ? ' ' : '#');

@@ -162,7 +162,7 @@ pair<opcode, param_modes> machine::parse_mem(mem_val p) {
     if (str.size() > 1)
         op = str[str.size() - 2] + op;
     param_modes par;
-    for (auto a : v::iota(0, max(0, int(str.size()) - 2)))
+    for (auto a : nums(0, max(0, int(str.size()) - 2)))
         par.push_back(str[a]);
     r::reverse(par);
     return {static_cast<opcode>(stoi(op)), par};
@@ -265,7 +265,7 @@ int main(int argc, char **argv) {
     }
     cout << "Painted: " << n_coloured << "\n";
     for (auto y = 0; y > -6; y--) {
-        for (auto x : v::iota(0, 41)) {
+        for (auto x : nums(0, 41)) {
             cout << (colours[{x, y}] ? '#' : ' ');
         }
         cout << "\n";

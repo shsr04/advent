@@ -45,7 +45,7 @@ ostream &operator<<(ostream &o, moving_body const &p) {
 }
 
 void pull_gravity(moving_body &a, moving_body &b) {
-    for (int d : v::iota(0, 3)) {
+    for (int d : nums(0, 3)) {
         if (a.pos[d] > b.pos[d]) {
             a.vel[d] -= 1;
             b.vel[d] += 1;
@@ -76,9 +76,9 @@ template <int I> vector<moving_body> modify_component(vector<moving_body> x) {
 
 auto make_power_set(int to) {
     vector<pair<int, int>> r;
-    for (auto p : v::iota(0, pow(2, to))) {
+    for (auto p : nums(0, int(pow(2, to)))) {
         vector<int> res;
-        for (auto a : v::iota(0, p)) {
+        for (auto a : nums(0, p)) {
             if (p & (1 << a))
                 res.push_back(a);
         }
@@ -128,7 +128,7 @@ int main(int argc, char **argv) {
     auto state0 = bodies;
 
     power_set = make_power_set(bodies.size());
-    for (auto step : v::iota(0, 1000)) {
+    for (auto step : nums(0, 1000)) {
         // cout << "STEP " << (step + 1) << "\n";
         for (auto &[i_a, i_b] : power_set) {
             auto &a = bodies[i_a], &b = bodies[i_b];

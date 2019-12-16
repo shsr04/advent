@@ -1,15 +1,9 @@
-[submodule "range-v3"]
-	path = range-v3
-	url = https://github.com/ericniebler/range-v3
 [submodule "parallelstl"]
 	path = parallelstl
 	url = https://github.com/intel/parallelstl
 [submodule "tbb"]
 	path = tbb
 	url = https://github.com/intel/tbb
-[submodule "infint"]
-	path = infint
-	url = https://github.com/sercantutar/infint/
 [submodule "rangeless"]
 	path = rangeless
 	url = https://github.com/ast-al/rangeless

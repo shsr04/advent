@@ -125,7 +125,7 @@ pair<opcode, param_modes> machine::parse_mem(mem_val p) {
     if (str.size() > 1)
         op = str[str.size() - 2] + op;
     param_modes par;
-    for (int a : v::iota(0, max(0, int(str.size()) - 2)))
+    for (int a : nums(0, max(0, int(str.size()) - 2)))
         par.push_back(str[a]);
     r::reverse(par);
     return {static_cast<opcode>(stoi(op)), par};
@@ -169,7 +169,7 @@ int main(int argc, char **argv) {
     mem_val max = 0;
     do {
         vector<machine> amps(5, ops);
-        for (int a : v::iota(0_s, amps.size()))
+        for (int a : nums(0_s, amps.size()))
             amps[a].run_code({phase[a]});
         io_buffer buf;
         buf.push_back(0);

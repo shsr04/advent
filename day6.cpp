@@ -4,11 +4,11 @@ int main(int argc, char **argv) {
     vector<string> vertices;
     graph g(0);
     auto const vertex_index = [&vertices, &g](auto &x) {
-        if (auto i = r::find(vertices, x); i == r::end(vertices)) {
+        if (auto i = r::find(vertices, x); i == end(vertices)) {
             vertices.push_back(x);
             g.add_vertex();
         }
-        return r::distance(r::begin(vertices), r::find(vertices, x));
+        return distance(begin(vertices), r::find(vertices, x));
     };
 
     if (argc < 2)
@@ -21,8 +21,8 @@ int main(int argc, char **argv) {
     }
 
     auto sum = 0_s;
-    auto i_com = distance(r::begin(vertices), r::find(vertices, "COM"));
-    for (auto v : v::iota(0_s, vertices.size())) {
+    auto i_com = distance(begin(vertices), r::find(vertices, "COM"));
+    for (auto v : nums(0_s, vertices.size())) {
         auto length = 0_s;
         if (auto p = bfs(g).path(i_com, v); p)
             length = p->size() - 1;

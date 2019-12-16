@@ -51,8 +51,8 @@ int main(int argc, char **argv) {
         ops.push_back(a);
         in.ignore();
     }
-    for (int noun : v::iota(0, 100)) {
-        for (int verb : v::iota(0, 100)) {
+    for (int noun : nums(0, 100)) {
+        for (int verb : nums(0, 100)) {
             ops[1] = noun;
             ops[2] = verb;
             auto r = run_code(ops);

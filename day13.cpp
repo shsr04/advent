@@ -163,7 +163,7 @@ pair<opcode, param_modes> machine::parse_mem(mem_val p) {
     if (str.size() > 1)
         op = str[str.size() - 2] + op;
     param_modes par;
-    for (auto a : v::iota(0, max(0, int(str.size()) - 2)))
+    for (auto a : nums(0, max(0, int(str.size()) - 2)))
         par.push_back(str[a]);
     r::reverse(par);
     return {static_cast<opcode>(stoi(op)), par};
@@ -228,8 +228,8 @@ void display_tiles(map<coord, int> const &tiles) {
     auto limit = r::max_element(tiles, [](auto &x, auto &y) {
                      return x.first < y.first;
                  })->first;
-    for (auto y : v::iota(0, limit.y + 1)) {
-        for (auto x : v::iota(0, limit.x + 1)) {
+    for (auto y : nums(0, limit.y + 1)) {
+        for (auto x : nums(0, limit.x + 1)) {
             if (auto tile = tiles.find({x, y}); tile != tiles.end())
                 cout << display_chars[tile->second];
             else
@@ -261,7 +261,7 @@ int main(int argc, char **argv) {
         auto r = m.run_code(input);
         while (!r.empty()) {
             auto x = int(r[0]), y = int(r[1]), tile = int(r[2]);
-            for (auto i : v::iota(0, 3))
+            for (auto i : nums(0, 3))
                 r.pop_front();
             coord c = {x, y};
             if (x == -1 && y == 0)

@@ -39,7 +39,7 @@ int main(int argc, char **argv) {
         int len;
         while (in >> dir && in >> len) {
             auto step = step_function(dir);
-            for (auto a : v::iota(0, len)) {
+            for (auto a : nums(0, len)) {
                 step(x, y);
                 n_steps++;
                 size_t key =
