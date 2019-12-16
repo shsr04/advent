@@ -29,14 +29,17 @@ using big_int = mpz_class;
 using big_int = ssize_t;
 #endif
 
-#include <range/v3/algorithm.hpp>
-#include <range/v3/view.hpp>
+#include <fn.hpp>
 
 using namespace std;
 namespace r = ranges::cpp20;
 namespace v = r::views;
+namespace f = rangeless::fn;
+using f::operators::operator%;
+using f::operators::operator%=;
 
 /// Converts int literal to size_t
 size_t operator""_s(unsigned long long p) { return static_cast<size_t>(p); }
 
 #include "_graph.hpp"
+#include "_iota.hpp"

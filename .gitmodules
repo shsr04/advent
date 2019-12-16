@@ -10,3 +10,6 @@
 [submodule "infint"]
 	path = infint
 	url = https://github.com/sercantutar/infint/
+[submodule "rangeless"]
+	path = rangeless
+	url = https://github.com/ast-al/rangeless
