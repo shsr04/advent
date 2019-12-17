@@ -15,6 +15,7 @@ HACKED_CONT(is_sorted)
 HACKED_CONT(adjacent_find)
 HACKED_CONT(next_permutation)
 
+HACKED_CONT_WITH_1_ARG(copy)
 HACKED_CONT_WITH_1_ARG(for_each)
 HACKED_CONT_WITH_1_ARG(find)
 HACKED_CONT_WITH_1_ARG(find_if)
@@ -22,6 +23,7 @@ HACKED_CONT_WITH_1_ARG(max_element)
 HACKED_CONT_WITH_1_ARG(min_element)
 HACKED_CONT_WITH_1_ARG(count)
 
+HACKED_CONT_WITH_2_ARGS(accumulate)
 HACKED_CONT_WITH_2_ARGS(transform)
 
 } // namespace hacked_ranges
