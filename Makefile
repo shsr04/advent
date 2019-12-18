@@ -33,7 +33,7 @@ compile_commands.json:
 	bear make $(patsubst %.cpp, %, $(wildcard day*.cpp)) -B
 
 %: %.cpp
-	clang++ -std=c++17 -Werror -g -Ofast $(IncludeFlags) $(LibFlags) $(DefFlags) -o $@ $^ $(Libs)
+	clang++ -std=c++17 -Werror -g -O0 -ferror-limit=1 $(IncludeFlags) $(LibFlags) $(DefFlags) -o $@ $^ $(Libs)
 
 run: $(Prog)
 	echo --- Running $(Prog) ---
