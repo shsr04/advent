@@ -1,19 +1,20 @@
 #pragma once
 #include "_main.hpp"
 
-class graph {
-    using s = vector<int>::size_type;
-    vector<vector<int>> adj_;
+template <class T> class graph {
+    using s = typename vector<T>::size_type;
+    map<T, vector<T>> adj_;
+    map<pair<T, int>, int> weights_;
 
   public:
-    graph(int n) : adj_(s(n)) {}
-    graph(vector<vector<int>> adj) : adj_(move(adj)) {}
+    graph() : adj_() {}
+    graph(map<T, vector<T>> adj) : adj_(move(adj)) {}
 
-    void add_vertex() { adj_.push_back({}); }
-    void add_adjacency(int u, int v, bool both_ways = true) {
-        adj_.at(s(u)).push_back(v);
+    void add_vertex(T u) { adj_[u] = {}; }
+    void add_adjacency(T u, T v, bool both_ways = true) {
+        adj_.at(u).push_back(v);
         if (both_ways)
-            adj_.at(s(v)).push_back(u);
+            adj_.at(v).push_back(u);
     }
     /**
      * Adds vertices of degree 1 between u and u.head(k).
@@ -21,86 +22,87 @@ class graph {
      * DFS/BFS.
      * @param w added weight for the adjacency <u,k> (w=0: no added weight)
      */
-    void add_weight(int u, int k, int w);
+    void add_weight(T u, int k, int w) { weights_[{u, k}] = w; }
+    int weight(T u, int k) {
+        if (weights_.find({u, k}) == weights_.end())
+            return 1;
+        else
+            return weights_[{u, k}] + 1;
+    }
 
-    int deg(int u) const { return int(adj(u).size()); }
+    int deg(T u) const { return int(adj(u).size()); }
     int order() const { return int(adj_.size()); }
-    vector<int> const &adj(int u) const { return adj_.at(s(u)); }
-    int head(int u, int k) const { return adj(u).at(s(k)); }
-    int &head(int u, int k) { return adj_.at(s(u)).at(s(k)); }
+    vector<T> &adj(T u) { return adj_.at(u); }
+    vector<T> const &adj(T u) const { return adj_.at(u); }
+    T head(T u, int k) const { return adj(u).at(s(k)); }
+    T &head(T u, int k) { return adj_.at(u).at(s(k)); }
+    template <class U> friend ostream &operator<<(ostream &, graph<U> const &);
 };
 
-void graph::add_weight(int u, int k, int w) {
-    if (w < 1)
-        return;
-    int v = head(u, k);
-    for (int a = 0; a < w; a++) {
-        adj_.push_back({-1});
-        head(u, k) = order() - 1;
-        u = order() - 1;
-        k = 0;
-    }
-    head(u, k) = v;
-}
-
-ostream &operator<<(ostream &o, graph const &g) {
-    for (int u = 0; u < g.order(); u++) {
+template <class T> ostream &operator<<(ostream &o, graph<T> const &g) {
+    for (auto &[u, adj] : g.adj_) {
         o << u << ": ";
-        for (int v : g.adj(u))
+        for (auto v : adj)
             o << v << " ";
         o << "\n";
     }
     return o;
 }
 
-class bfs {
+template <class T> class bfs {
     using s = vector<int>::size_type;
-    graph const &g_;
-    vector<int> parent_;
-    queue<int> q_;
+    graph<T> const &g_;
+    map<T, T> parent_;
+    map<T, char> color_;
+    queue<T> q_;
+    enum : char { WHITE, GRAY, BLACK };
 
   public:
-    bfs(graph const &g) : g_(g), parent_(s(g_.order()), -1) {}
+    bfs(graph<T> const &g) : g_(g), parent_() {}
     /// Returns the path in reverse order: {to,parent(to),...,from}
-    optional<vector<int>> path(int from, int to);
+    optional<vector<T>> path(T from, T to);
 };
 
-optional<vector<int>> bfs::path(int from, int to) {
+template <class T> optional<vector<T>> bfs<T>::path(T from, T to) {
+    vector<T> r;
     q_.push(from);
-    vector<int> r;
+    color_[from] = GRAY;
     while (!q_.empty()) {
         auto u = q_.front();
         q_.pop();
         if (u == to) {
-            for (auto a = to; a != from; a = parent_[s(a)]) {
+            for (auto a = to; a != from; a = parent_[a]) {
                 r.push_back(a);
             }
             r.push_back(from);
             return r;
         }
-        for (int v : g_.adj(u)) {
-            if (parent_[s(v)] >= 0)
+        for (auto v : g_.adj(u)) {
+            if (color_.find(v) == color_.end())
+                color_[v] = WHITE;
+            if (color_[v] != WHITE)
                 continue;
-            parent_[s(v)] = u;
+            color_[v] = GRAY;
+            parent_[v] = u;
             q_.push(v);
         }
     }
     return {};
 }
 
-class dfs {
+template <class T> class dfs {
     using s = vector<char>::size_type;
     struct dfs_elem {
         int u, k;
     };
     enum color : char { WHITE = 0, GRAY, BLACK };
-    graph const &g_;
+    graph<T> const &g_;
     vector<char> c_;
     vector<dfs_elem> s_;
 
   public:
     enum class time_types { discover, finish };
-    dfs(graph const &g) : g_(g), c_(s(g_.order()), WHITE) {}
+    dfs(graph<T> const &g) : g_(g), c_(s(g_.order()), WHITE) {}
     optional<int> time(int from, int to,
                        time_types type = time_types::discover) {
         int t = 0;

@@ -30,4 +30,8 @@ HACKED_CONT_WITH_2_ARGS(accumulate)
 HACKED_CONT_WITH_2_ARGS(transform)
 HACKED_CONT_WITH_2_ARGS(copy_if)
 
+template <class C, class T> auto contains(C &&c, T &&t) {
+    return find(begin(c), end(c), forward<T>(t)) != end(c);
+}
+
 } // namespace hacked_ranges
