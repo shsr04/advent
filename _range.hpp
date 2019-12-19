@@ -22,10 +22,12 @@ HACKED_CONT_WITH_1_ARG(find_if)
 HACKED_CONT_WITH_1_ARG(remove_if)
 HACKED_CONT_WITH_1_ARG(max_element)
 HACKED_CONT_WITH_1_ARG(min_element)
+HACKED_CONT_WITH_1_ARG(partition)
 HACKED_CONT_WITH_1_ARG(count)
 HACKED_CONT_WITH_1_ARG(count_if)
 
 HACKED_CONT_WITH_2_ARGS(accumulate)
 HACKED_CONT_WITH_2_ARGS(transform)
+HACKED_CONT_WITH_2_ARGS(copy_if)
 
 } // namespace hacked_ranges
