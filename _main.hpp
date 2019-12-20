@@ -12,6 +12,7 @@
 #include <numeric>
 #include <optional>
 #include <queue>
+#include <unordered_set>
 #include <set>
 #include <sstream>
 #include <string>

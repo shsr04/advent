@@ -124,13 +124,15 @@ int main(int argc, char **argv) {
     for (auto n : nums(0_s, 1_s << DOORS.size())) {
         set<char> r;
         for (auto i : nums(0_s, DOORS.size()))
-            if (n & (1 << i))
+            if (n & (1_s << i))
                 r.insert(DOORS.at(i));
         door_sets.insert(move(r));
     }
     for (auto a : keys) {
+        if (auto dist = distance(tiles, {}, '@', a);
+                    dist)
         DISTANCE_MAP[{'@', a, {}}] =
-            distance(tiles, {}, '@', a).value_or(999'999);
+            dist.value();
         for (auto b : keys) {
             if (a >= b)
                 continue;
