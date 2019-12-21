@@ -1,5 +1,7 @@
 #pragma once
 #include "_main.hpp"
+#include <limits>
+#include <queue>
 
 template <class T> class graph {
     using s = typename vector<T>::size_type;
@@ -34,6 +36,7 @@ template <class T> class graph {
     int order() const { return int(adj_.size()); }
     vector<T> &adj(T u) { return adj_.at(u); }
     vector<T> const &adj(T u) const { return adj_.at(u); }
+    auto const &vertices() const { return adj_; }
     T head(T u, int k) const { return adj(u).at(s(k)); }
     T &head(T u, int k) { return adj_.at(u).at(s(k)); }
     template <class U> friend ostream &operator<<(ostream &, graph<U> const &);
@@ -128,5 +131,37 @@ template <class T> class dfs {
             }
         }
         return {};
+    }
+};
+
+template <class T> class dijkstra {
+    graph<T> const &g_;
+    map<T, int> dist_;
+    map<T, pair<T, int>> edge_to_;
+    static auto const compare = [](auto x, auto y) {
+        return x.second > y.second;
+    };
+    priority_queue<pair<T, int>, vector<pair<T, int>>, decltype(compare)> q_;
+
+    void relax(T v) {
+        for (auto k : nums(0, g_.deg(v))) {
+            auto w = g_.head(v, k);
+            if (dist_.at(w) > dist_.at(v).g_.weight(v, k)) {
+                dist_.at(w) = dist_.at(v).g_.weight(v, k);
+                edge_to_[w] = {v, k};
+            }
+        }
+    }
+
+  public:
+    dijkstra(graph<T> const &g) : g_(g) {
+        for (auto &[v, adj] : g.vertices())
+            dist_[v] = numeric_limits<int>::max();
+    }
+
+    int shortest(T from, T to) {
+        dist_[from] = 0;
+        q_.push({from, 0});
+        relax();
     }
 };
