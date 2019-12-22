@@ -29,12 +29,14 @@ HACKED_CONT_WITH_1_ARG(min_element)
 HACKED_CONT_WITH_1_ARG(partition)
 HACKED_CONT_WITH_1_ARG(count)
 HACKED_CONT_WITH_1_ARG(count_if)
+HACKED_CONT_WITH_1_ARG(iota)
 
 HACKED_CONT_WITH_2_ARGS(accumulate)
 HACKED_CONT_WITH_2_ARGS(transform)
 HACKED_CONT_WITH_2_ARGS(copy_if)
 
 HACKED_CONTS(mismatch)
+HACKED_CONTS(find_first_of)
 
 template <class C, class T> auto contains(C &&c, T &&t) {
     return find(begin(c), end(c), forward<T>(t)) != end(c);
