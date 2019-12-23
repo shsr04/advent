@@ -5,6 +5,10 @@ namespace hacked_ranges {
     template <class C, class D> auto name(C &&c, D &&d) {                      \
         return name(begin(c), end(c), begin(d), end(d));                       \
     }
+#define HACKED_CONTS_WITH_1_ARG(name)                                                     \
+    template <class C, class D,class T> auto name(C &&c, D &&d,T&&t) {                      \
+        return name(begin(c), end(c), begin(d), end(d),forward<T>(t));                       \
+    }
 #define HACKED_CONT_WITH_1_ARG(name)                                           \
     template <class C, class T> auto name(C &&c, T &&t) {                      \
         return name(begin(c), end(c), forward<T>(t));                          \
@@ -37,6 +41,8 @@ HACKED_CONT_WITH_2_ARGS(copy_if)
 
 HACKED_CONTS(mismatch)
 HACKED_CONTS(find_first_of)
+
+HACKED_CONTS_WITH_1_ARG(find_first_of)
 
 template <class C, class T> auto contains(C &&c, T &&t) {
     return find(begin(c), end(c), forward<T>(t)) != end(c);

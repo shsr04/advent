@@ -226,7 +226,7 @@ int main(int argc, char **argv) {
     auto rounds = 500;
     while (rounds-- > 0) {
         if (idle.all()) {
-            cout << "IDLE, sending activation "<<nat<<"\n";
+            cout << "IDLE, sending activation " << nat << "\n";
             network[0].input_ = nat;
             if (sent_from_nat.count(nat[1])) {
                 cout << "duplicate NAT value found: " << nat[1] << "\n";
@@ -240,15 +240,15 @@ int main(int argc, char **argv) {
             idle[i_m] = m.input_.empty();
             if (m.input_.empty())
                 m.input_ = {-1};
-            //cout << i_m << " input: " << m.input_ << "\n";
+            // cout << i_m << " input: " << m.input_ << "\n";
             auto req = m.run_code(m.input_);
-            //cout << i_m << " output: " << req << "\n";
+            // cout << i_m << " output: " << req << "\n";
             idle[i_m] = idle[i_m] & req.empty();
             auto i_req = req.begin();
             while (i_req != req.end()) {
                 auto target = *i_req, x = *(i_req + 1), y = *(i_req + 2);
                 if (target == 255) {
-                    //cout << "sent to NAT: " << x << " " << y << "\n";
+                    // cout << "sent to NAT: " << x << " " << y << "\n";
                     nat = {x, y};
                 } else {
                     network[target].input_.push_back(x);

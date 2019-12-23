@@ -22,9 +22,8 @@ coord key_coord(map<coord, char> const &tiles, char sym) {
     return r::find_if(tiles, [sym](auto &x) { return x.second == sym; })->first;
 }
 
-template<class T>
-ostream& operator<<(ostream&o, set<T> const&p) {
-    r::copy(p,ostream_iterator<T>(o));
+template <class T> ostream &operator<<(ostream &o, set<T> const &p) {
+    r::copy(p, ostream_iterator<T>(o));
     return o;
 }
 
@@ -65,83 +64,111 @@ distance_and_requirements(map<coord, char> const &tiles, char from, char to) {
     return {};
 }
 
+struct vertex {
+    char name;
+    set<char> req;
+    vertex() : name(0), req() {}
+    vertex(char n, set<char> r) : name(n), req(r) {}
+    void add_req(set<char> p) {
+        for (auto c : p)
+            req.insert(c);
+    }
+    bool operator<(vertex const &p) const { return name < p.name; }
+    bool operator==(vertex const &p) const { return name == p.name; }
+};
+ostream &operator<<(ostream &o, vertex const &p) {
+    o << p.name << "[", r::copy(p.req, ostream_iterator<char>(o)), cout << "]";
+    return o;
+}
+
 struct edge {
-    char taken;
+    vertex target;
     int weight;
-    set<char> remaining, required;
+    edge(vertex t, int w) : target(t), weight(w) {}
     bool operator<(edge const &p) const {
-        return taken < p.taken || weight < p.weight || remaining < p.remaining;
+        return target < p.target || weight < p.weight;
     }
 };
 
 int shortest_path(map<coord, char> const &tiles,
-                  map<set<char>, set<edge>> const &graph, set<char> from,
-                  set<char> to) {
+                  map<vertex, set<edge>> const &graph, vertex from) {
     // struct elem {
     //    set<char> vertex;
     //    int dist;
     //};
     // auto compare = [](auto x, auto y) { return x.dist > y.dist; };
     // priority_queue<elem, vector<elem>, decltype(compare)> q(compare);
-    set<set<char>> unvisited;
-    map<set<char>, int> dist;
+    set<vertex> unvisited;
+    map<vertex, int> dist;
     for (auto &[v, e] : graph)
         unvisited.insert(v), dist[v] = 999'999;
-    map<set<char>, set<char>> parent;
+    map<vertex, vertex> parent;
     dist[from] = 0;
-    // TODO: also consider vertex coordinates, not just remaining sets!!!
+    parent[from] = {'0', {}};
+    auto to = from;
     while (!unvisited.empty()) {
         auto u = *r::min_element(
             unvisited, [&dist](auto x, auto y) { return dist[x] < dist[y]; });
-        // for (auto c : u)
-        //   cout << c;
-        // cout << " " <<dist[u]<<"\n";
         unvisited.erase(u);
+        to = u;
+        if (graph.at(u).empty())
+            continue;
+        cout << u << " " << dist[u] << "\n";
+        auto min_edge = optional<edge>();
+        bool dist_ok = false;
         for (auto &e : graph.at(u)) {
-            if (!unvisited.count(e.remaining))
+            if (!unvisited.count(e.target))
                 continue;
-            if (dist.at(e.remaining) > dist.at(u) + e.weight) {
-                dist[e.remaining] = dist[u] + e.weight;
-                parent[e.remaining] = u;
-                cout << " w(";
-                for (auto a : u)
-                    cout << a;
-                cout << "->";
-                for (auto a : e.remaining)
-                    cout << a;
-                cout << ") = " << e.weight << "\n";
+            if (r::find_first_of(unvisited, e.target.req, [](auto x, auto y) {
+                    return x.name == y;
+                }) != unvisited.end())
+                continue;
+            // if (dist.at(e.target) > dist.at(u) + e.weight &&
+            //    (!min_edge || e.weight < min_edge->weight))
+            //    min_edge = e;
+            if (dist.at(e.target) > dist.at(u) + e.weight) {
+                dist_ok = true;
+                dist[e.target] = dist[u] + e.weight;
+                parent[e.target] = u;
+                cout << " w(" << u << "->" << e.target << ") = " << e.weight
+                     << "\n";
+            } else if (!dist_ok && (!min_edge || e.weight < min_edge->weight)) {
+                min_edge = e;
             }
         }
+        if (!dist_ok) {
+            cout << u << "->" << min_edge->target << "\n";
+            dist[min_edge->target] = dist[u] + min_edge->weight;
+            parent[min_edge->target] = u;
+        }
     }
-    for (auto u = to;; u = parent.at(u)) {
-        r::copy(u, ostream_iterator<char>(cout)),
-            cout << " " << dist[u] << "\n";
-            if(u==from) break;
+    for (auto u = to; u.name != '0'; u = parent.at(u)) {
+        cout << "= " << u << " " << dist[u] << "\n";
     }
     return dist.at(to);
 }
 
-void build_subset_graph(map<coord, char> const &tiles, char from,
-                        set<char> remaining, set<char> required,
-                        map<set<char>, set<edge>> &r, int l = 0) {
-    if (remaining.empty())
+void build_subset_graph(map<coord, char> const &tiles, vertex from,
+                        set<char> remaining, map<vertex, set<edge>> &r,
+                        int l = 0) {
+    if (remaining.empty()) {
+        r[from].insert({});
         return;
+    }
     // cout << l << ": build " << from << " ",
     //   r::copy(remaining, ostream_iterator<char>(cout)), cout << "\n";
     for (auto c : remaining) {
-        auto [dist, req] = distance_and_requirements(tiles, from, c).value();
+        auto [dist, req] =
+            distance_and_requirements(tiles, from.name, c).value();
         if (r::find_first_of(remaining, req) != remaining.end())
             continue;
         auto new_rem = remaining % f::where([c](auto x) { return x != c; });
-        cout << remaining << "->" << new_rem << ": " << dist << " ",
-          r::copy(req, ostream_iterator<char>(cout)), cout << "\n";
-        for (auto r : req)
-            required.insert(r);
-        r[remaining].insert({.taken = c,
-                             .weight = dist,
-                             .remaining = new_rem,
-                             .required = {}});
-        build_subset_graph(tiles, c, move(new_rem), move(required), r, l + 1);
+        // cout << remaining << "->" << new_rem << ": " << dist << " ",
+        //   r::copy(req, ostream_iterator<char>(cout)), cout << "\n";
+        auto to = vertex{c, req};
+        to.add_req(from.req);
+        r[from].insert({to, dist});
+        build_subset_graph(tiles, move(to), move(new_rem), r, l + 1);
     }
 }
 
@@ -167,7 +194,7 @@ int main(int argc, char **argv) {
     auto start_coord =
         r::find_if(tiles, [](auto x) { return x.second == '@'; })->first;
     auto testing = distance_and_requirements(tiles, '@', 'e').value();
-    cout << "@->c: " << testing.first << ", req: ";
+    cout << "@->e: " << testing.first << ", req: ";
     for (auto r : testing.second)
         cout << r;
     cout << "\n";
@@ -186,27 +213,22 @@ int main(int argc, char **argv) {
     cout << "Closest to @: " << closest_to_start.first << " with "
          << closest_to_start.second << "\n";
 
-    map<set<char>, set<edge>> graph;
-    //graph[keys_with_start] = {edge{.taken = '@',
-    //                               .weight = closest_to_start.second,
+    map<vertex, set<edge>> graph;
+    build_subset_graph(tiles, {'@', {}}, keys, graph);
+    // graph[keys_with_start] = {edge{.from = '@',
+    //                               .to = '@',
+    //                               .weight = 0,
     //                               .remaining = keys,
     //                               .required = {}}};
-    build_subset_graph(tiles, '@', keys, {}, graph);
-    /*
-    for (auto &[rem, e] : graph) {
-        for (auto c : rem)
-            cout << c;
-        cout << " : ";
-        for (auto &[c, w, rem2, req2] : e) {
-            for (auto c2 : rem2)
-                cout << c2;
-            cout << " ";
+
+    for (auto &[u, e] : graph) {
+        cout << u << " : ";
+        for (auto &[t, w] : e) {
+            cout << t << "(" << w << ") ";
         }
         cout << "\n";
     }
-    */
 
-    auto path = shortest_path(tiles, graph, keys,
-                              {*r::max_element(keys, less<>())});
+    auto path = shortest_path(tiles, graph, {'@', {}});
     cout << "Steps: " << path << "\n";
 }
