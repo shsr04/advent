@@ -101,18 +101,16 @@ int shortest_path(map<coord, char> const &tiles,
     set<vertex> unvisited;
     map<vertex, int> dist;
     for (auto &[v, e] : graph)
-        unvisited.insert(v), dist[v] = 999'999;
+        unvisited.insert(v);
     map<vertex, vertex> parent;
     dist[from] = 0;
+    unvisited.erase(from);
     parent[from] = {'0', {}};
-    auto to = from;
+    auto u = from, to = from;
     while (!unvisited.empty()) {
-        auto u = *r::min_element(
-            unvisited, [&dist](auto x, auto y) { return dist[x] < dist[y]; });
-        unvisited.erase(u);
-        to = u;
-        if (graph.at(u).empty())
-            continue;
+        for (auto &[v, e] : graph)
+            if (unvisited.count(v))
+                dist[v] = 999'999;
         cout << u << " " << dist[u] << "\n";
         auto min_edge = optional<edge>();
         bool dist_ok = false;
@@ -132,15 +130,22 @@ int shortest_path(map<coord, char> const &tiles,
                 parent[e.target] = u;
                 cout << " w(" << u << "->" << e.target << ") = " << e.weight
                      << "\n";
-            } else if (!dist_ok && (!min_edge || e.weight < min_edge->weight)) {
+            } else if (!min_edge || e.weight < min_edge->weight) {
                 min_edge = e;
             }
         }
-        if (!dist_ok) {
-            cout << u << "->" << min_edge->target << "\n";
-            dist[min_edge->target] = dist[u] + min_edge->weight;
-            parent[min_edge->target] = u;
-        }
+
+        u = *r::min_element(
+            unvisited, [&dist](auto x, auto y) { return dist[x] < dist[y]; });
+        unvisited.erase(u);
+        to = u;
+        if (graph.at(u).empty())
+            continue;
+        // if (min_edge) {
+        //    cout << u << "->" << min_edge->target << "\n";
+        //    dist[min_edge->target] = dist[u] + min_edge->weight;
+        //    parent[min_edge->target] = u;
+        //}
     }
     for (auto u = to; u.name != '0'; u = parent.at(u)) {
         cout << "= " << u << " " << dist[u] << "\n";

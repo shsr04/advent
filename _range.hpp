@@ -20,6 +20,7 @@ namespace hacked_ranges {
 
 HACKED_CONT(reverse)
 HACKED_CONT(is_sorted)
+HACKED_CONT(unique)
 HACKED_CONT(adjacent_find)
 HACKED_CONT(next_permutation)
 
