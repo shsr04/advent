@@ -6,5 +6,6 @@ endif
 default: run
 
 run:
-	terraform fmt $(prog)
+	terraform fmt -recursive $(prog)
+	terraform init $(prog)
 	terraform apply -auto-approve $(prog)
