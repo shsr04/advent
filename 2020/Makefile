@@ -8,4 +8,4 @@ default: run
 run:
 	terraform fmt -recursive $(prog)
 	terraform init $(prog)
-	terraform apply -auto-approve $(prog)
+	terraform apply -auto-approve -lock=false $(prog)

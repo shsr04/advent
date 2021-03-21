@@ -31,7 +31,7 @@ locals {
   ]
   sum_trees_for_slopes = [for i, _ in local.slopes : module.tree_finder[i].num_trees]
   // Left folding seems to be impossible in terraform... :(
-  multiplied = local.sum_trees_for_slopes[0] * local.sum_trees_for_slopes[1] * local.sum_trees_for_slopes[2] * local.sum_trees_for_slopes[3] * local.sum_trees_for_slopes[4]
+  multiplied = parseint(module.multiplier.result, 10)
 }
 
 module "tree_finder" {
@@ -40,6 +40,11 @@ module "tree_finder" {
   grid     = local.grid
   delta_x  = each.value.dx
   delta_y  = each.value.dy
+}
+
+module "multiplier" {
+  source     = "./evaluator"
+  expression = join("*", local.sum_trees_for_slopes)
 }
 
 output "result_part1" {
