@@ -3,6 +3,13 @@
 This directory contains the active MetaC compiler slice in Perl.
 It is feature-generic within the supported subset: the compiler does not hardcode day/domain identifiers.
 
+## Module Layout
+
+- `compiler/metac.pl`: thin CLI entrypoint
+- `compiler/lib/MetaC/Support.pm`: shared helpers (errors, trimming, constraints, CSV-like splitting, emit helpers)
+- `compiler/lib/MetaC/Parser.pm`: source parsing into AST-style statement/expression structures
+- `compiler/lib/MetaC/Codegen.pm`: typing checks, diagnostics, C lowering, runtime prelude emission
+
 ## Compile MetaC -> C
 
 ```bash
@@ -27,7 +34,35 @@ Expected output:
 Result: 3
 ```
 
+## Compiler Test Suite
+
+Tracked compiler regression tests live in `compiler/tests/`.
+
+Run all compiler tests:
+
+```bash
+make test
+```
+
+Or directly:
+
+```bash
+perl compiler/tests/run.pl
+```
+
+Test cases live in `compiler/tests/cases/`:
+
+- `*.metac`: source test program
+- `*.in` (optional): stdin input
+- `*.out` (required for run tests): expected stdout
+- `*.exit` (optional): expected process exit code (default `0`)
+- `*.compile_err` (optional): expected compile-failure diagnostic substring
+
 ## Supported Subset (Current)
+
+- numeric backend note:
+  - MetaC `number` currently lowers to signed 64-bit (`int64_t`) in generated C
+  - silent overflow is still possible in the current backend for large arithmetic; bigint semantics are not implemented yet
 
 - `function main() { ... }`
 - `function <name>(): number | error { ... }`
@@ -43,20 +78,46 @@ Result: 3
 - `let <id>: number = <number_expr>`
 - `let <id>: string = <string_expr>`
 - `let <id> = <expr>` (type inference for `number`, `string`, `bool`)
-- `const <id> = <expr>` with inferred immutable type (`number`, `bool`, `string`)
+- `const <id> = <expr>` with inferred immutable type (`number`, `bool`, `string`, `string_list`, `number_list`)
+- `const <id> = split(<string>, <delimiter>)?` with error propagation
 - `while <bool_expr> { ... }`
 - compound assignment: `<id> += <number_expr>`
 - increment/decrement: `<id>++`, `<id>--`
 - `for const <id> in lines(STDIN)? { ... }`
+- `for const <id> in <iterable> { ... }`
+  - iterable variable from `split(...)`
+  - numeric sequence: `seq(start, end)` with `number` bounds only
 - `const [a, b, ...] = match(source, /<regex-with-captures>/)?`
+- `const [a, b, ...] = split(source, delim) or (e) => { ... }`
 - producer initialization: `let <id>: <type> from () => { ... }`
 - typed assignment form: `<id>: <type> [with <constraints>] = <expr>`
 - expression grammar includes:
-  - arithmetic: `+`, `-`
+  - arithmetic: `+`, `-`, `*`, `/` (integer division)
   - unary minus: `-x`
-  - equality/comparisons: `==`, `<`, `>`, `<=`, `>=`
-  - typed function calls: `fn(...)` for `number`-return functions
+  - equality/comparisons: `==`, `!=`, `<`, `>`, `<=`, `>=`
+  - boolean literals: `true`, `false`
+  - typed function calls: `fn(...)` for `number`- and `bool`-return functions
+  - numeric parsing builtin: `parseNumber(<string>)` (fallible; use with `?` or via `map(parseNumber)?`)
+  - method calls: `<expr>.<method>(...)`
+    - string methods: `.size()`, `.chunk(<number>)`
+    - list methods: `<string_list>.size()`, `<number_list>.size()`
   - numeric builtins: `max(a,b)`, `min(a,b)`
+- interpolation templates in string literals:
+  - `"Invalid range: ${range}"`
+- explicit error expression:
+  - `error("message")` in `number | error` return paths
+- bool aliases:
+  - `boolean` is accepted as an alias for `bool` in parameter, variable, and return type positions
+- list destructuring from list expressions:
+  - `const [a, b, ...] = <string-list-expression>`
+  - compile-time arity proof is required (for example via a guard like `if list.size() != N { return ... }` or `... .assert(x => x.size() == N, "...")?`)
+- fail-fast try assignment:
+  - `const <id> = <fallible-expression>?`
+  - supported fallible expressions include:
+    - `split(<string>, <string>)`
+    - `parseNumber(<string>)`
+    - `<string_list>.map(parseNumber)`
+    - `<list>.assert(x => x.size() == <numeric-literal-size>, <message>)`
 
 ## Genericity Rule
 

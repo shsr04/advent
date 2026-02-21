@@ -1,0 +1,14 @@
+function main() {
+  printf("Result: %d\n", solve() or (e) => {
+    printf("Error! %s\n", e.message)
+    return 1
+  })
+}
+
+function solve(): number | error {
+  const [left, right] = "123".chunk(2)
+  if left == right {
+    return 1
+  }
+  return 0
+}

@@ -1,0 +1,15 @@
+function main() {
+  printf("Result: %d\n", solve() or (e) => {
+    printf("Error! %s\n", e.message)
+    return 1
+  })
+}
+
+function solve(): number | error {
+  const limit = 3
+  while limit > 0 {
+    return 1
+  }
+
+  return 0
+}

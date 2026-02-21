@@ -1,0 +1,25 @@
+function main() {
+  printf("Result: %d\n", solve() or (e) => {
+    printf("Error! %s\n", e.message)
+    return 1
+  })
+}
+
+function solve(): number | error {
+  const range = "2-4"
+  const bounds = split(range, "-")?
+    .map(parseNumber)?
+
+  if bounds.size() != 2 {
+    return error("Invalid range: ${range}")
+  }
+
+  const [start, end] = bounds
+  let total = 0
+
+  for const x in seq(start, end) {
+    total += x
+  }
+
+  return total
+}

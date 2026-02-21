@@ -1,0 +1,79 @@
+function main() {
+  printf("Result: %d\n", findRanges() or (e) => {
+    printf("Error! %s\n", e.message)
+    return 1
+  })
+}
+
+function findRanges(): number | error {
+  const ranges = split(STDIN, ",")?
+  let invalidSum = 0
+
+  for const range in ranges {
+    const bounds = split(range, "-")?
+      .map(parseNumber)?
+      .assert(x => x.size() == 2, "Invalid range expression: ${range}")?
+
+    const [start, end] = bounds
+
+    for const x in seq(start, end) {
+      if hasRepeatingDigits("${x}") {
+        invalidSum += x
+      }
+    }
+  }
+
+  return invalidSum
+}
+
+function matchesRepeatedChunk(input: string, chunkSize: number): boolean {
+  const chunks = input.chunk(chunkSize)
+  const count = chunks.size()
+  const n = input.size()
+
+  if count * chunkSize != n {
+    return false
+  }
+  if count < 2 {
+    return false
+  }
+
+  let first = ""
+  let seen = 0
+  for const part in chunks {
+    if seen == 0 {
+      first = part
+    } else {
+      if part != first {
+        return false
+      }
+    }
+    seen += 1
+  }
+
+  return true
+}
+
+// IDs are invalid when they are some digit sequence repeated at least twice.
+function hasRepeatingDigits(input: string): boolean {
+  const n = input.size()
+  let d = 1
+
+  // Only scan potential divisors up to sqrt(n); test both d and n/d when divisible.
+  while d * d <= n {
+    const q = n / d
+    if q * d == n {
+      if matchesRepeatedChunk(input, d) {
+        return true
+      }
+      if q != d {
+        if matchesRepeatedChunk(input, q) {
+          return true
+        }
+      }
+    }
+    d += 1
+  }
+
+  return false
+}

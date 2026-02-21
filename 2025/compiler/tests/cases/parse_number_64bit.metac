@@ -1,0 +1,14 @@
+function main() {
+  printf("Result: %d\n", solve() or (e) => {
+    printf("Error! %s\n", e.message)
+    return 1
+  })
+}
+
+function solve(): number | error {
+  const bounds = split("7676687127-7676687127", "-")?
+    .map(parseNumber)?
+    .assert(x => x.size() == 2, "Invalid range")?
+  const [start, end] = bounds
+  return start + end
+}

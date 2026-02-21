@@ -4,6 +4,7 @@ CC := clang
 CFLAGS ?= -std=c17 -O3 -Wall -Wextra -Wpedantic
 
 METAC_SOURCES := $(sort $(wildcard day*/day*.metac))
+COMPILER_SOURCES := compiler/metac.pl $(sort $(wildcard compiler/lib/MetaC/*.pm))
 
 source_to_c = $(dir $1)build/$(notdir $(basename $1)).c
 source_to_bin = $(dir $1)build/$(notdir $(basename $1))
@@ -17,7 +18,7 @@ RUN_OUTPUTS := $(foreach s,$(INPUT_SOURCES),$(call source_to_out,$(s)))
 
 DAY_TARGETS := $(basename $(notdir $(METAC_SOURCES)))
 
-.PHONY: all c bins run clean list $(DAY_TARGETS)
+.PHONY: all c bins run test compiler-test clean list $(DAY_TARGETS)
 
 all: bins
 
@@ -26,6 +27,11 @@ c: $(C_ARTIFACTS)
 bins: $(BIN_ARTIFACTS)
 
 run: $(RUN_OUTPUTS)
+
+compiler-test:
+	perl compiler/tests/run.pl
+
+test: compiler-test
 
 list:
 	@echo "Meta sources:"
@@ -39,9 +45,12 @@ list:
 
 clean:
 	rm -f $(C_ARTIFACTS) $(BIN_ARTIFACTS) $(RUN_OUTPUTS)
+	@if [ -d compiler/tests/build ]; then \
+		find compiler/tests/build -mindepth 1 ! -name '.gitignore' -delete; \
+	fi
 
 define EMIT_BUILD_RULES
-$(call source_to_c,$1): $1 compiler/metac.pl
+$(call source_to_c,$1): $1 $(COMPILER_SOURCES)
 	@mkdir -p $$(@D)
 	perl compiler/metac.pl $$< -o $$@
 

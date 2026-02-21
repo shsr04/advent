@@ -1,0 +1,21 @@
+function main() {
+  printf("Result: %d\n", solve() or (e) => {
+    printf("Error! %s\n", e.message)
+    return 1
+  })
+}
+
+function solve(): number | error {
+  let dial: number with range(0,9) + wrap = 0
+
+  for const line in lines(STDIN)? {
+    const [direction, amount] = match(line, /(L|R)([0-9]+)/)?
+    if direction == "L" {
+      dial = dial - amount
+    } else {
+      dial = dial + amount
+    }
+  }
+
+  return dial
+}

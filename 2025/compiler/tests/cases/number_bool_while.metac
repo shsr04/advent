@@ -1,0 +1,32 @@
+function main() {
+  printf("Result: %d\n", solve() or (e) => {
+    printf("Error! %s\n", e.message)
+    return 1
+  })
+}
+
+function stepsToZero(n: number): number {
+  let steps = 0
+  let current = n
+
+  while current > 0 {
+    current--
+    steps++
+  }
+
+  return steps
+}
+
+function isSmall(v: number): bool {
+  return v < 5
+}
+
+function solve(): number | error {
+  const value = stepsToZero(3)
+
+  if isSmall(value) {
+    return value
+  } else {
+    return 0
+  }
+}

@@ -1,0 +1,27 @@
+function main() {
+  printf("Result: %d\n", solve() or (e) => {
+    printf("Error! %s\n", e.message)
+    return 1
+  })
+}
+
+function solve(): number | error {
+  const ranges = split(STDIN, ",")?
+  let total = 0
+
+  for const range in ranges {
+    const parts = split(range, "-")?
+    const bounds = parts.map(parseNumber)?
+
+    if bounds.size() == 2 {
+      const [start, end] = bounds
+      for const x in seq(start, end) {
+        total += x
+      }
+    } else {
+      return error("Invalid range expression: ${range}")
+    }
+  }
+
+  return total
+}

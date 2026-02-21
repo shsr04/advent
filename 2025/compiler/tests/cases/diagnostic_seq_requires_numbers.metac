@@ -1,0 +1,20 @@
+function main() {
+  printf("Result: %d\n", solve() or (e) => {
+    printf("Error! %s\n", e.message)
+    return 1
+  })
+}
+
+function solve(): number | error {
+  const parts = split(STDIN, "-")?
+  if parts.size() != 2 {
+    return error("Invalid range")
+  }
+  const [start, end] = parts
+
+  for const x in seq(start, end) {
+    return x
+  }
+
+  return 0
+}

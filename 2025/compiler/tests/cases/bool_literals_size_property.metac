@@ -1,0 +1,27 @@
+function main() {
+  printf("Result: %d\n", solve() or (e) => {
+    printf("Error! %s\n", e.message)
+    return 1
+  })
+}
+
+function hasRepeatedHalf(input: string): boolean {
+  const chunks = input.chunk(input.size() / 2)
+  if chunks.size() != 2 {
+    return false
+  }
+
+  const [head, tail] = chunks
+  return head == tail
+}
+
+function solve(): number | error {
+  let score = 0
+  if hasRepeatedHalf("1212") {
+    score += 1
+  }
+  if hasRepeatedHalf("12345") {
+    score += 10
+  }
+  return score
+}

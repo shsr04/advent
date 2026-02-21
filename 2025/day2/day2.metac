@@ -1,0 +1,38 @@
+function main() {
+  printf("Result: %d\n", findRanges() or (e) => {
+    printf("Error! %s\n", e.message)
+    return 1
+  })
+}
+
+function findRanges(): number | error {
+  const ranges = split(STDIN, ",")?
+  let invalidSum = 0
+
+  for const range in ranges {
+    const bounds = split(range, "-")?
+      .map(parseNumber)?
+      .assert(x => x.size() == 2, "Invalid range expression: ${range}")?
+
+    const [start, end] = bounds
+
+    for const x in seq(start, end) {
+      if hasRepeatingDigits("${x}") {
+        invalidSum += x
+      }
+    }
+  }
+
+  return invalidSum
+}
+
+// Look for numbers which consist of a sequence of digits repeated exactly once, like 123123.
+function hasRepeatingDigits(input: string): boolean {
+  const chunks = input.chunk(input.size() / 2)
+  if chunks.size() != 2 {
+    return false
+  }
+
+  const [head, tail] = chunks
+  return head == tail
+}

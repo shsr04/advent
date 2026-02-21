@@ -1,0 +1,17 @@
+function main() {
+  printf("Result: %d\n", solve() or (e) => {
+    printf("Error! %s\n", e.message)
+    return 1
+  })
+}
+
+function solve(): number | error {
+  let n = 42
+  const label = "n=${n}"
+
+  if label == "n=42" {
+    return 1
+  } else {
+    return 0
+  }
+}

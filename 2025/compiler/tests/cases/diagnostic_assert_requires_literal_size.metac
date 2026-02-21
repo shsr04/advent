@@ -1,0 +1,15 @@
+function main() {
+  printf("Result: %d\n", solve() or (e) => {
+    printf("Error! %s\n", e.message)
+    return 1
+  })
+}
+
+function solve(): number | error {
+  const expected = 2
+  const bounds = split("10-12", "-")?
+    .map(parseNumber)?
+    .assert(expected, "Invalid range expression")?
+  const [start, end] = bounds
+  return start + end
+}
