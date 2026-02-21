@@ -1,0 +1,12 @@
+function main() {
+  printf("Result: %d\n", solve() or (e) => {
+    printf("Error! %s\n", e.message)
+    return 1
+  })
+}
+
+function solve(): number | error {
+  const pieces = split("1,2,3", ",")?
+  const nums = pieces.map(parseNumber)
+  return nums.size()
+}

@@ -277,6 +277,10 @@ sub expr_tokens {
             push @tokens, { type => 'op', value => '<=' };
             next;
         }
+        if ($expr =~ /\G=>/gc) {
+            push @tokens, { type => 'op', value => '=>' };
+            next;
+        }
         if ($expr =~ /\G>=/gc) {
             push @tokens, { type => 'op', value => '>=' };
             next;
@@ -289,7 +293,7 @@ sub expr_tokens {
             push @tokens, { type => 'op', value => '!=' };
             next;
         }
-        if ($expr =~ /\G[<>,\+\-\*\/\.\(\)]/gc) {
+        if ($expr =~ /\G[<>,\+\-\*\/%\.\(\)\[\]]/gc) {
             push @tokens, { type => 'op', value => $& };
             next;
         }
@@ -346,6 +350,7 @@ sub parse_expr {
     my $parse_add;
     my $parse_cmp;
     my $parse_eq;
+    my $parse_lambda;
 
     $parse_atom = sub {
         my $tok = $peek->();
@@ -374,7 +379,7 @@ sub parse_expr {
                 my @args;
                 if (!$accept_op->(')')) {
                     while (1) {
-                        push @args, $parse_eq->();
+                        push @args, $parse_lambda->();
                         if ($accept_op->(')')) {
                             last;
                         }
@@ -387,7 +392,7 @@ sub parse_expr {
             return { kind => 'ident', name => $name };
         }
         if ($accept_op->('(')) {
-            my $inner = $parse_eq->();
+            my $inner = $parse_lambda->();
             $expect_op->(')', "to close parenthesized expression");
             return $inner;
         }
@@ -398,31 +403,47 @@ sub parse_expr {
     $parse_primary = sub {
         my $node = $parse_atom->();
 
-        while ($accept_op->('.')) {
-            my $name_tok = $peek->();
-            compile_error("Expected method name after '.' in expression")
-              if !defined($name_tok) || $name_tok->{type} ne 'ident';
-            my $method = $name_tok->{value};
-            $idx++;
+        while (1) {
+            if ($accept_op->('.')) {
+                my $name_tok = $peek->();
+                compile_error("Expected method name after '.' in expression")
+                  if !defined($name_tok) || $name_tok->{type} ne 'ident';
+                my $method = $name_tok->{value};
+                $idx++;
 
-            $expect_op->('(', "after method name");
-            my @args;
-            if (!$accept_op->(')')) {
-                while (1) {
-                    push @args, $parse_eq->();
-                    if ($accept_op->(')')) {
-                        last;
+                $expect_op->('(', "after method name");
+                my @args;
+                if (!$accept_op->(')')) {
+                    while (1) {
+                        push @args, $parse_lambda->();
+                        if ($accept_op->(')')) {
+                            last;
+                        }
+                        $expect_op->(',', "after method-call argument");
                     }
-                    $expect_op->(',', "after method-call argument");
                 }
+
+                $node = {
+                    kind   => 'method_call',
+                    recv   => $node,
+                    method => $method,
+                    args   => \@args,
+                };
+                next;
             }
 
-            $node = {
-                kind   => 'method_call',
-                recv   => $node,
-                method => $method,
-                args   => \@args,
-            };
+            if ($accept_op->('[')) {
+                my $index_expr = $parse_lambda->();
+                $expect_op->(']', "to close index expression");
+                $node = {
+                    kind  => 'index',
+                    recv  => $node,
+                    index => $index_expr,
+                };
+                next;
+            }
+
+            last;
         }
 
         return $node;
@@ -440,7 +461,7 @@ sub parse_expr {
         my $left = $parse_unary->();
         while (1) {
             my $tok = $peek->();
-            last if !defined $tok || $tok->{type} ne 'op' || ($tok->{value} ne '*' && $tok->{value} ne '/');
+            last if !defined $tok || $tok->{type} ne 'op' || ($tok->{value} ne '*' && $tok->{value} ne '/' && $tok->{value} ne '%');
             my $op = $tok->{value};
             $idx++;
             my $right = $parse_unary->();
@@ -489,7 +510,23 @@ sub parse_expr {
         return $left;
     };
 
-    my $ast = $parse_eq->();
+    $parse_lambda = sub {
+        my $tok = $peek->();
+        my $next = ($idx + 1 < @$tokens) ? $tokens->[$idx + 1] : undef;
+        if (defined($tok) && defined($next) && $tok->{type} eq 'ident' && $next->{type} eq 'op' && $next->{value} eq '=>') {
+            my $param = $tok->{value};
+            $idx += 2;
+            my $body = $parse_lambda->();
+            return {
+                kind  => 'lambda1',
+                param => $param,
+                body  => $body,
+            };
+        }
+        return $parse_eq->();
+    };
+
+    my $ast = $parse_lambda->();
     compile_error("Unexpected trailing expression tokens") if $idx < @$tokens;
     return $ast;
 }
@@ -645,25 +682,7 @@ sub parse_method_step {
 sub parse_iterable_expression {
     my ($raw) = @_;
     my $text = trim($raw);
-
-    my $seq = parse_call_invocation_text($text, 'seq');
-    if (defined $seq && $seq->{rest} eq '') {
-        compile_error("seq(...) expects exactly 2 args") if scalar(@{ $seq->{args} }) != 2;
-        return {
-            kind  => 'seq',
-            start => parse_expr($seq->{args}[0]),
-            end   => parse_expr($seq->{args}[1]),
-        };
-    }
-
-    if ($text =~ /^([A-Za-z_][A-Za-z0-9_]*)$/) {
-        return {
-            kind => 'var',
-            name => $1,
-        };
-    }
-
-    compile_error("Unsupported iterable expression in for-loop: $text");
+    return parse_expr($text);
 }
 
 
@@ -703,6 +722,21 @@ sub parse_block {
             return (\@stmts, 'close_else');
         }
 
+        # Normalize inline if forms into multiline block syntax so downstream parsing stays uniform.
+        # Examples:
+        #   if ok { return true }
+        #   if ok { return true } else { return false }
+        if ($line =~ /^if\s+(.+?)\s*\{\s*(.+?)\s*\}\s*else\s*\{\s*(.+?)\s*\}$/) {
+            my ($cond, $then_stmt, $else_stmt) = (trim($1), trim($2), trim($3));
+            splice @$lines, $$idx_ref, 1, ("if $cond {", $then_stmt, "} else {", $else_stmt, "}");
+            next;
+        }
+        if ($line =~ /^if\s+(.+?)\s*\{\s*(.+?)\s*\}$/) {
+            my ($cond, $stmt_text) = (trim($1), trim($2));
+            splice @$lines, $$idx_ref, 1, ("if $cond {", $stmt_text, "}");
+            next;
+        }
+
         if ($line =~ /^for\s+const\s+([A-Za-z_][A-Za-z0-9_]*)\s+in\s+lines\s*\(\s*STDIN\s*\)\?\s*\{$/) {
             my $var = $1;
             $$idx_ref++;
@@ -732,6 +766,12 @@ sub parse_block {
             my ($body, $end_reason) = parse_block($lines, $idx_ref);
             compile_error("while-loop missing closing brace") if $end_reason ne 'close';
             push @stmts, { kind => 'while', cond => parse_expr($cond), body => $body };
+            next;
+        }
+
+        if ($line eq 'break') {
+            push @stmts, { kind => 'break' };
+            $$idx_ref++;
             next;
         }
 

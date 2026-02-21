@@ -26,54 +26,22 @@ function findRanges(): number | error {
   return invalidSum
 }
 
-function matchesRepeatedChunk(input: string, chunkSize: number): boolean {
-  const chunks = input.chunk(chunkSize)
-  const count = chunks.size()
-  const n = input.size()
-
-  if count * chunkSize != n {
-    return false
-  }
-  if count < 2 {
-    return false
-  }
-
-  let first = ""
-  let seen = 0
-  for const part in chunks {
-    if seen == 0 {
-      first = part
-    } else {
-      if part != first {
-        return false
-      }
-    }
-    seen += 1
-  }
-
-  return true
-}
-
 // IDs are invalid when they are some digit sequence repeated at least twice.
 function hasRepeatingDigits(input: string): boolean {
-  const n = input.size()
-  let d = 1
+  const size = input.size()
+  if size<2 { return false }
 
-  // Only scan potential divisors up to sqrt(n); test both d and n/d when divisible.
-  while d * d <= n {
-    const q = n / d
-    if q * d == n {
-      if matchesRepeatedChunk(input, d) {
-        return true
-      }
-      if q != d {
-        if matchesRepeatedChunk(input, q) {
-          return true
-        }
+  // divisor: number with range(1,size-1)
+  for const divisor in seq(1,size-1).filter(x => size%x==0) {
+    let ok = true
+    // i: number with range(<divisor>,size-1) = number with range(1,size-1) 
+    for const i in seq(divisor, size-1) {
+      if input[i] != input[i-divisor] { // string access is proven at compile time due to range bounds
+        ok = false
+        break
       }
     }
-    d += 1
+    if ok { return true }
   }
-
   return false
 }

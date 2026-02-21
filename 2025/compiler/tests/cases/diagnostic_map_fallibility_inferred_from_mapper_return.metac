@@ -1,0 +1,16 @@
+function main() {
+  printf("Result: %d\n", solve() or (e) => {
+    printf("Error! %s\n", e.message)
+    return 1
+  })
+}
+
+function toNumMaybe(s: string): number | error {
+  return parseNumber(s)?
+}
+
+function solve(): number | error {
+  const parts = split("1,2,3", ",")?
+  const nums = parts.map(toNumMaybe)
+  return nums.size()
+}

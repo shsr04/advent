@@ -1,0 +1,24 @@
+function main() {
+  printf("Result: %d\n", solve() or (e) => {
+    printf("Error! %s\n", e.message)
+    return 1
+  })
+}
+
+function solve(): number | error {
+  const odds = split("1,2,3,4,5", ",")?
+    .map(parseNumber)?
+    .filter(x => x % 2 != 0)?
+    .assert(x => x.size() == 3, "Expected exactly three odd values")?
+
+  let total = 0
+  for const n in odds {
+    total += n
+  }
+
+  if "121212".chunk(2).size() == 3 {
+    total += 100
+  }
+
+  return total
+}

@@ -356,6 +356,665 @@ sub build_template_format_expr {
 }
 
 
+sub method_specs {
+    return {
+        size => {
+            receivers     => { string => 1, string_list => 1, number_list => 1 },
+            arity         => 0,
+            expr_callable => 1,
+            fallibility   => 'never',
+        },
+        chunk => {
+            receivers     => { string => 1 },
+            arity         => 1,
+            expr_callable => 1,
+            fallibility   => 'never',
+        },
+        map => {
+            receivers     => { string_list => 1 },
+            arity         => 1,
+            expr_callable => 0,
+            fallibility   => 'mapper',
+        },
+        filter => {
+            receivers     => { string_list => 1, number_list => 1 },
+            arity         => 1,
+            expr_callable => 0,
+            fallibility   => 'never',
+        },
+        assert => {
+            receivers     => { string_list => 1, number_list => 1 },
+            arity         => 2,
+            expr_callable => 0,
+            fallibility   => 'always',
+        },
+    };
+}
+
+
+sub map_mapper_info {
+    my ($expr, $ctx) = @_;
+    my $actual = scalar @{ $expr->{args} };
+    compile_error("map(...) expects exactly 1 function arg, got $actual")
+      if $actual != 1;
+
+    my $mapper = $expr->{args}[0];
+    compile_error("map(...) expects function identifier argument")
+      if $mapper->{kind} ne 'ident';
+    my $mapper_name = $mapper->{name};
+
+    if ($mapper_name eq 'parseNumber') {
+        return {
+            name        => $mapper_name,
+            return_mode => 'number_or_error',
+            builtin     => 1,
+        };
+    }
+
+    my $functions = $ctx->{functions} // {};
+    my $sig = $functions->{$mapper_name};
+    compile_error("Unknown mapper function '$mapper_name' in map(...)")
+      if !defined $sig;
+    my $expected = scalar @{ $sig->{params} };
+    compile_error("map(...) mapper '$mapper_name' must accept exactly 1 arg")
+      if $expected != 1;
+    compile_error("map(...) mapper '$mapper_name' arg type must be string")
+      if $sig->{params}[0]{type} ne 'string';
+
+    if ($sig->{return_type} eq 'number') {
+        return {
+            name        => $mapper_name,
+            return_mode => 'number',
+            builtin     => 0,
+        };
+    }
+    if ($sig->{return_type} eq 'number | error') {
+        return {
+            name        => $mapper_name,
+            return_mode => 'number_or_error',
+            builtin     => 0,
+        };
+    }
+
+    compile_error("map(...) mapper '$mapper_name' must return number or number | error");
+}
+
+
+sub method_fallibility_diagnostic {
+    my ($expr, $recv_type, $ctx) = @_;
+    my $method = $expr->{method};
+    my $spec = method_specs()->{$method};
+    return undef if !defined $spec;
+    return undef if !exists $spec->{receivers}{$recv_type};
+
+    if ($spec->{fallibility} eq 'always') {
+        return "Method '$method(...)' is fallible; handle it with '?' (or an explicit error handler)";
+    }
+    if ($spec->{fallibility} eq 'mapper') {
+        my $mapper = map_mapper_info($expr, $ctx);
+        if ($mapper->{return_mode} eq 'number_or_error') {
+            return "Method 'map(...)' is fallible for mapper '$mapper->{name}'; handle it with '?' (or an explicit error handler)";
+        }
+    }
+    return undef;
+}
+
+
+sub propagate_list_len_fact_from_recv {
+    my ($recv_expr, $target_name, $ctx) = @_;
+    return if !expr_is_stable_for_facts($recv_expr, $ctx);
+    my $recv_key = expr_fact_key($recv_expr, $ctx);
+    my $known_len = lookup_list_len_fact($ctx, $recv_key);
+    return if !defined $known_len;
+    my $new_key = expr_fact_key({ kind => 'ident', name => $target_name }, $ctx);
+    set_list_len_fact($ctx, $new_key, $known_len);
+}
+
+
+sub emit_map_assignment {
+    my (%args) = @_;
+    my $name = $args{name};
+    my $expr = $args{expr};
+    my $ctx = $args{ctx};
+    my $out = $args{out};
+    my $indent = $args{indent};
+    my $propagate_errors = $args{propagate_errors} ? 1 : 0;
+
+    my ($recv_code, $recv_type) = compile_expr($expr->{recv}, $ctx);
+    compile_error("map(...) receiver must be string_list, got $recv_type")
+      if $recv_type ne 'string_list';
+
+    my $mapper = map_mapper_info($expr, $ctx);
+    if (!$propagate_errors && $mapper->{return_mode} eq 'number_or_error') {
+        compile_error("Method 'map(...)' is fallible for mapper '$mapper->{name}'; handle it with '?' (or an explicit error handler)");
+    }
+
+    my $source = '__metac_map_src' . $ctx->{tmp_counter}++;
+    my $count = '__metac_map_count' . $ctx->{tmp_counter}++;
+    my $idx = '__metac_map_i' . $ctx->{tmp_counter}++;
+    my $out_items = '__metac_map_items' . $ctx->{tmp_counter}++;
+    my $tmp_num = '__metac_map_num' . $ctx->{tmp_counter}++;
+    my $tmp_res = '__metac_map_res' . $ctx->{tmp_counter}++;
+
+    emit_line($out, $indent, "StringList $source = $recv_code;");
+    emit_line($out, $indent, "size_t $count = $source.count;");
+    emit_line($out, $indent, "int64_t *$out_items = (int64_t *)calloc($count == 0 ? 1 : $count, sizeof(int64_t));");
+    emit_line($out, $indent, "if ($out_items == NULL) {");
+    if ($propagate_errors) {
+        emit_line($out, $indent + 2, "return err_number(\"out of memory in map\", __metac_line_no, \"\");");
+    } else {
+        emit_line($out, $indent + 2, "fprintf(stderr, \"out of memory in map\\n\");");
+        emit_line($out, $indent + 2, "exit(1);");
+    }
+    emit_line($out, $indent, "}");
+
+    emit_line($out, $indent, "for (size_t $idx = 0; $idx < $count; $idx++) {");
+    if ($mapper->{builtin}) {
+        emit_line($out, $indent + 2, "int64_t $tmp_num = 0;");
+        emit_line($out, $indent + 2, "if (!metac_parse_int($source.items[$idx], &$tmp_num)) {");
+        if ($propagate_errors) {
+            emit_line($out, $indent + 4, "return err_number(\"Invalid number\", __metac_line_no, $source.items[$idx]);");
+        } else {
+            emit_line($out, $indent + 4, "fprintf(stderr, \"Invalid number: %s\\n\", $source.items[$idx]);");
+            emit_line($out, $indent + 4, "exit(1);");
+        }
+        emit_line($out, $indent + 2, "}");
+        emit_line($out, $indent + 2, "${out_items}[$idx] = $tmp_num;");
+    } elsif ($mapper->{return_mode} eq 'number') {
+        emit_line($out, $indent + 2, "${out_items}[$idx] = $mapper->{name}($source.items[$idx]);");
+    } else {
+        emit_line($out, $indent + 2, "ResultNumber $tmp_res = $mapper->{name}($source.items[$idx]);");
+        emit_line($out, $indent + 2, "if ($tmp_res.is_error) {");
+        if ($propagate_errors) {
+            emit_line($out, $indent + 4, "return err_number($tmp_res.message, __metac_line_no, $source.items[$idx]);");
+        } else {
+            emit_line($out, $indent + 4, "fprintf(stderr, \"%s\\n\", $tmp_res.message);");
+            emit_line($out, $indent + 4, "exit(1);");
+        }
+        emit_line($out, $indent + 2, "}");
+        emit_line($out, $indent + 2, "${out_items}[$idx] = $tmp_res.value;");
+    }
+    emit_line($out, $indent, "}");
+
+    emit_line($out, $indent, "NumberList $name;");
+    emit_line($out, $indent, "$name.count = $count;");
+    emit_line($out, $indent, "$name.items = $out_items;");
+
+    declare_var(
+        $ctx,
+        $name,
+        {
+            type      => 'number_list',
+            immutable => 1,
+            c_name    => $name,
+        }
+    );
+    propagate_list_len_fact_from_recv($expr->{recv}, $name, $ctx);
+}
+
+
+sub emit_filter_assignment {
+    my (%args) = @_;
+    my $name = $args{name};
+    my $expr = $args{expr};
+    my $ctx = $args{ctx};
+    my $out = $args{out};
+    my $indent = $args{indent};
+    my $propagate_errors = $args{propagate_errors} ? 1 : 0;
+
+    my ($recv_code, $recv_type) = compile_expr($expr->{recv}, $ctx);
+    compile_error("filter(...) receiver must be string_list or number_list, got $recv_type")
+      if $recv_type ne 'string_list' && $recv_type ne 'number_list';
+    my $actual = scalar @{ $expr->{args} };
+    compile_error("filter(...) expects exactly 1 predicate arg")
+      if $actual != 1;
+    my $predicate = $expr->{args}[0];
+    compile_error("filter(...) predicate must be a single-parameter lambda, e.g. x => x > 0")
+      if $predicate->{kind} ne 'lambda1';
+
+    my $source = '__metac_filter_src' . $ctx->{tmp_counter}++;
+    my $count = '__metac_filter_count' . $ctx->{tmp_counter}++;
+    my $idx = '__metac_filter_i' . $ctx->{tmp_counter}++;
+    my $out_count = '__metac_filter_out_count' . $ctx->{tmp_counter}++;
+
+    my $elem_type = $recv_type eq 'string_list' ? 'string' : 'number';
+    my $elem_expr = $source . ".items[$idx]";
+    my ($pred_code, $pred_type);
+    new_scope($ctx);
+    declare_var(
+        $ctx,
+        $predicate->{param},
+        {
+            type      => $elem_type,
+            immutable => 1,
+            c_name    => $elem_expr,
+        }
+    );
+    ($pred_code, $pred_type) = compile_expr($predicate->{body}, $ctx);
+    pop_scope($ctx);
+    compile_error("filter(...) predicate must evaluate to bool")
+      if $pred_type ne 'bool';
+
+    if ($recv_type eq 'string_list') {
+        my $out_items = '__metac_filter_items' . $ctx->{tmp_counter}++;
+        emit_line($out, $indent, "StringList $source = $recv_code;");
+        emit_line($out, $indent, "size_t $count = $source.count;");
+        emit_line($out, $indent, "char **$out_items = (char **)calloc($count == 0 ? 1 : $count, sizeof(char *));");
+        emit_line($out, $indent, "if ($out_items == NULL) {");
+        if ($propagate_errors) {
+            emit_line($out, $indent + 2, "return err_number(\"out of memory in filter\", __metac_line_no, \"\");");
+        } else {
+            emit_line($out, $indent + 2, "fprintf(stderr, \"out of memory in filter\\n\");");
+            emit_line($out, $indent + 2, "exit(1);");
+        }
+        emit_line($out, $indent, "}");
+        emit_line($out, $indent, "size_t $out_count = 0;");
+        emit_line($out, $indent, "for (size_t $idx = 0; $idx < $count; $idx++) {");
+        emit_line($out, $indent + 2, "if ($pred_code) {");
+        emit_line($out, $indent + 4, "${out_items}[$out_count++] = $source.items[$idx];");
+        emit_line($out, $indent + 2, "}");
+        emit_line($out, $indent, "}");
+        emit_line($out, $indent, "StringList $name;");
+        emit_line($out, $indent, "$name.count = $out_count;");
+        emit_line($out, $indent, "$name.items = $out_items;");
+    } else {
+        my $out_items = '__metac_filter_items' . $ctx->{tmp_counter}++;
+        emit_line($out, $indent, "NumberList $source = $recv_code;");
+        emit_line($out, $indent, "size_t $count = $source.count;");
+        emit_line($out, $indent, "int64_t *$out_items = (int64_t *)calloc($count == 0 ? 1 : $count, sizeof(int64_t));");
+        emit_line($out, $indent, "if ($out_items == NULL) {");
+        if ($propagate_errors) {
+            emit_line($out, $indent + 2, "return err_number(\"out of memory in filter\", __metac_line_no, \"\");");
+        } else {
+            emit_line($out, $indent + 2, "fprintf(stderr, \"out of memory in filter\\n\");");
+            emit_line($out, $indent + 2, "exit(1);");
+        }
+        emit_line($out, $indent, "}");
+        emit_line($out, $indent, "size_t $out_count = 0;");
+        emit_line($out, $indent, "for (size_t $idx = 0; $idx < $count; $idx++) {");
+        emit_line($out, $indent + 2, "if ($pred_code) {");
+        emit_line($out, $indent + 4, "${out_items}[$out_count++] = $source.items[$idx];");
+        emit_line($out, $indent + 2, "}");
+        emit_line($out, $indent, "}");
+        emit_line($out, $indent, "NumberList $name;");
+        emit_line($out, $indent, "$name.count = $out_count;");
+        emit_line($out, $indent, "$name.items = $out_items;");
+    }
+
+    declare_var(
+        $ctx,
+        $name,
+        {
+            type      => $recv_type,
+            immutable => 1,
+            c_name    => $name,
+        }
+    );
+}
+
+
+sub emit_loop_body_with_binding {
+    my (%args) = @_;
+    my $ctx = $args{ctx};
+    my $out = $args{out};
+    my $indent = $args{indent};
+    my $current_fn_return = $args{current_fn_return};
+    my $body = $args{body};
+    my $var_name = $args{var_name};
+    my $var_type = $args{var_type};
+    my $var_c_expr = $args{var_c_expr};
+    my $range_min_expr = $args{range_min_expr};
+    my $range_max_expr = $args{range_max_expr};
+
+    new_scope($ctx);
+    my %var_info = (
+        type      => $var_type,
+        immutable => 1,
+        c_name    => $var_name,
+    );
+    if ($var_type eq 'number' && defined $range_min_expr && defined $range_max_expr) {
+        $var_info{range_min_expr} = $range_min_expr;
+        $var_info{range_max_expr} = $range_max_expr;
+    }
+    if ($var_type eq 'string') {
+        emit_line($out, $indent, "const char *$var_name = $var_c_expr;");
+    } elsif ($var_type eq 'number') {
+        emit_line($out, $indent, "const int64_t $var_name = $var_c_expr;");
+    } else {
+        compile_error("Unsupported loop element type '$var_type'");
+    }
+    declare_var($ctx, $var_name, \%var_info);
+
+    my $prev_loop_depth = $ctx->{loop_depth} // 0;
+    $ctx->{loop_depth} = $prev_loop_depth + 1;
+    compile_block($body, $ctx, $out, $indent, $current_fn_return);
+    $ctx->{loop_depth} = $prev_loop_depth;
+    pop_scope($ctx);
+}
+
+
+sub compile_filter_predicate_codes {
+    my (%args) = @_;
+    my $predicates = $args{predicates};
+    my $param_type = $args{param_type};
+    my $param_c_expr = $args{param_c_expr};
+    my $ctx = $args{ctx};
+    my $label = $args{label};
+
+    my @codes;
+    for my $predicate (@$predicates) {
+        compile_error("$label expects a single-parameter lambda predicate")
+          if $predicate->{kind} ne 'lambda1';
+
+        my ($pred_code, $pred_type);
+        new_scope($ctx);
+        declare_var(
+            $ctx,
+            $predicate->{param},
+            {
+                type      => $param_type,
+                immutable => 1,
+                c_name    => $param_c_expr,
+            }
+        );
+        ($pred_code, $pred_type) = compile_expr($predicate->{body}, $ctx);
+        pop_scope($ctx);
+        compile_error("$label predicate must evaluate to bool")
+          if $pred_type ne 'bool';
+
+        push @codes, $pred_code;
+    }
+    return \@codes;
+}
+
+
+sub expr_ast_equal {
+    my ($a, $b) = @_;
+    return 0 if !defined $a || !defined $b;
+    return 0 if $a->{kind} ne $b->{kind};
+
+    if ($a->{kind} eq 'num') {
+        return $a->{value} eq $b->{value};
+    }
+    if ($a->{kind} eq 'ident') {
+        return $a->{name} eq $b->{name};
+    }
+    if ($a->{kind} eq 'bool') {
+        return $a->{value} == $b->{value};
+    }
+    if ($a->{kind} eq 'str') {
+        my $ar = defined($a->{raw}) ? $a->{raw} : $a->{value};
+        my $br = defined($b->{raw}) ? $b->{raw} : $b->{value};
+        return $ar eq $br;
+    }
+    if ($a->{kind} eq 'unary') {
+        return 0 if $a->{op} ne $b->{op};
+        return expr_ast_equal($a->{expr}, $b->{expr});
+    }
+    if ($a->{kind} eq 'binop') {
+        return 0 if $a->{op} ne $b->{op};
+        return 0 if !expr_ast_equal($a->{left}, $b->{left});
+        return expr_ast_equal($a->{right}, $b->{right});
+    }
+    if ($a->{kind} eq 'method_call') {
+        return 0 if $a->{method} ne $b->{method};
+        return 0 if !expr_ast_equal($a->{recv}, $b->{recv});
+        my $an = scalar @{ $a->{args} };
+        my $bn = scalar @{ $b->{args} };
+        return 0 if $an != $bn;
+        for (my $i = 0; $i < $an; $i++) {
+            return 0 if !expr_ast_equal($a->{args}[$i], $b->{args}[$i]);
+        }
+        return 1;
+    }
+    if ($a->{kind} eq 'call') {
+        return 0 if $a->{name} ne $b->{name};
+        my $an = scalar @{ $a->{args} };
+        my $bn = scalar @{ $b->{args} };
+        return 0 if $an != $bn;
+        for (my $i = 0; $i < $an; $i++) {
+            return 0 if !expr_ast_equal($a->{args}[$i], $b->{args}[$i]);
+        }
+        return 1;
+    }
+
+    return 0;
+}
+
+
+sub expr_is_size_of_container {
+    my ($expr, $recv_code, $recv_type, $ctx) = @_;
+    if ($expr->{kind} eq 'method_call' && $expr->{method} eq 'size' && scalar(@{ $expr->{args} }) == 0) {
+        my ($inner_code, $inner_type) = compile_expr($expr->{recv}, $ctx);
+        return 0 if $inner_type ne $recv_type;
+        return $inner_code eq $recv_code;
+    }
+    if ($expr->{kind} eq 'ident') {
+        my $info = lookup_var($ctx, $expr->{name});
+        return 0 if !defined $info;
+        return 0 if !defined $info->{size_of_recv_code};
+        return 0 if !defined $info->{size_of_recv_type};
+        return 0 if $info->{size_of_recv_type} ne $recv_type;
+        return $info->{size_of_recv_code} eq $recv_code;
+    }
+    return 0;
+}
+
+
+sub expr_is_size_minus_const {
+    my ($expr, $recv_code, $recv_type, $ctx, $min_const) = @_;
+    return 0 if $expr->{kind} ne 'binop' || $expr->{op} ne '-';
+    return 0 if $expr->{right}{kind} ne 'num';
+    return 0 if int($expr->{right}{value}) < $min_const;
+    return expr_is_size_of_container($expr->{left}, $recv_code, $recv_type, $ctx);
+}
+
+
+sub prove_non_negative_expr {
+    my ($expr, $ctx) = @_;
+    if ($expr->{kind} eq 'num') {
+        return int($expr->{value}) >= 0;
+    }
+    if ($expr->{kind} eq 'ident') {
+        my $info = lookup_var($ctx, $expr->{name});
+        return 0 if !defined $info;
+        return 1 if defined $info->{size_of_recv_code};
+        return 0 if !defined $info->{range_min_expr};
+        return prove_non_negative_expr($info->{range_min_expr}, $ctx);
+    }
+    if ($expr->{kind} eq 'method_call' && $expr->{method} eq 'size' && scalar(@{ $expr->{args} }) == 0) {
+        my (undef, $recv_type) = compile_expr($expr->{recv}, $ctx);
+        return 1 if $recv_type eq 'string' || $recv_type eq 'string_list' || $recv_type eq 'number_list';
+        return 0;
+    }
+    if ($expr->{kind} eq 'binop' && $expr->{op} eq '+') {
+        return prove_non_negative_expr($expr->{left}, $ctx) && prove_non_negative_expr($expr->{right}, $ctx);
+    }
+    if ($expr->{kind} eq 'binop' && $expr->{op} eq '-') {
+        if ($expr->{left}{kind} eq 'ident') {
+            my $info = lookup_var($ctx, $expr->{left}{name});
+            if (defined $info && defined $info->{range_min_expr}) {
+                return 1 if expr_ast_equal($expr->{right}, $info->{range_min_expr});
+            }
+        }
+        return 0;
+    }
+    return 0;
+}
+
+
+sub prove_index_lt_container_size {
+    my ($idx_expr, $recv_code, $recv_type, $ctx) = @_;
+    if ($idx_expr->{kind} eq 'ident') {
+        my $info = lookup_var($ctx, $idx_expr->{name});
+        return 0 if !defined $info;
+        return 0 if !defined $info->{range_max_expr};
+        return expr_is_size_minus_const($info->{range_max_expr}, $recv_code, $recv_type, $ctx, 1);
+    }
+    if ($idx_expr->{kind} eq 'binop' && $idx_expr->{op} eq '-') {
+        return 0 if !prove_index_lt_container_size($idx_expr->{left}, $recv_code, $recv_type, $ctx);
+        return prove_non_negative_expr($idx_expr->{right}, $ctx);
+    }
+    return 0;
+}
+
+
+sub prove_container_index_in_bounds {
+    my ($recv_code, $recv_type, $idx_expr, $ctx) = @_;
+    return 0 if !prove_non_negative_expr($idx_expr, $ctx);
+    return prove_index_lt_container_size($idx_expr, $recv_code, $recv_type, $ctx);
+}
+
+
+sub decompose_iterable_expression {
+    my ($iter_expr, $ctx) = @_;
+
+    my @predicates;
+    my $base = $iter_expr;
+    while ($base->{kind} eq 'method_call' && $base->{method} eq 'filter') {
+        my $actual = scalar @{ $base->{args} };
+        compile_error("filter(...) expects exactly 1 predicate arg")
+          if $actual != 1;
+        my $predicate = $base->{args}[0];
+        compile_error("filter(...) expects a single-parameter lambda predicate")
+          if $predicate->{kind} ne 'lambda1';
+        unshift @predicates, $predicate;
+        $base = $base->{recv};
+    }
+
+    if ($base->{kind} eq 'call' && $base->{name} eq 'seq') {
+        my $actual = scalar @{ $base->{args} };
+        compile_error("seq(...) expects exactly 2 args")
+          if $actual != 2;
+        return {
+            kind       => 'seq',
+            start_expr => $base->{args}[0],
+            end_expr   => $base->{args}[1],
+            predicates => \@predicates,
+        };
+    }
+
+    my ($base_code, $base_type) = compile_expr($base, $ctx);
+    compile_error("Iterable expression must be seq(...) or list-valued, got $base_type")
+      if $base_type ne 'string_list' && $base_type ne 'number_list';
+
+    return {
+        kind       => 'list',
+        base_code  => $base_code,
+        base_type  => $base_type,
+        predicates => \@predicates,
+    };
+}
+
+
+sub emit_for_each_from_iterable_expr {
+    my (%args) = @_;
+    my $iter_expr = $args{iter_expr};
+    my $stmt = $args{stmt};
+    my $ctx = $args{ctx};
+    my $out = $args{out};
+    my $indent = $args{indent};
+    my $current_fn_return = $args{current_fn_return};
+
+    my $iter = decompose_iterable_expression($iter_expr, $ctx);
+
+    if ($iter->{kind} eq 'seq') {
+        my ($start_code, $start_type) = compile_expr($iter->{start_expr}, $ctx);
+        my ($end_code, $end_type) = compile_expr($iter->{end_expr}, $ctx);
+        compile_error("seq start must be number, got $start_type")
+          if $start_type ne 'number';
+        compile_error("seq end must be number, got $end_type")
+          if $end_type ne 'number';
+
+        my $start_var = '__metac_seq_start' . $ctx->{tmp_counter}++;
+        my $end_var = '__metac_seq_end' . $ctx->{tmp_counter}++;
+        my $idx_var = '__metac_seq_i' . $ctx->{tmp_counter}++;
+        my $pred_codes = compile_filter_predicate_codes(
+            predicates  => $iter->{predicates},
+            param_type  => 'number',
+            param_c_expr => $idx_var,
+            ctx         => $ctx,
+            label       => 'seq(...).filter(...)',
+        );
+
+        emit_line($out, $indent, "int64_t $start_var = $start_code;");
+        emit_line($out, $indent, "int64_t $end_var = $end_code;");
+        emit_line($out, $indent, "if ($start_var <= $end_var) {");
+        emit_line($out, $indent + 2, "for (int64_t $idx_var = $start_var; $idx_var <= $end_var; $idx_var++) {");
+        for my $pred_code (@$pred_codes) {
+            emit_line($out, $indent + 4, "if (!($pred_code)) { continue; }");
+        }
+        emit_loop_body_with_binding(
+            ctx               => $ctx,
+            out               => $out,
+            indent            => $indent + 4,
+            current_fn_return => $current_fn_return,
+            body              => $stmt->{body},
+            var_name          => $stmt->{var},
+            var_type          => 'number',
+            var_c_expr        => $idx_var,
+            range_min_expr    => $iter->{start_expr},
+            range_max_expr    => $iter->{end_expr},
+        );
+        emit_line($out, $indent + 2, "}");
+        emit_line($out, $indent, "} else {");
+        emit_line($out, $indent + 2, "for (int64_t $idx_var = $start_var; $idx_var >= $end_var; $idx_var--) {");
+        for my $pred_code (@$pred_codes) {
+            emit_line($out, $indent + 4, "if (!($pred_code)) { continue; }");
+        }
+        emit_loop_body_with_binding(
+            ctx               => $ctx,
+            out               => $out,
+            indent            => $indent + 4,
+            current_fn_return => $current_fn_return,
+            body              => $stmt->{body},
+            var_name          => $stmt->{var},
+            var_type          => 'number',
+            var_c_expr        => $idx_var,
+            range_min_expr    => $iter->{start_expr},
+            range_max_expr    => $iter->{end_expr},
+        );
+        emit_line($out, $indent + 2, "}");
+        emit_line($out, $indent, "}");
+        return;
+    }
+
+    my $container = '__metac_iter_list' . $ctx->{tmp_counter}++;
+    if ($iter->{base_type} eq 'string_list') {
+        emit_line($out, $indent, "StringList $container = $iter->{base_code};");
+    } else {
+        emit_line($out, $indent, "NumberList $container = $iter->{base_code};");
+    }
+
+    my $idx_name = '__metac_i' . $ctx->{tmp_counter}++;
+    my $elem_type = $iter->{base_type} eq 'string_list' ? 'string' : 'number';
+    my $elem_expr = "$container.items[$idx_name]";
+    my $pred_codes = compile_filter_predicate_codes(
+        predicates  => $iter->{predicates},
+        param_type  => $elem_type,
+        param_c_expr => $elem_expr,
+        ctx         => $ctx,
+        label       => 'filter(...)',
+    );
+
+    emit_line($out, $indent, "for (size_t $idx_name = 0; $idx_name < $container.count; $idx_name++) {");
+    for my $pred_code (@$pred_codes) {
+        emit_line($out, $indent + 2, "if (!($pred_code)) { continue; }");
+    }
+    emit_loop_body_with_binding(
+        ctx               => $ctx,
+        out               => $out,
+        indent            => $indent + 2,
+        current_fn_return => $current_fn_return,
+        body              => $stmt->{body},
+        var_name          => $stmt->{var},
+        var_type          => $elem_type,
+        var_c_expr        => $elem_expr,
+    );
+    emit_line($out, $indent, "}");
+}
+
+
 sub compile_expr {
     my ($expr, $ctx) = @_;
 
@@ -387,10 +1046,32 @@ sub compile_expr {
         }
         compile_error("Unsupported unary operator: $expr->{op}");
     }
+    if ($expr->{kind} eq 'index') {
+        my ($recv_code, $recv_type) = compile_expr($expr->{recv}, $ctx);
+        my ($idx_code, $idx_type) = compile_expr($expr->{index}, $ctx);
+        compile_error("Index operator requires numeric index")
+          if $idx_type ne 'number';
+        compile_error("Unsupported index receiver type: $recv_type")
+          if $recv_type ne 'string' && $recv_type ne 'string_list' && $recv_type ne 'number_list';
+
+        compile_error("Index on '$recv_type' requires compile-time in-bounds proof")
+          if !prove_container_index_in_bounds($recv_code, $recv_type, $expr->{index}, $ctx);
+
+        if ($recv_type eq 'string') {
+            return ("metac_char_at($recv_code, $idx_code)", 'number');
+        }
+        if ($recv_type eq 'string_list') {
+            return ("$recv_code.items[$idx_code]", 'string');
+        }
+        return ("$recv_code.items[$idx_code]", 'number');
+    }
     if ($expr->{kind} eq 'method_call') {
         my ($recv_code, $recv_type) = compile_expr($expr->{recv}, $ctx);
         my $method = $expr->{method};
         my $actual = scalar @{ $expr->{args} };
+
+        my $fallibility_error = method_fallibility_diagnostic($expr, $recv_type, $ctx);
+        compile_error($fallibility_error) if defined $fallibility_error;
 
         if ($recv_type eq 'string' && $method eq 'size') {
             compile_error("Method 'size()' expects 0 args, got $actual")
@@ -469,7 +1150,7 @@ sub compile_expr {
         my ($l_code, $l_type) = compile_expr($expr->{left}, $ctx);
         my ($r_code, $r_type) = compile_expr($expr->{right}, $ctx);
 
-        if ($expr->{op} eq '+' || $expr->{op} eq '-' || $expr->{op} eq '*' || $expr->{op} eq '/') {
+        if ($expr->{op} eq '+' || $expr->{op} eq '-' || $expr->{op} eq '*' || $expr->{op} eq '/' || $expr->{op} eq '%') {
             compile_error("Operator '$expr->{op}' requires number operands")
               if $l_type ne 'number' || $r_type ne 'number';
             return ("($l_code $expr->{op} $r_code)", 'number');
@@ -556,6 +1237,29 @@ sub compile_block {
         }
 
         if ($stmt->{kind} eq 'const') {
+            if ($stmt->{expr}{kind} eq 'method_call' && $stmt->{expr}{method} eq 'map') {
+                emit_map_assignment(
+                    name             => $stmt->{name},
+                    expr             => $stmt->{expr},
+                    ctx              => $ctx,
+                    out              => $out,
+                    indent           => $indent,
+                    propagate_errors => 0,
+                );
+                next;
+            }
+            if ($stmt->{expr}{kind} eq 'method_call' && $stmt->{expr}{method} eq 'filter') {
+                emit_filter_assignment(
+                    name             => $stmt->{name},
+                    expr             => $stmt->{expr},
+                    ctx              => $ctx,
+                    out              => $out,
+                    indent           => $indent,
+                    propagate_errors => 0,
+                );
+                next;
+            }
+
             my ($expr_code, $expr_type) = compile_expr($stmt->{expr}, $ctx);
 
             if ($expr_type eq 'number') {
@@ -573,13 +1277,26 @@ sub compile_block {
                 compile_error("Unsupported const expression type for '$stmt->{name}': $expr_type");
             }
 
+            my %const_info = (
+                type      => $expr_type,
+                immutable => 1,
+            );
+            if ($expr_type eq 'number'
+                && $stmt->{expr}{kind} eq 'method_call'
+                && $stmt->{expr}{method} eq 'size'
+                && scalar(@{ $stmt->{expr}{args} }) == 0)
+            {
+                my ($size_recv_code, $size_recv_type) = compile_expr($stmt->{expr}{recv}, $ctx);
+                if ($size_recv_type eq 'string' || $size_recv_type eq 'string_list' || $size_recv_type eq 'number_list') {
+                    $const_info{size_of_recv_code} = $size_recv_code;
+                    $const_info{size_of_recv_type} = $size_recv_type;
+                }
+            }
+
             declare_var(
                 $ctx,
                 $stmt->{name},
-                {
-                    type      => $expr_type,
-                    immutable => 1,
-                }
+                \%const_info
             );
             next;
         }
@@ -675,86 +1392,26 @@ sub compile_block {
             }
 
             if ($expr->{kind} eq 'method_call' && $expr->{method} eq 'map') {
-                my ($recv_code, $recv_type) = compile_expr($expr->{recv}, $ctx);
-                compile_error("map(...) receiver must be string_list, got $recv_type")
-                  if $recv_type ne 'string_list';
-                my $actual = scalar @{ $expr->{args} };
-                compile_error("map(...) expects exactly 1 function arg, got $actual")
-                  if $actual != 1;
-
-                my $mapper = $expr->{args}[0];
-                compile_error("map(...) expects function identifier argument")
-                  if $mapper->{kind} ne 'ident';
-                my $mapper_name = $mapper->{name};
-
-                my $source = '__metac_map_src' . $ctx->{tmp_counter}++;
-                my $count = '__metac_map_count' . $ctx->{tmp_counter}++;
-                my $idx = '__metac_map_i' . $ctx->{tmp_counter}++;
-                my $out_items = '__metac_map_items' . $ctx->{tmp_counter}++;
-                my $tmp_num = '__metac_map_num' . $ctx->{tmp_counter}++;
-                my $tmp_res = '__metac_map_res' . $ctx->{tmp_counter}++;
-
-                emit_line($out, $indent, "StringList $source = $recv_code;");
-                emit_line($out, $indent, "size_t $count = $source.count;");
-                emit_line($out, $indent, "int64_t *$out_items = (int64_t *)calloc($count == 0 ? 1 : $count, sizeof(int64_t));");
-                emit_line($out, $indent, "if ($out_items == NULL) {");
-                emit_line($out, $indent + 2, "return err_number(\"out of memory in map\", __metac_line_no, \"\");");
-                emit_line($out, $indent, "}");
-
-                my $functions = $ctx->{functions} // {};
-                my $sig = $functions->{$mapper_name};
-
-                emit_line($out, $indent, "for (size_t $idx = 0; $idx < $count; $idx++) {");
-                if ($mapper_name eq 'parseNumber') {
-                    emit_line($out, $indent + 2, "int64_t $tmp_num = 0;");
-                    emit_line($out, $indent + 2, "if (!metac_parse_int($source.items[$idx], &$tmp_num)) {");
-                    emit_line($out, $indent + 4, "return err_number(\"Invalid number\", __metac_line_no, $source.items[$idx]);");
-                    emit_line($out, $indent + 2, "}");
-                    emit_line($out, $indent + 2, "${out_items}[$idx] = $tmp_num;");
-                } else {
-                    compile_error("Unknown mapper function '$mapper_name' in map(...)")
-                      if !defined $sig;
-                    my $expected = scalar @{ $sig->{params} };
-                    compile_error("map(...) mapper '$mapper_name' must accept exactly 1 arg")
-                      if $expected != 1;
-                    compile_error("map(...) mapper '$mapper_name' arg type must be string")
-                      if $sig->{params}[0]{type} ne 'string';
-
-                    if ($sig->{return_type} eq 'number') {
-                        emit_line($out, $indent + 2, "${out_items}[$idx] = $mapper_name($source.items[$idx]);");
-                    } elsif ($sig->{return_type} eq 'number | error') {
-                        emit_line($out, $indent + 2, "ResultNumber $tmp_res = $mapper_name($source.items[$idx]);");
-                        emit_line($out, $indent + 2, "if ($tmp_res.is_error) {");
-                        emit_line($out, $indent + 4, "return err_number($tmp_res.message, __metac_line_no, $source.items[$idx]);");
-                        emit_line($out, $indent + 2, "}");
-                        emit_line($out, $indent + 2, "${out_items}[$idx] = $tmp_res.value;");
-                    } else {
-                        compile_error("map(...) mapper '$mapper_name' must return number or number | error");
-                    }
-                }
-                emit_line($out, $indent, "}");
-
-                emit_line($out, $indent, "NumberList $stmt->{name};");
-                emit_line($out, $indent, "$stmt->{name}.count = $count;");
-                emit_line($out, $indent, "$stmt->{name}.items = $out_items;");
-
-                declare_var(
-                    $ctx,
-                    $stmt->{name},
-                    {
-                        type      => 'number_list',
-                        immutable => 1,
-                        c_name    => $stmt->{name},
-                    }
+                emit_map_assignment(
+                    name             => $stmt->{name},
+                    expr             => $expr,
+                    ctx              => $ctx,
+                    out              => $out,
+                    indent           => $indent,
+                    propagate_errors => 1,
                 );
-                if (expr_is_stable_for_facts($expr->{recv}, $ctx)) {
-                    my $recv_key = expr_fact_key($expr->{recv}, $ctx);
-                    my $known_len = lookup_list_len_fact($ctx, $recv_key);
-                    if (defined $known_len) {
-                        my $new_key = expr_fact_key({ kind => 'ident', name => $stmt->{name} }, $ctx);
-                        set_list_len_fact($ctx, $new_key, $known_len);
-                    }
-                }
+                next;
+            }
+
+            if ($expr->{kind} eq 'method_call' && $expr->{method} eq 'filter') {
+                emit_filter_assignment(
+                    name             => $stmt->{name},
+                    expr             => $expr,
+                    ctx              => $ctx,
+                    out              => $out,
+                    indent           => $indent,
+                    propagate_errors => 1,
+                );
                 next;
             }
 
@@ -1086,7 +1743,10 @@ sub compile_block {
 
             new_scope($ctx);
             declare_var($ctx, $stmt->{var}, { type => 'string', immutable => 1 });
+            my $prev_loop_depth = $ctx->{loop_depth} // 0;
+            $ctx->{loop_depth} = $prev_loop_depth + 1;
             compile_block($stmt->{body}, $ctx, $out, $indent + 4, $current_fn_return);
+            $ctx->{loop_depth} = $prev_loop_depth;
             pop_scope($ctx);
 
             emit_line($out, $indent + 2, '}');
@@ -1097,63 +1757,15 @@ sub compile_block {
         }
 
         if ($stmt->{kind} eq 'for_each') {
-            my $iter = $stmt->{iterable};
-
-            if ($iter->{kind} eq 'var') {
-                my $container = lookup_var($ctx, $iter->{name});
-                compile_error("Unknown iterable variable '$iter->{name}'") if !defined $container;
-                compile_error("Unsupported iterable variable type '$container->{type}' for '$iter->{name}'")
-                  if $container->{type} ne 'string_list';
-
-                my $idx_name = '__metac_i' . $ctx->{tmp_counter}++;
-                my $container_c = $container->{c_name};
-
-                emit_line($out, $indent, "for (size_t $idx_name = 0; $idx_name < $container_c.count; $idx_name++) {");
-                new_scope($ctx);
-                emit_line($out, $indent + 2, "const char *$stmt->{var} = $container_c.items[$idx_name];");
-                declare_var($ctx, $stmt->{var}, { type => 'string', immutable => 1, c_name => $stmt->{var} });
-                compile_block($stmt->{body}, $ctx, $out, $indent + 2, $current_fn_return);
-                pop_scope($ctx);
-                emit_line($out, $indent, "}");
-                next;
-            }
-
-            if ($iter->{kind} eq 'seq') {
-                my ($start_code, $start_type) = compile_expr($iter->{start}, $ctx);
-                my ($end_code, $end_type) = compile_expr($iter->{end}, $ctx);
-                my $start_var = '__metac_seq_start' . $ctx->{tmp_counter}++;
-                my $end_var = '__metac_seq_end' . $ctx->{tmp_counter}++;
-                my $idx_var = '__metac_seq_i' . $ctx->{tmp_counter}++;
-
-                compile_error("seq start must be number, got $start_type")
-                  if $start_type ne 'number';
-                compile_error("seq end must be number, got $end_type")
-                  if $end_type ne 'number';
-
-                emit_line($out, $indent, "int64_t $start_var = $start_code;");
-                emit_line($out, $indent, "int64_t $end_var = $end_code;");
-
-                emit_line($out, $indent, "if ($start_var <= $end_var) {");
-                emit_line($out, $indent + 2, "for (int64_t $idx_var = $start_var; $idx_var <= $end_var; $idx_var++) {");
-                new_scope($ctx);
-                emit_line($out, $indent + 4, "const int64_t $stmt->{var} = $idx_var;");
-                declare_var($ctx, $stmt->{var}, { type => 'number', immutable => 1, c_name => $stmt->{var} });
-                compile_block($stmt->{body}, $ctx, $out, $indent + 4, $current_fn_return);
-                pop_scope($ctx);
-                emit_line($out, $indent + 2, "}");
-                emit_line($out, $indent, "} else {");
-                emit_line($out, $indent + 2, "for (int64_t $idx_var = $start_var; $idx_var >= $end_var; $idx_var--) {");
-                new_scope($ctx);
-                emit_line($out, $indent + 4, "const int64_t $stmt->{var} = $idx_var;");
-                declare_var($ctx, $stmt->{var}, { type => 'number', immutable => 1, c_name => $stmt->{var} });
-                compile_block($stmt->{body}, $ctx, $out, $indent + 4, $current_fn_return);
-                pop_scope($ctx);
-                emit_line($out, $indent + 2, "}");
-                emit_line($out, $indent, "}");
-                next;
-            }
-
-            compile_error("Unsupported iterable kind in for-loop: $iter->{kind}");
+            emit_for_each_from_iterable_expr(
+                iter_expr          => $stmt->{iterable},
+                stmt               => $stmt,
+                ctx                => $ctx,
+                out                => $out,
+                indent             => $indent,
+                current_fn_return  => $current_fn_return,
+            );
+            next;
         }
 
         if ($stmt->{kind} eq 'while') {
@@ -1164,9 +1776,19 @@ sub compile_block {
 
             emit_line($out, $indent, "while ($cond_code) {");
             new_scope($ctx);
+            my $prev_loop_depth = $ctx->{loop_depth} // 0;
+            $ctx->{loop_depth} = $prev_loop_depth + 1;
             compile_block($stmt->{body}, $ctx, $out, $indent + 2, $current_fn_return);
+            $ctx->{loop_depth} = $prev_loop_depth;
             pop_scope($ctx);
             emit_line($out, $indent, '}');
+            next;
+        }
+
+        if ($stmt->{kind} eq 'break') {
+            compile_error("break is only valid inside a loop")
+              if ($ctx->{loop_depth} // 0) <= 0;
+            emit_line($out, $indent, 'break;');
             next;
         }
 
@@ -1407,6 +2029,7 @@ sub compile_number_or_error_function {
         fact_scopes => [ {} ],
         tmp_counter => 0,
         functions   => $function_sigs,
+        loop_depth  => 0,
     };
 
     emit_param_bindings($params, $ctx, \@out, 2, 'number_or_error');
@@ -1435,6 +2058,7 @@ sub compile_number_function {
         fact_scopes => [ {} ],
         tmp_counter => 0,
         functions   => $function_sigs,
+        loop_depth  => 0,
     };
 
     emit_param_bindings($params, $ctx, \@out, 2, 'number');
@@ -1462,6 +2086,7 @@ sub compile_bool_function {
         fact_scopes => [ {} ],
         tmp_counter => 0,
         functions   => $function_sigs,
+        loop_depth  => 0,
     };
 
     emit_param_bindings($params, $ctx, \@out, 2, 'bool');
@@ -1604,6 +2229,17 @@ static int64_t metac_strlen(const char *s) {
     return INT64_MAX;
   }
   return (int64_t)n;
+}
+
+static int64_t metac_char_at(const char *s, int64_t idx) {
+  if (s == NULL || idx < 0) {
+    return -1;
+  }
+  size_t n = strlen(s);
+  if ((uint64_t)idx >= n) {
+    return -1;
+  }
+  return (int64_t)(unsigned char)s[idx];
 }
 
 static StringList metac_chunk_string(const char *input, int64_t chunk_size) {

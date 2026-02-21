@@ -1,0 +1,22 @@
+function main() {
+  printf("Result: %d\n", solve() or (e) => {
+    printf("Error! %s\n", e.message)
+    return 1
+  })
+}
+
+function toLen(s: string): number {
+  return s.size()
+}
+
+function solve(): number | error {
+  const parts = split("aa,b,ccc", ",")?
+  const lens = parts.map(toLen)
+
+  let total = 0
+  for const n in lens {
+    total += n
+  }
+
+  return total
+}

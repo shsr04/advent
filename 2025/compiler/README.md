@@ -81,18 +81,21 @@ Test cases live in `compiler/tests/cases/`:
 - `const <id> = <expr>` with inferred immutable type (`number`, `bool`, `string`, `string_list`, `number_list`)
 - `const <id> = split(<string>, <delimiter>)?` with error propagation
 - `while <bool_expr> { ... }`
+- `break` (inside `for`/`while` loops)
 - compound assignment: `<id> += <number_expr>`
 - increment/decrement: `<id>++`, `<id>--`
 - `for const <id> in lines(STDIN)? { ... }`
 - `for const <id> in <iterable> { ... }`
-  - iterable variable from `split(...)`
-  - numeric sequence: `seq(start, end)` with `number` bounds only
+  - iterable is a general expression
+  - supports `seq(start, end)` with `number` bounds
+  - supports list-valued expressions (`string_list` / `number_list`)
+  - supports chained `.filter(x => <bool-expr>)` over either form
 - `const [a, b, ...] = match(source, /<regex-with-captures>/)?`
 - `const [a, b, ...] = split(source, delim) or (e) => { ... }`
 - producer initialization: `let <id>: <type> from () => { ... }`
 - typed assignment form: `<id>: <type> [with <constraints>] = <expr>`
 - expression grammar includes:
-  - arithmetic: `+`, `-`, `*`, `/` (integer division)
+  - arithmetic: `+`, `-`, `*`, `/`, `%` (integer division/modulo)
   - unary minus: `-x`
   - equality/comparisons: `==`, `!=`, `<`, `>`, `<=`, `>=`
   - boolean literals: `true`, `false`
@@ -101,6 +104,11 @@ Test cases live in `compiler/tests/cases/`:
   - method calls: `<expr>.<method>(...)`
     - string methods: `.size()`, `.chunk(<number>)`
     - list methods: `<string_list>.size()`, `<number_list>.size()`
+  - indexing:
+    - `<string-expr>[<number-expr>]` (returns numeric character code)
+    - `<string-list-expr>[<number-expr>]` (returns `string`)
+    - `<number-list-expr>[<number-expr>]` (returns `number`)
+    - index access requires compile-time in-bounds proof
   - numeric builtins: `max(a,b)`, `min(a,b)`
 - interpolation templates in string literals:
   - `"Invalid range: ${range}"`
@@ -116,7 +124,8 @@ Test cases live in `compiler/tests/cases/`:
   - supported fallible expressions include:
     - `split(<string>, <string>)`
     - `parseNumber(<string>)`
-    - `<string_list>.map(parseNumber)`
+    - `<string_list>.map(<mapper>)` when mapper returns `number | error`
+    - `<list>.filter(x => <predicate>)`
     - `<list>.assert(x => x.size() == <numeric-literal-size>, <message>)`
 
 ## Genericity Rule

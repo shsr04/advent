@@ -1,0 +1,24 @@
+function main() {
+  printf("Result: %d\n", probe() or (e) => {
+    printf("Error! %s\n", e.message)
+    return 1
+  })
+}
+
+function probe(): number | error {
+  const nums = split("10,20,30", ",")?.map(parseNumber)?
+  const words = split("aa,bbb,c", ",")?
+
+  let sum = 0
+  const n = nums.size()
+  for const i in seq(0, n-1) {
+    sum += nums[i]
+  }
+
+  const m = words.size()
+  for const j in seq(0, m-1) {
+    sum += words[j].size()
+  }
+
+  return sum
+}

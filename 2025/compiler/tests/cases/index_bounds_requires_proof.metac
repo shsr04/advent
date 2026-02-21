@@ -1,0 +1,12 @@
+function main() {
+  printf("Result: %d\n", probe() or (e) => {
+    printf("Error! %s\n", e.message)
+    return 1
+  })
+}
+
+function probe(): number | error {
+  const nums = split("10,20", ",")?.map(parseNumber)?
+  let idx = 0
+  return nums[idx]
+}

@@ -1,0 +1,8 @@
+function main() {
+  printf("Result: %d\n", f())
+}
+
+function f(): number {
+  break
+  return 0
+}
