@@ -1,0 +1,26 @@
+function main() {
+  printf("Result: %d\n", countNumbers() or (e) => {
+    printf("Error! %s\n", e.message)
+    return 1
+  })
+}
+
+function countNumbers(): number | error {
+  let dial: number with range(0,99) + wrap = 50
+  let zeroHits: number = 0
+
+  for const line in lines(STDIN)? {
+    const [direction, amount] = match(line, /(L|R)([0-9]+)/)?
+    if direction == "L" {
+      dial = dial - amount
+    } else {
+      dial = dial + amount
+    }
+
+    if dial == 0 {
+      zeroHits = zeroHits + 1
+    }
+  }
+
+  return zeroHits
+}
