@@ -1,0 +1,28 @@
+function main() {
+  printf("Result: %d\n", solve() or (e) => {
+    printf("Error! %s\n", e.message)
+    return 1
+  })
+}
+
+function solve(): number | error {
+  const banks = split("a\nb", "\n")?
+  let score = 0
+
+  for const bank in banks {
+    const msg = "Bank ${ bank.index() }: ${1 + 2}"
+    if bank.index() == 0 {
+      if msg != "Bank 0: 3" {
+        return error("bad first message")
+      }
+    }
+    if bank.index() == 1 {
+      if msg != "Bank 1: 3" {
+        return error("bad second message")
+      }
+    }
+    score += bank.index()
+  }
+
+  return score
+}

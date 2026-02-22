@@ -1,0 +1,18 @@
+function main() {
+  printf("Result: %d\n", solve() or (e) => {
+    printf("Error! %s\n", e.message)
+    return 1
+  })
+}
+
+function solve(): number | error {
+  log("start")
+  const nums = "12".chars().map(parseNumber)?
+  nums.log()
+
+  const peak = nums.max().log()
+  const idx = peak.index().log()
+  const echoed = log(peak)
+
+  return echoed + idx
+}

@@ -1,0 +1,38 @@
+function main() {
+  printf("Result: %d\n", solve() or (e) => {
+    printf("Error! %s\n", e.message)
+    return 1
+  })
+}
+
+function solve(): number | error {
+  const text = "\x61\xC3\xA4\xF0\x9F\x99\x82\x62"
+
+  if text.size() != 4 {
+    return error("wrong utf8 size")
+  }
+
+  const parts = text.chunk(2)
+  if parts.size() != 2 {
+    return error("wrong chunk count")
+  }
+
+  const [p1, p2] = parts
+  if p1 != "\x61\xC3\xA4" {
+    return error("wrong first chunk")
+  }
+  if p2 != "\xF0\x9F\x99\x82\x62" {
+    return error("wrong second chunk")
+  }
+
+  let sum = 0
+  for const i in seq(0, text.size()-1) {
+    sum += text[i]
+  }
+
+  if sum != 129001 {
+    return error("wrong codepoint sum")
+  }
+
+  return text.size()
+}

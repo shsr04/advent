@@ -1,0 +1,20 @@
+function main() {
+  printf("Result: %d\n", solve() or (e) => {
+    printf("Error! %s\n", e.message)
+    return 1
+  })
+}
+
+function solve(): number | error {
+  const nums = "39193".chars().map(parseNumber)?
+  let order = 0
+
+  for const item in nums.sort() {
+    if item.index() == 3 {
+      continue
+    }
+    order = order * 10 + item.index()
+  }
+
+  return order
+}

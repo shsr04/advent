@@ -1,0 +1,29 @@
+function main() {
+  printf("Result: %d\n", solve() or (e) => {
+    printf("Error! %s\n", e.message)
+    return 1
+  })
+}
+
+function solve(): number | error {
+  const slots = "\x61\xC3\xA4\xF0\x9F\x99\x82\x62".chars()
+  if slots.size() != 4 {
+    return error("wrong size")
+  }
+
+  const [a, b, c, d] = slots
+  if a != "a" {
+    return error("wrong a")
+  }
+  if b != "\xC3\xA4" {
+    return error("wrong b")
+  }
+  if c != "\xF0\x9F\x99\x82" {
+    return error("wrong c")
+  }
+  if d != "b" {
+    return error("wrong d")
+  }
+
+  return slots.size()
+}

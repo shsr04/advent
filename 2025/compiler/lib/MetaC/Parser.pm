@@ -7,6 +7,17 @@ use MetaC::Support qw(compile_error strip_comments trim split_top_level_commas p
 
 our @EXPORT_OK = qw(parse_function_header collect_functions parse_function_params parse_capture_groups infer_group_type expr_tokens parse_expr parse_match_statement parse_call_invocation_text parse_iterable_expression parse_block parse_function_body);
 
+sub normalize_type_annotation {
+    my ($type) = @_;
+    $type = trim($type);
+    $type =~ s/\s+//g;
+    return 'bool' if $type eq 'boolean';
+    return 'number_list' if $type eq 'number[]';
+    return 'string_list' if $type eq 'string[]';
+    return 'number_or_null' if $type eq 'number|null' || $type eq 'null|number';
+    return $type;
+}
+
 sub parse_function_header {
     my ($line) = @_;
     return undef if $line !~ /^function\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(/;
@@ -128,11 +139,11 @@ sub parse_function_params {
     my %seen;
 
     for my $part (@$parts) {
-        $part =~ /^([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(number|string|bool|boolean)(?:\s+with\s+(.+))?$/
+        $part =~ /^([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(number|string|bool|boolean|number\s*\|\s*null|null\s*\|\s*number)(?:\s+with\s+(.+))?$/
           or compile_error("Invalid parameter declaration in function '$fn->{name}': $part");
 
         my ($name, $type, $constraint_raw) = ($1, $2, $3);
-        $type = 'bool' if $type eq 'boolean';
+        $type = normalize_type_annotation($type);
         compile_error("Duplicate parameter '$name' in function '$fn->{name}'")
           if $seen{$name};
         $seen{$name} = 1;
@@ -293,6 +304,10 @@ sub expr_tokens {
             push @tokens, { type => 'op', value => '!=' };
             next;
         }
+        if ($expr =~ /\G\|\|/gc) {
+            push @tokens, { type => 'op', value => '||' };
+            next;
+        }
         if ($expr =~ /\G[<>,\+\-\*\/%\.\(\)\[\]]/gc) {
             push @tokens, { type => 'op', value => $& };
             next;
@@ -350,6 +365,7 @@ sub parse_expr {
     my $parse_add;
     my $parse_cmp;
     my $parse_eq;
+    my $parse_or;
     my $parse_lambda;
 
     $parse_atom = sub {
@@ -374,6 +390,9 @@ sub parse_expr {
                     value => ($name eq 'true') ? 1 : 0,
                 };
             }
+            if ($name eq 'null') {
+                return { kind => 'null' };
+            }
 
             if ($accept_op->('(')) {
                 my @args;
@@ -395,6 +414,23 @@ sub parse_expr {
             my $inner = $parse_lambda->();
             $expect_op->(')', "to close parenthesized expression");
             return $inner;
+        }
+
+        if ($accept_op->('[')) {
+            my @items;
+            if (!$accept_op->(']')) {
+                while (1) {
+                    push @items, $parse_lambda->();
+                    if ($accept_op->(']')) {
+                        last;
+                    }
+                    $expect_op->(',', "after list-literal item");
+                }
+            }
+            return {
+                kind  => 'list_literal',
+                items => \@items,
+            };
         }
 
         compile_error("Unexpected token in expression: $tok->{value}");
@@ -510,8 +546,51 @@ sub parse_expr {
         return $left;
     };
 
+    $parse_or = sub {
+        my $left = $parse_eq->();
+        while (1) {
+            my $tok = $peek->();
+            last if !defined $tok || $tok->{type} ne 'op' || $tok->{value} ne '||';
+            $idx++;
+            my $right = $parse_eq->();
+            $left = { kind => 'binop', op => '||', left => $left, right => $right };
+        }
+        return $left;
+    };
+
     $parse_lambda = sub {
         my $tok = $peek->();
+
+        if (defined($tok) && $tok->{type} eq 'op' && $tok->{value} eq '(') {
+            my $save_idx = $idx;
+            $idx++;
+
+            my $first = $peek->();
+            if (defined($first) && $first->{type} eq 'ident') {
+                my $param1 = $first->{value};
+                $idx++;
+                if ($accept_op->(',')) {
+                    my $second = $peek->();
+                    if (defined($second) && $second->{type} eq 'ident') {
+                        my $param2 = $second->{value};
+                        $idx++;
+                        if ($accept_op->(')') && $accept_op->('=>')) {
+                            compile_error("Two-parameter lambda parameter names must be distinct")
+                              if $param1 eq $param2;
+                            my $body = $parse_lambda->();
+                            return {
+                                kind   => 'lambda2',
+                                param1 => $param1,
+                                param2 => $param2,
+                                body   => $body,
+                            };
+                        }
+                    }
+                }
+            }
+            $idx = $save_idx;
+        }
+
         my $next = ($idx + 1 < @$tokens) ? $tokens->[$idx + 1] : undef;
         if (defined($tok) && defined($next) && $tok->{type} eq 'ident' && $next->{type} eq 'op' && $next->{value} eq '=>') {
             my $param = $tok->{value};
@@ -523,7 +602,7 @@ sub parse_expr {
                 body  => $body,
             };
         }
-        return $parse_eq->();
+        return $parse_or->();
     };
 
     my $ast = $parse_lambda->();
@@ -662,14 +741,6 @@ sub parse_method_step {
     my @args;
     for my $arg_raw (@{ $call->{args} }) {
         my $arg = trim($arg_raw);
-        if ($arg =~ /^([A-Za-z_][A-Za-z0-9_]*)\s*=>\s*(.+)$/s) {
-            push @args, {
-                kind  => 'lambda1',
-                param => $1,
-                body  => parse_expr(trim($2)),
-            };
-            next;
-        }
         push @args, parse_expr($arg);
     }
     return {
@@ -771,6 +842,12 @@ sub parse_block {
 
         if ($line eq 'break') {
             push @stmts, { kind => 'break' };
+            $$idx_ref++;
+            next;
+        }
+
+        if ($line eq 'continue') {
+            push @stmts, { kind => 'continue' };
             $$idx_ref++;
             next;
         }
@@ -891,14 +968,29 @@ sub parse_block {
                 next;
             }
 
+            my $segments = split_try_chain_segments($rhs);
+            if (@$segments > 1) {
+                my $first = $segments->[0];
+                my @tail_parts = @$segments[1 .. $#$segments];
+                my $tail_raw = join('.', @tail_parts);
+                push @stmts, {
+                    kind     => 'const_try_tail_expr',
+                    name     => $name,
+                    first    => parse_expr($first),
+                    tail_raw => $tail_raw,
+                };
+                $$idx_ref++;
+                next;
+            }
+
             push @stmts, { kind => 'const', name => $name, expr => parse_expr($rhs) };
             $$idx_ref++;
             next;
         }
 
-        if ($line =~ /^let\s+([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(number|string|bool|boolean)(?:\s+with\s+(.+?))?\s*=\s*(.+)$/) {
+        if ($line =~ /^let\s+([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(number|string|bool|boolean|number\[\]|string\[\]|number\s*\|\s*null|null\s*\|\s*number)(?:\s+with\s+(.+?))?\s*=\s*(.+)$/) {
             my ($name, $type, $constraint_raw, $expr) = ($1, $2, $3, trim($4));
-            $type = 'bool' if $type eq 'boolean';
+            $type = normalize_type_annotation($type);
             my $constraints = parse_constraints($constraint_raw);
             if (($constraints->{positive} || $constraints->{negative} || defined $constraints->{range} || $constraints->{wrap}) && $type ne 'number') {
                 compile_error("Numeric constraints require number type for variable '$name'");
@@ -933,9 +1025,9 @@ sub parse_block {
             next;
         }
 
-        if ($line =~ /^([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(number|string|bool|boolean)(?:\s+with\s+(.+?))?\s*=\s*(.+)$/) {
+        if ($line =~ /^([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(number|string|bool|boolean|number\[\]|string\[\]|number\s*\|\s*null|null\s*\|\s*number)(?:\s+with\s+(.+?))?\s*=\s*(.+)$/) {
             my ($name, $type, $constraint_raw, $expr) = ($1, $2, $3, trim($4));
-            $type = 'bool' if $type eq 'boolean';
+            $type = normalize_type_annotation($type);
             my $constraints = parse_constraints($constraint_raw);
             if (($constraints->{positive} || $constraints->{negative} || defined $constraints->{range} || $constraints->{wrap}) && $type ne 'number') {
                 compile_error("Numeric constraints require number type in typed assignment for '$name'");
@@ -973,6 +1065,15 @@ sub parse_block {
             push @stmts, { kind => 'assign', name => $1, expr => parse_expr(trim($2)) };
             $$idx_ref++;
             next;
+        }
+
+        if ($line =~ /\)\s*$/) {
+            my $expr = parse_expr($line);
+            if ($expr->{kind} eq 'call' || $expr->{kind} eq 'method_call') {
+                push @stmts, { kind => 'expr_stmt', expr => $expr };
+                $$idx_ref++;
+                next;
+            }
         }
 
         push @stmts, { kind => 'raw', text => $line };

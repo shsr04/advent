@@ -1,0 +1,27 @@
+function main() {
+  printf("Result: %d\n", findSum() or (e) => {
+    printf("Error! %s\n", e.message)
+    return 1
+  })
+}
+
+function findSum(): number | error {
+  const banks = split(STDIN, "\n")?
+  let sum = 0
+  
+  for const bank in banks {
+    const slots = bank.chars().map(parseNumber)?
+    for const slot in slots.sort() {
+        const max = slot
+        if max.index() == last(slots) {
+            continue
+        }
+        const second = slots.slice(max.index()+1).max()
+        log("Bank ${bank.index()}: ${max}+${second}")
+        sum += max*10+second
+        break
+    }
+  }
+  
+  return sum
+}

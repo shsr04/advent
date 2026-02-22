@@ -1,0 +1,58 @@
+function main() {
+  printf("Result: %d\n", findSum() or (e) => {
+    printf("Error! %s\n", e.message)
+    return 1
+  })
+}
+
+function findSum(): number | error {
+  const banks = split(STDIN, "\n")?
+  let sum = 0
+  
+  for const bank in banks {
+    if bank == "" {
+      continue
+    }
+
+    const slots = bank.chars().map(parseNumber)?
+    if slots.size() < 12 {
+      return error("Bank ${bank.index()} has fewer than 12 batteries")
+    }
+
+    let selected: number[] = []
+    let start = 0
+    let picked = 0
+
+    while picked < 12 {
+        const remaining = 12 - picked
+        const maxIndexAllowed = slots.size() - remaining
+        let bestValue: number | null = null
+        let bestIndex: number | null = null
+
+        for const slot in slots.slice(start) {
+          const absoluteIndex = start + slot.index()
+          if absoluteIndex > maxIndexAllowed {
+            break
+          }
+          if bestValue == null || slot > bestValue {
+            bestValue = slot
+            bestIndex = absoluteIndex
+          }
+        }
+
+        if bestValue == null || bestIndex == null {
+          return error("No selectable battery for bank ${bank.index()}")
+        }
+        
+        selected.push(bestValue)
+        start = bestIndex + 1
+        picked++
+    }
+
+    let bankValue = selected.reduce(0, (prev, digit) => prev*10+digit)
+
+    sum += bankValue
+  }
+  
+  return sum
+}

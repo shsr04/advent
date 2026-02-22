@@ -1,0 +1,12 @@
+function main() {
+  printf("Result: %d\n", run() or (e) => {
+    printf("Error! %s\n", e.message)
+    return 1
+  })
+}
+
+function run(): number | error {
+  let maybe: number | null = null
+  let next = maybe + 1
+  return next
+}

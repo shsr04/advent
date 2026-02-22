@@ -3,8 +3,30 @@ use strict;
 use warnings;
 use Exporter 'import';
 
-use MetaC::Support qw(compile_error c_escape_string parse_constraints emit_line);
-use MetaC::Parser qw(collect_functions parse_function_params parse_capture_groups infer_group_type parse_function_body);
+use MetaC::Support qw(compile_error c_escape_string parse_constraints emit_line trim);
+use MetaC::Parser qw(collect_functions parse_function_params parse_capture_groups infer_group_type parse_function_body parse_expr);
+use MetaC::CodegenType qw(
+    param_c_type
+    render_c_params
+    is_number_like_type
+    number_like_to_c_expr
+    type_matches_expected
+    number_or_null_to_c_expr
+);
+use MetaC::CodegenScope qw(
+    new_scope
+    pop_scope
+    lookup_var
+    declare_var
+    set_list_len_fact
+    lookup_list_len_fact
+    set_nonnull_fact_by_c_name
+    clear_nonnull_fact_by_c_name
+    has_nonnull_fact_by_c_name
+    set_nonnull_fact_for_var_name
+    clear_nonnull_fact_for_var_name
+);
+use MetaC::CodegenRuntime qw(runtime_prelude_for_code);
 
 our @EXPORT_OK = qw(compile_source);
 
@@ -46,73 +68,6 @@ sub block_definitely_returns {
 }
 
 
-sub param_c_type {
-    my ($param) = @_;
-    return 'int64_t' if $param->{type} eq 'number';
-    return 'int' if $param->{type} eq 'bool';
-    return 'const char *' if $param->{type} eq 'string';
-    compile_error("Unsupported parameter type: $param->{type}");
-}
-
-
-sub render_c_params {
-    my ($params) = @_;
-    return 'void' if !@$params;
-    return join(', ', map { param_c_type($_) . ' ' . $_->{c_in_name} } @$params);
-}
-
-
-sub new_scope {
-    my ($ctx) = @_;
-    push @{ $ctx->{scopes} }, {};
-    push @{ $ctx->{fact_scopes} }, {};
-}
-
-
-sub pop_scope {
-    my ($ctx) = @_;
-    pop @{ $ctx->{scopes} };
-    pop @{ $ctx->{fact_scopes} };
-}
-
-
-sub lookup_var {
-    my ($ctx, $name) = @_;
-    for (my $i = $#{ $ctx->{scopes} }; $i >= 0; $i--) {
-        my $scope = $ctx->{scopes}[$i];
-        return $scope->{$name} if exists $scope->{$name};
-    }
-    return undef;
-}
-
-
-sub declare_var {
-    my ($ctx, $name, $info) = @_;
-    my $scope = $ctx->{scopes}[-1];
-    compile_error("Variable already declared in this scope: $name") if exists $scope->{$name};
-    $info->{c_name} = $name if !exists $info->{c_name};
-    $info->{immutable} = 0 if !exists $info->{immutable};
-    $scope->{$name} = $info;
-}
-
-
-sub set_list_len_fact {
-    my ($ctx, $key, $len) = @_;
-    my $scope = $ctx->{fact_scopes}[-1];
-    $scope->{$key} = $len;
-}
-
-
-sub lookup_list_len_fact {
-    my ($ctx, $key) = @_;
-    for (my $i = $#{ $ctx->{fact_scopes} }; $i >= 0; $i--) {
-        my $scope = $ctx->{fact_scopes}[$i];
-        return $scope->{$key} if exists $scope->{$key};
-    }
-    return undef;
-}
-
-
 sub expr_is_stable_for_facts {
     my ($expr, $ctx) = @_;
     return 1 if $expr->{kind} eq 'num' || $expr->{kind} eq 'str' || $expr->{kind} eq 'bool';
@@ -134,7 +89,7 @@ sub expr_is_stable_for_facts {
     }
 
     if ($expr->{kind} eq 'method_call') {
-        return 0 if $expr->{method} ne 'size' && $expr->{method} ne 'chunk';
+        return 0 if $expr->{method} ne 'size' && $expr->{method} ne 'chunk' && $expr->{method} ne 'chars';
         return 0 if !expr_is_stable_for_facts($expr->{recv}, $ctx);
         for my $arg (@{ $expr->{args} }) {
             return 0 if !expr_is_stable_for_facts($arg, $ctx);
@@ -232,13 +187,83 @@ sub size_check_from_condition {
     return undef if !expr_is_stable_for_facts($target_expr, $ctx);
 
     my (undef, $target_type) = compile_expr($target_expr, $ctx);
-    return undef if $target_type ne 'string_list' && $target_type ne 'number_list';
+    return undef if $target_type ne 'string_list' && $target_type ne 'number_list' && $target_type ne 'indexed_number_list';
 
     return {
         key => expr_fact_key($target_expr, $ctx),
         len => int($num_expr->{value}),
         op  => $cond->{op},
     };
+}
+
+
+sub nullable_number_check_from_condition {
+    my ($cond, $ctx) = @_;
+    return undef if $cond->{kind} ne 'binop';
+    return undef if $cond->{op} ne '==' && $cond->{op} ne '!=';
+
+    my $var_name;
+    if ($cond->{left}{kind} eq 'ident' && $cond->{right}{kind} eq 'null') {
+        $var_name = $cond->{left}{name};
+    } elsif ($cond->{right}{kind} eq 'ident' && $cond->{left}{kind} eq 'null') {
+        $var_name = $cond->{right}{name};
+    } else {
+        return undef;
+    }
+
+    my $info = lookup_var($ctx, $var_name);
+    return undef if !defined $info;
+    return undef if $info->{type} ne 'number_or_null';
+
+    return {
+        name => $var_name,
+        op   => $cond->{op},
+    };
+}
+
+
+sub declare_not_null_number_shadow {
+    my ($ctx, $name) = @_;
+    my $info = lookup_var($ctx, $name);
+    return if !defined $info;
+    return if $info->{type} ne 'number_or_null';
+
+    declare_var(
+        $ctx,
+        $name,
+        {
+            type        => 'number',
+            immutable   => $info->{immutable},
+            c_name      => "($info->{c_name}).value",
+            constraints => $info->{constraints},
+        }
+    );
+}
+
+
+sub nullable_number_non_null_on_false_expr {
+    my ($expr, $ctx) = @_;
+    my $check = nullable_number_check_from_condition($expr, $ctx);
+    return undef if !defined $check;
+    return undef if $check->{op} ne '==';
+    return $check->{name};
+}
+
+
+sub nullable_number_names_non_null_on_false_expr {
+    my ($expr, $ctx) = @_;
+    my @names;
+
+    if ($expr->{kind} eq 'binop' && $expr->{op} eq '||') {
+        my $left = nullable_number_names_non_null_on_false_expr($expr->{left}, $ctx);
+        my $right = nullable_number_names_non_null_on_false_expr($expr->{right}, $ctx);
+        push @names, @$left, @$right;
+        return \@names;
+    }
+
+    my $single = nullable_number_non_null_on_false_expr($expr, $ctx);
+    push @names, $single if defined $single;
+    return \@names;
 }
 
 
@@ -315,8 +340,10 @@ sub build_template_format_expr {
     my @args;
     my $pos = 0;
 
-    while ($raw =~ /\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g) {
-        my $name = $1;
+    while ($raw =~ /\$\{([^{}]*)\}/g) {
+        my $expr_raw = trim($1);
+        compile_error("Empty interpolation expression in template")
+          if $expr_raw eq '';
         my $start = $-[0];
         my $end = $+[0];
 
@@ -324,19 +351,20 @@ sub build_template_format_expr {
         $literal =~ s/%/%%/g;
         $fmt .= $literal;
 
-        my $info = lookup_var($ctx, $name);
-        compile_error("Unknown interpolation variable: $name") if !defined $info;
-        if ($info->{type} eq 'string') {
+        my $expr = parse_expr($expr_raw);
+        my ($expr_code, $expr_type) = compile_expr($expr, $ctx);
+        if ($expr_type eq 'string') {
             $fmt .= '%s';
-            push @args, $info->{c_name};
-        } elsif ($info->{type} eq 'number') {
+            push @args, $expr_code;
+        } elsif (is_number_like_type($expr_type)) {
             $fmt .= '%lld';
-            push @args, "(long long)$info->{c_name}";
-        } elsif ($info->{type} eq 'bool') {
+            my $num = number_like_to_c_expr($expr_code, $expr_type, "Template interpolation");
+            push @args, "(long long)$num";
+        } elsif ($expr_type eq 'bool') {
             $fmt .= '%d';
-            push @args, $info->{c_name};
+            push @args, $expr_code;
         } else {
-            compile_error("Unsupported interpolation variable type for '$name': $info->{type}");
+            compile_error("Unsupported interpolation expression type: $expr_type");
         }
 
         $pos = $end;
@@ -359,7 +387,7 @@ sub build_template_format_expr {
 sub method_specs {
     return {
         size => {
-            receivers     => { string => 1, string_list => 1, number_list => 1 },
+            receivers     => { string => 1, string_list => 1, number_list => 1, indexed_number_list => 1 },
             arity         => 0,
             expr_callable => 1,
             fallibility   => 'never',
@@ -367,6 +395,50 @@ sub method_specs {
         chunk => {
             receivers     => { string => 1 },
             arity         => 1,
+            expr_callable => 1,
+            fallibility   => 'never',
+        },
+        chars => {
+            receivers     => { string => 1 },
+            arity         => 0,
+            expr_callable => 1,
+            fallibility   => 'never',
+        },
+        slice => {
+            receivers     => { string_list => 1, number_list => 1 },
+            arity         => 1,
+            expr_callable => 1,
+            fallibility   => 'never',
+        },
+        max => {
+            receivers     => { string_list => 1, number_list => 1 },
+            arity         => 0,
+            expr_callable => 1,
+            fallibility   => 'never',
+        },
+        sort => {
+            receivers     => { number_list => 1 },
+            arity         => 0,
+            expr_callable => 1,
+            fallibility   => 'never',
+        },
+        index => {
+            receivers     => { indexed_number => 1 },
+            arity         => 0,
+            expr_callable => 1,
+            fallibility   => 'never',
+        },
+        log => {
+            receivers     => {
+                string         => 1,
+                number         => 1,
+                bool           => 1,
+                indexed_number => 1,
+                string_list    => 1,
+                number_list    => 1,
+                indexed_number_list => 1,
+            },
+            arity         => 0,
             expr_callable => 1,
             fallibility   => 'never',
         },
@@ -382,11 +454,23 @@ sub method_specs {
             expr_callable => 0,
             fallibility   => 'never',
         },
+        reduce => {
+            receivers     => { string_list => 1, number_list => 1 },
+            arity         => 2,
+            expr_callable => 1,
+            fallibility   => 'never',
+        },
         assert => {
             receivers     => { string_list => 1, number_list => 1 },
             arity         => 2,
             expr_callable => 0,
             fallibility   => 'always',
+        },
+        push => {
+            receivers     => { string_list => 1, number_list => 1 },
+            arity         => 1,
+            expr_callable => 1,
+            fallibility   => 'never',
         },
     };
 }
@@ -653,6 +737,98 @@ sub emit_filter_assignment {
 }
 
 
+sub compile_reduce_lambda_helper {
+    my (%args) = @_;
+    my $lambda = $args{lambda};
+    my $recv_type = $args{recv_type};
+    my $ctx = $args{ctx};
+
+    compile_error("reduce(...) second arg must be a two-parameter lambda, e.g. (acc, item) => acc + item")
+      if $lambda->{kind} ne 'lambda2';
+
+    my $item_type = $recv_type eq 'number_list' ? 'number' : 'string';
+    my $item_c_type = $item_type eq 'number' ? 'int64_t' : 'const char *';
+    my $param1 = $lambda->{param1};
+    my $param2 = $lambda->{param2};
+
+    my $lambda_ctx = {
+        scopes      => [ {} ],
+        fact_scopes => [ {} ],
+        nonnull_scopes => [ {} ],
+        tmp_counter => $ctx->{tmp_counter},
+        functions   => $ctx->{functions},
+        loop_depth  => 0,
+        helper_defs => $ctx->{helper_defs},
+        helper_counter => $ctx->{helper_counter},
+        current_function => $ctx->{current_function},
+    };
+
+    declare_var(
+        $lambda_ctx,
+        $param1,
+        {
+            type      => 'number',
+            immutable => 1,
+            c_name    => $param1,
+        }
+    );
+    declare_var(
+        $lambda_ctx,
+        $param2,
+        {
+            type      => $item_type,
+            immutable => 1,
+            c_name    => $param2,
+        }
+    );
+
+    my ($body_code, $body_type) = compile_expr($lambda->{body}, $lambda_ctx);
+    $ctx->{helper_counter} = $lambda_ctx->{helper_counter};
+    my $body_num = number_like_to_c_expr($body_code, $body_type, "reduce(...) reducer lambda");
+
+    my $helper_counter = $ctx->{helper_counter} // 0;
+    my $helper_name = '__metac_reduce_' . ($ctx->{current_function} // 'fn') . '_' . $helper_counter;
+    $ctx->{helper_counter} = $helper_counter + 1;
+
+    my @helper_lines;
+    push @helper_lines, "static int64_t $helper_name(int64_t $param1, $item_c_type $param2) {";
+    push @helper_lines, "  return $body_num;";
+    push @helper_lines, '}';
+    push @{ $ctx->{helper_defs} }, join("\n", @helper_lines);
+
+    return $helper_name;
+}
+
+
+sub compile_reduce_call {
+    my (%args) = @_;
+    my $expr = $args{expr};
+    my $ctx = $args{ctx};
+
+    my ($recv_code, $recv_type) = compile_expr($expr->{recv}, $ctx);
+    compile_error("reduce(...) receiver must be string_list or number_list, got $recv_type")
+      if $recv_type ne 'string_list' && $recv_type ne 'number_list';
+
+    my $actual = scalar @{ $expr->{args} };
+    compile_error("reduce(...) expects exactly 2 args: reduce(initial, (acc, item) => expr)")
+      if $actual != 2;
+    $ctx->{helper_defs} = [] if !defined $ctx->{helper_defs};
+
+    my ($init_code, $init_type) = compile_expr($expr->{args}[0], $ctx);
+    my $init_num = number_like_to_c_expr($init_code, $init_type, "reduce(...) initial value");
+    my $helper_name = compile_reduce_lambda_helper(
+        lambda    => $expr->{args}[1],
+        recv_type => $recv_type,
+        ctx       => $ctx,
+    );
+
+    if ($recv_type eq 'number_list') {
+        return ("metac_reduce_number_list($recv_code, $init_num, $helper_name)", 'number');
+    }
+    return ("metac_reduce_string_list($recv_code, $init_num, $helper_name)", 'number');
+}
+
+
 sub emit_loop_body_with_binding {
     my (%args) = @_;
     my $ctx = $args{ctx};
@@ -663,6 +839,7 @@ sub emit_loop_body_with_binding {
     my $var_name = $args{var_name};
     my $var_type = $args{var_type};
     my $var_c_expr = $args{var_c_expr};
+    my $var_index_c_expr = $args{var_index_c_expr};
     my $range_min_expr = $args{range_min_expr};
     my $range_max_expr = $args{range_max_expr};
 
@@ -676,10 +853,15 @@ sub emit_loop_body_with_binding {
         $var_info{range_min_expr} = $range_min_expr;
         $var_info{range_max_expr} = $range_max_expr;
     }
+    if (defined $var_index_c_expr) {
+        $var_info{index_c_expr} = $var_index_c_expr;
+    }
     if ($var_type eq 'string') {
         emit_line($out, $indent, "const char *$var_name = $var_c_expr;");
     } elsif ($var_type eq 'number') {
         emit_line($out, $indent, "const int64_t $var_name = $var_c_expr;");
+    } elsif ($var_type eq 'indexed_number') {
+        emit_line($out, $indent, "const IndexedNumber $var_name = $var_c_expr;");
     } else {
         compile_error("Unsupported loop element type '$var_type'");
     }
@@ -824,7 +1006,7 @@ sub prove_non_negative_expr {
     }
     if ($expr->{kind} eq 'method_call' && $expr->{method} eq 'size' && scalar(@{ $expr->{args} }) == 0) {
         my (undef, $recv_type) = compile_expr($expr->{recv}, $ctx);
-        return 1 if $recv_type eq 'string' || $recv_type eq 'string_list' || $recv_type eq 'number_list';
+        return 1 if $recv_type eq 'string' || $recv_type eq 'string_list' || $recv_type eq 'number_list' || $recv_type eq 'indexed_number_list';
         return 0;
     }
     if ($expr->{kind} eq 'binop' && $expr->{op} eq '+') {
@@ -896,7 +1078,7 @@ sub decompose_iterable_expression {
 
     my ($base_code, $base_type) = compile_expr($base, $ctx);
     compile_error("Iterable expression must be seq(...) or list-valued, got $base_type")
-      if $base_type ne 'string_list' && $base_type ne 'number_list';
+      if $base_type ne 'string_list' && $base_type ne 'number_list' && $base_type ne 'indexed_number_list';
 
     return {
         kind       => 'list',
@@ -922,9 +1104,11 @@ sub emit_for_each_from_iterable_expr {
         my ($start_code, $start_type) = compile_expr($iter->{start_expr}, $ctx);
         my ($end_code, $end_type) = compile_expr($iter->{end_expr}, $ctx);
         compile_error("seq start must be number, got $start_type")
-          if $start_type ne 'number';
+          if !is_number_like_type($start_type);
         compile_error("seq end must be number, got $end_type")
-          if $end_type ne 'number';
+          if !is_number_like_type($end_type);
+        my $start_num = number_like_to_c_expr($start_code, $start_type, "seq start");
+        my $end_num = number_like_to_c_expr($end_code, $end_type, "seq end");
 
         my $start_var = '__metac_seq_start' . $ctx->{tmp_counter}++;
         my $end_var = '__metac_seq_end' . $ctx->{tmp_counter}++;
@@ -937,8 +1121,8 @@ sub emit_for_each_from_iterable_expr {
             label       => 'seq(...).filter(...)',
         );
 
-        emit_line($out, $indent, "int64_t $start_var = $start_code;");
-        emit_line($out, $indent, "int64_t $end_var = $end_code;");
+        emit_line($out, $indent, "int64_t $start_var = $start_num;");
+        emit_line($out, $indent, "int64_t $end_var = $end_num;");
         emit_line($out, $indent, "if ($start_var <= $end_var) {");
         emit_line($out, $indent + 2, "for (int64_t $idx_var = $start_var; $idx_var <= $end_var; $idx_var++) {");
         for my $pred_code (@$pred_codes) {
@@ -953,6 +1137,7 @@ sub emit_for_each_from_iterable_expr {
             var_name          => $stmt->{var},
             var_type          => 'number',
             var_c_expr        => $idx_var,
+            var_index_c_expr  => $idx_var,
             range_min_expr    => $iter->{start_expr},
             range_max_expr    => $iter->{end_expr},
         );
@@ -971,6 +1156,7 @@ sub emit_for_each_from_iterable_expr {
             var_name          => $stmt->{var},
             var_type          => 'number',
             var_c_expr        => $idx_var,
+            var_index_c_expr  => $idx_var,
             range_min_expr    => $iter->{start_expr},
             range_max_expr    => $iter->{end_expr},
         );
@@ -982,12 +1168,15 @@ sub emit_for_each_from_iterable_expr {
     my $container = '__metac_iter_list' . $ctx->{tmp_counter}++;
     if ($iter->{base_type} eq 'string_list') {
         emit_line($out, $indent, "StringList $container = $iter->{base_code};");
+    } elsif ($iter->{base_type} eq 'indexed_number_list') {
+        emit_line($out, $indent, "IndexedNumberList $container = $iter->{base_code};");
     } else {
         emit_line($out, $indent, "NumberList $container = $iter->{base_code};");
     }
 
     my $idx_name = '__metac_i' . $ctx->{tmp_counter}++;
-    my $elem_type = $iter->{base_type} eq 'string_list' ? 'string' : 'number';
+    my $elem_type = $iter->{base_type} eq 'string_list' ? 'string'
+      : ($iter->{base_type} eq 'indexed_number_list' ? 'indexed_number' : 'number');
     my $elem_expr = "$container.items[$idx_name]";
     my $pred_codes = compile_filter_predicate_codes(
         predicates  => $iter->{predicates},
@@ -1010,6 +1199,7 @@ sub emit_for_each_from_iterable_expr {
         var_name          => $stmt->{var},
         var_type          => $elem_type,
         var_c_expr        => $elem_expr,
+        var_index_c_expr  => "((int64_t)$idx_name)",
     );
     emit_line($out, $indent, "}");
 }
@@ -1030,40 +1220,55 @@ sub compile_expr {
     if ($expr->{kind} eq 'bool') {
         return ($expr->{value}, 'bool');
     }
+    if ($expr->{kind} eq 'null') {
+        return ("metac_null_number()", 'null');
+    }
+    if ($expr->{kind} eq 'list_literal') {
+        my $count = scalar @{ $expr->{items} };
+        if ($count == 0) {
+            return ('0', 'empty_list');
+        }
+        compile_error("Non-empty list literals are not supported yet");
+    }
     if ($expr->{kind} eq 'ident') {
         if ($expr->{name} eq 'STDIN') {
             return ('metac_read_all_stdin()', 'string');
         }
         my $info = lookup_var($ctx, $expr->{name});
         compile_error("Unknown variable: $expr->{name}") if !defined $info;
+        if ($info->{type} eq 'number_or_null' && has_nonnull_fact_by_c_name($ctx, $info->{c_name})) {
+            return ("($info->{c_name}).value", 'number');
+        }
         return ($info->{c_name}, $info->{type});
     }
     if ($expr->{kind} eq 'unary') {
         my ($inner_code, $inner_type) = compile_expr($expr->{expr}, $ctx);
         if ($expr->{op} eq '-') {
-            compile_error("Unary '-' requires number operand") if $inner_type ne 'number';
-            return ("(-$inner_code)", 'number');
+            my $num_expr = number_like_to_c_expr($inner_code, $inner_type, "Unary '-'");
+            return ("(-$num_expr)", 'number');
         }
         compile_error("Unsupported unary operator: $expr->{op}");
     }
     if ($expr->{kind} eq 'index') {
         my ($recv_code, $recv_type) = compile_expr($expr->{recv}, $ctx);
         my ($idx_code, $idx_type) = compile_expr($expr->{index}, $ctx);
-        compile_error("Index operator requires numeric index")
-          if $idx_type ne 'number';
+        my $idx_num = number_like_to_c_expr($idx_code, $idx_type, "Index operator");
         compile_error("Unsupported index receiver type: $recv_type")
-          if $recv_type ne 'string' && $recv_type ne 'string_list' && $recv_type ne 'number_list';
+          if $recv_type ne 'string' && $recv_type ne 'string_list' && $recv_type ne 'number_list' && $recv_type ne 'indexed_number_list';
 
         compile_error("Index on '$recv_type' requires compile-time in-bounds proof")
           if !prove_container_index_in_bounds($recv_code, $recv_type, $expr->{index}, $ctx);
 
         if ($recv_type eq 'string') {
-            return ("metac_char_at($recv_code, $idx_code)", 'number');
+            return ("metac_char_at($recv_code, $idx_num)", 'number');
         }
         if ($recv_type eq 'string_list') {
-            return ("$recv_code.items[$idx_code]", 'string');
+            return ("$recv_code.items[$idx_num]", 'string');
         }
-        return ("$recv_code.items[$idx_code]", 'number');
+        if ($recv_type eq 'indexed_number_list') {
+            return ("$recv_code.items[$idx_num]", 'indexed_number');
+        }
+        return ("$recv_code.items[$idx_num]", 'number');
     }
     if ($expr->{kind} eq 'method_call') {
         my ($recv_code, $recv_type) = compile_expr($expr->{recv}, $ctx);
@@ -1083,15 +1288,123 @@ sub compile_expr {
             compile_error("Method 'chunk(...)' expects 1 arg, got $actual")
               if $actual != 1;
             my ($arg_code, $arg_type) = compile_expr($expr->{args}[0], $ctx);
-            compile_error("Method 'chunk(...)' expects number arg")
-              if $arg_type ne 'number';
-            return ("metac_chunk_string($recv_code, $arg_code)", 'string_list');
+            my $arg_num = number_like_to_c_expr($arg_code, $arg_type, "Method 'chunk(...)'");
+            return ("metac_chunk_string($recv_code, $arg_num)", 'string_list');
         }
 
-        if (($recv_type eq 'string_list' || $recv_type eq 'number_list') && $method eq 'size') {
+        if ($recv_type eq 'string' && $method eq 'chars') {
+            compile_error("Method 'chars()' expects 0 args, got $actual")
+              if $actual != 0;
+            return ("metac_chars_string($recv_code)", 'string_list');
+        }
+
+        if (($recv_type eq 'string_list' || $recv_type eq 'number_list' || $recv_type eq 'indexed_number_list') && $method eq 'size') {
             compile_error("Method 'size()' expects 0 args, got $actual")
               if $actual != 0;
             return ("((int64_t)$recv_code.count)", 'number');
+        }
+
+        if (($recv_type eq 'string_list' || $recv_type eq 'number_list') && $method eq 'slice') {
+            compile_error("Method 'slice(...)' expects 1 arg, got $actual")
+              if $actual != 1;
+            my ($arg_code, $arg_type) = compile_expr($expr->{args}[0], $ctx);
+            my $arg_num = number_like_to_c_expr($arg_code, $arg_type, "Method 'slice(...)'");
+            if ($recv_type eq 'string_list') {
+                return ("metac_slice_string_list($recv_code, $arg_num)", 'string_list');
+            }
+            return ("metac_slice_number_list($recv_code, $arg_num)", 'number_list');
+        }
+
+        if ($recv_type eq 'number_list' && $method eq 'max') {
+            compile_error("Method 'max()' expects 0 args, got $actual")
+              if $actual != 0;
+            return ("metac_list_max_number($recv_code)", 'indexed_number');
+        }
+
+        if ($recv_type eq 'string_list' && $method eq 'max') {
+            compile_error("Method 'max()' expects 0 args, got $actual")
+              if $actual != 0;
+            return ("metac_list_max_string_number($recv_code)", 'indexed_number');
+        }
+
+        if ($recv_type eq 'number_list' && $method eq 'sort') {
+            compile_error("Method 'sort()' expects 0 args, got $actual")
+              if $actual != 0;
+            return ("metac_sort_number_list($recv_code)", 'indexed_number_list');
+        }
+
+        if ($recv_type eq 'indexed_number' && $method eq 'index') {
+            compile_error("Method 'index()' expects 0 args, got $actual")
+              if $actual != 0;
+            return ("(($recv_code).index)", 'number');
+        }
+
+        if (($recv_type eq 'string' || $recv_type eq 'number' || $recv_type eq 'bool') && $method eq 'index') {
+            compile_error("Method 'index()' expects 0 args, got $actual")
+              if $actual != 0;
+            if ($expr->{recv}{kind} eq 'ident') {
+                my $recv_info = lookup_var($ctx, $expr->{recv}{name});
+                if (defined $recv_info && defined $recv_info->{index_c_expr}) {
+                    return ($recv_info->{index_c_expr}, 'number');
+                }
+            }
+            compile_error("Method 'index()' requires value with source index metadata");
+        }
+
+        if (($recv_type eq 'number_list' || $recv_type eq 'string_list') && $method eq 'reduce') {
+            return compile_reduce_call(
+                expr => $expr,
+                ctx  => $ctx,
+            );
+        }
+
+        if ($method eq 'log') {
+            compile_error("Method 'log()' expects 0 args, got $actual")
+              if $actual != 0;
+            if ($recv_type eq 'number') {
+                return ("metac_log_number($recv_code)", 'number');
+            }
+            if ($recv_type eq 'string') {
+                return ("metac_log_string($recv_code)", 'string');
+            }
+            if ($recv_type eq 'bool') {
+                return ("metac_log_bool($recv_code)", 'bool');
+            }
+            if ($recv_type eq 'indexed_number') {
+                return ("metac_log_indexed_number($recv_code)", 'indexed_number');
+            }
+            if ($recv_type eq 'string_list') {
+                return ("metac_log_string_list($recv_code)", 'string_list');
+            }
+            if ($recv_type eq 'number_list') {
+                return ("metac_log_number_list($recv_code)", 'number_list');
+            }
+            if ($recv_type eq 'indexed_number_list') {
+                return ("metac_log_indexed_number_list($recv_code)", 'indexed_number_list');
+            }
+        }
+
+        if (($recv_type eq 'number_list' || $recv_type eq 'string_list') && $method eq 'push') {
+            compile_error("Method 'push(...)' expects 1 arg, got $actual")
+              if $actual != 1;
+            compile_error("Method 'push(...)' receiver must be a mutable list variable")
+              if $expr->{recv}{kind} ne 'ident';
+
+            my $recv_info = lookup_var($ctx, $expr->{recv}{name});
+            compile_error("Unknown variable: $expr->{recv}{name}") if !defined $recv_info;
+            compile_error("Cannot mutate immutable variable '$expr->{recv}{name}'")
+              if $recv_info->{immutable};
+
+            if ($recv_type eq 'number_list') {
+                my ($arg_code, $arg_type) = compile_expr($expr->{args}[0], $ctx);
+                my $arg_num = number_like_to_c_expr($arg_code, $arg_type, "Method 'push(...)'");
+                return ("metac_number_list_push(&$recv_info->{c_name}, $arg_num)", 'number');
+            }
+
+            my ($arg_code, $arg_type) = compile_expr($expr->{args}[0], $ctx);
+            compile_error("Method 'push(...)' on string list expects string arg, got $arg_type")
+              if $arg_type ne 'string';
+            return ("metac_string_list_push(&$recv_info->{c_name}, $arg_code)", 'number');
         }
 
         compile_error("Unsupported method call '$method' on type '$recv_type'");
@@ -1118,9 +1431,50 @@ sub compile_expr {
                   if $actual != 2;
                 my ($a_code, $a_type) = compile_expr($expr->{args}[0], $ctx);
                 my ($b_code, $b_type) = compile_expr($expr->{args}[1], $ctx);
-                compile_error("Builtin '$expr->{name}' requires number args")
-                  if $a_type ne 'number' || $b_type ne 'number';
-                return ("metac_$expr->{name}($a_code, $b_code)", 'number');
+                my $a_num = number_like_to_c_expr($a_code, $a_type, "Builtin '$expr->{name}'");
+                my $b_num = number_like_to_c_expr($b_code, $b_type, "Builtin '$expr->{name}'");
+                return ("metac_$expr->{name}($a_num, $b_num)", 'number');
+            }
+            if ($expr->{name} eq 'last') {
+                my $actual = scalar @{ $expr->{args} };
+                compile_error("Builtin 'last' expects 1 arg, got $actual")
+                  if $actual != 1;
+                my ($a_code, $a_type) = compile_expr($expr->{args}[0], $ctx);
+                if ($a_type eq 'string_list') {
+                    return ("metac_last_index_string_list($a_code)", 'number');
+                }
+                if ($a_type eq 'number_list') {
+                    return ("metac_last_index_number_list($a_code)", 'number');
+                }
+                compile_error("Builtin 'last' requires string_list or number_list arg");
+            }
+            if ($expr->{name} eq 'log') {
+                my $actual = scalar @{ $expr->{args} };
+                compile_error("Builtin 'log' expects 1 arg, got $actual")
+                  if $actual != 1;
+                my ($arg_code, $arg_type) = compile_expr($expr->{args}[0], $ctx);
+                if ($arg_type eq 'number') {
+                    return ("metac_log_number($arg_code)", 'number');
+                }
+                if ($arg_type eq 'string') {
+                    return ("metac_log_string($arg_code)", 'string');
+                }
+                if ($arg_type eq 'bool') {
+                    return ("metac_log_bool($arg_code)", 'bool');
+                }
+                if ($arg_type eq 'indexed_number') {
+                    return ("metac_log_indexed_number($arg_code)", 'indexed_number');
+                }
+                if ($arg_type eq 'string_list') {
+                    return ("metac_log_string_list($arg_code)", 'string_list');
+                }
+                if ($arg_type eq 'number_list') {
+                    return ("metac_log_number_list($arg_code)", 'number_list');
+                }
+                if ($arg_type eq 'indexed_number_list') {
+                    return ("metac_log_indexed_number_list($arg_code)", 'indexed_number_list');
+                }
+                compile_error("Builtin 'log' does not support argument type '$arg_type'");
             }
             compile_error("Unknown function in expression: $expr->{name}");
         }
@@ -1138,6 +1492,14 @@ sub compile_expr {
         for (my $i = 0; $i < $expected; $i++) {
             my ($arg_c, $arg_t) = compile_expr($expr->{args}[$i], $ctx);
             my $param_t = $sig->{params}[$i]{type};
+            if ($param_t eq 'number') {
+                push @arg_code, number_like_to_c_expr($arg_c, $arg_t, "Arg " . ($i + 1) . " to '$expr->{name}'");
+                next;
+            }
+            if ($param_t eq 'number_or_null') {
+                push @arg_code, number_or_null_to_c_expr($arg_c, $arg_t, "Arg " . ($i + 1) . " to '$expr->{name}'");
+                next;
+            }
             compile_error("Arg " . ($i + 1) . " to '$expr->{name}' must be $param_t, got $arg_t")
               if $arg_t ne $param_t;
             push @arg_code, $arg_c;
@@ -1147,19 +1509,69 @@ sub compile_expr {
         return ("$expr->{name}(" . join(', ', @arg_code) . ")", $result_type);
     }
     if ($expr->{kind} eq 'binop') {
+        if ($expr->{op} eq '||') {
+            my ($l_code, $l_type) = compile_expr($expr->{left}, $ctx);
+            compile_error("Operator '||' requires bool operands, got $l_type and <unknown>")
+              if $l_type ne 'bool';
+
+            my ($r_code, $r_type);
+            my $narrow_name = nullable_number_non_null_on_false_expr($expr->{left}, $ctx);
+            if (defined $narrow_name) {
+                new_scope($ctx);
+                declare_not_null_number_shadow($ctx, $narrow_name);
+                ($r_code, $r_type) = compile_expr($expr->{right}, $ctx);
+                pop_scope($ctx);
+            } else {
+                ($r_code, $r_type) = compile_expr($expr->{right}, $ctx);
+            }
+            compile_error("Operator '||' requires bool operands, got $l_type and $r_type")
+              if $r_type ne 'bool';
+            return ("($l_code || $r_code)", 'bool');
+        }
+
         my ($l_code, $l_type) = compile_expr($expr->{left}, $ctx);
         my ($r_code, $r_type) = compile_expr($expr->{right}, $ctx);
 
         if ($expr->{op} eq '+' || $expr->{op} eq '-' || $expr->{op} eq '*' || $expr->{op} eq '/' || $expr->{op} eq '%') {
-            compile_error("Operator '$expr->{op}' requires number operands")
-              if $l_type ne 'number' || $r_type ne 'number';
-            return ("($l_code $expr->{op} $r_code)", 'number');
+            my $l_num = number_like_to_c_expr($l_code, $l_type, "Operator '$expr->{op}'");
+            my $r_num = number_like_to_c_expr($r_code, $r_type, "Operator '$expr->{op}'");
+            return ("($l_num $expr->{op} $r_num)", 'number');
         }
 
         if ($expr->{op} eq '==' || $expr->{op} eq '!=') {
             my $op = $expr->{op};
+            if (($l_type eq 'number_or_null' && $r_type eq 'null') || ($l_type eq 'null' && $r_type eq 'number_or_null')) {
+                my $nullable_code = $l_type eq 'number_or_null' ? $l_code : $r_code;
+                if ($op eq '==') {
+                    return ("(($nullable_code).is_null)", 'bool');
+                }
+                return ("(!($nullable_code).is_null)", 'bool');
+            }
+            if ($l_type eq 'number_or_null' && $r_type eq 'number_or_null') {
+                my $cmp = "((($l_code).is_null && ($r_code).is_null) || (!($l_code).is_null && !($r_code).is_null && ($l_code).value == ($r_code).value))";
+                return ($cmp, 'bool') if $op eq '==';
+                return ("(!($cmp))", 'bool');
+            }
+            if (($l_type eq 'number_or_null' && is_number_like_type($r_type))
+                || ($r_type eq 'number_or_null' && is_number_like_type($l_type)))
+            {
+                my $nullable_code = $l_type eq 'number_or_null' ? $l_code : $r_code;
+                my $num_code_raw = $l_type eq 'number_or_null' ? $r_code : $l_code;
+                my $num_type = $l_type eq 'number_or_null' ? $r_type : $l_type;
+                my $num_code = number_like_to_c_expr($num_code_raw, $num_type, "Operator '$op'");
+                my $cmp = "(!($nullable_code).is_null && ($nullable_code).value == $num_code)";
+                return ($cmp, 'bool') if $op eq '==';
+                return ("(!($cmp))", 'bool');
+            }
+            if ($l_type eq 'null' && $r_type eq 'null') {
+                return ($op eq '==' ? '1' : '0', 'bool');
+            }
+            if (is_number_like_type($l_type) && is_number_like_type($r_type)) {
+                my $l_num = number_like_to_c_expr($l_code, $l_type, "Operator '$op'");
+                my $r_num = number_like_to_c_expr($r_code, $r_type, "Operator '$op'");
+                return ("($l_num $op $r_num)", 'bool');
+            }
             compile_error("Type mismatch in '$op': $l_type vs $r_type") if $l_type ne $r_type;
-            return ("($l_code $op $r_code)", 'bool') if $l_type eq 'number';
             return ("($l_code $op $r_code)", 'bool') if $l_type eq 'bool';
             if ($l_type eq 'string') {
                 return ("metac_streq($l_code, $r_code)", 'bool') if $op eq '==';
@@ -1168,9 +1580,9 @@ sub compile_expr {
             compile_error("Unsupported '$op' operand type: $l_type");
         }
         if ($expr->{op} eq '<' || $expr->{op} eq '>' || $expr->{op} eq '<=' || $expr->{op} eq '>=') {
-            compile_error("Operator '$expr->{op}' requires number operands")
-              if $l_type ne 'number' || $r_type ne 'number';
-            return ("($l_code $expr->{op} $r_code)", 'bool');
+            my $l_num = number_like_to_c_expr($l_code, $l_type, "Operator '$expr->{op}'");
+            my $r_num = number_like_to_c_expr($r_code, $r_type, "Operator '$expr->{op}'");
+            return ("($l_num $expr->{op} $r_num)", 'bool');
         }
 
         compile_error("Unsupported binary operator: $expr->{op}");
@@ -1187,9 +1599,12 @@ sub compile_block {
         if ($stmt->{kind} eq 'let') {
             my ($expr_code, $expr_type) = compile_expr($stmt->{expr}, $ctx);
             my $decl_type = defined($stmt->{type}) ? $stmt->{type} : $expr_type;
+            if (!defined($stmt->{type}) && $expr_type eq 'empty_list') {
+                compile_error("Empty list literal requires an explicit list type, e.g. let xs: number[] = []");
+            }
             if (defined $stmt->{type}) {
                 compile_error("Type mismatch in let '$stmt->{name}': expected $stmt->{type}, got $expr_type")
-                  if $expr_type ne $stmt->{type};
+                  if !type_matches_expected($stmt->{type}, $expr_type);
             }
 
             my $constraints = $stmt->{constraints} // parse_constraints(undef);
@@ -1210,16 +1625,37 @@ sub compile_block {
                       if $constraints->{negative} && $v >= 0;
                 }
 
-                my $init_expr = $expr_code;
+                my $init_expr = number_like_to_c_expr($expr_code, $expr_type, "let '$stmt->{name}'");
                 if (defined $constraints->{range} && $constraints->{wrap}) {
                     $init_expr = "metac_wrap_range($init_expr, $constraints->{range}{min}, $constraints->{range}{max})";
                 }
                 emit_line($out, $indent, "int64_t $stmt->{name} = $init_expr;");
+            } elsif ($decl_type eq 'number_or_null') {
+                my $init_expr = number_or_null_to_c_expr($expr_code, $expr_type, "let '$stmt->{name}'");
+                emit_line($out, $indent, "NullableNumber $stmt->{name} = $init_expr;");
+            } elsif ($decl_type eq 'indexed_number') {
+                emit_line($out, $indent, "IndexedNumber $stmt->{name} = $expr_code;");
             } elsif ($decl_type eq 'string') {
                 emit_line($out, $indent, 'char ' . $stmt->{name} . '[256];');
                 emit_line($out, $indent, "metac_copy_str($stmt->{name}, sizeof($stmt->{name}), $expr_code);");
             } elsif ($decl_type eq 'bool') {
                 emit_line($out, $indent, "int $stmt->{name} = $expr_code;");
+            } elsif ($decl_type eq 'number_list') {
+                if ($expr_type eq 'empty_list') {
+                    emit_line($out, $indent, "NumberList $stmt->{name};");
+                    emit_line($out, $indent, "$stmt->{name}.count = 0;");
+                    emit_line($out, $indent, "$stmt->{name}.items = NULL;");
+                } else {
+                    emit_line($out, $indent, "NumberList $stmt->{name} = $expr_code;");
+                }
+            } elsif ($decl_type eq 'string_list') {
+                if ($expr_type eq 'empty_list') {
+                    emit_line($out, $indent, "StringList $stmt->{name};");
+                    emit_line($out, $indent, "$stmt->{name}.count = 0;");
+                    emit_line($out, $indent, "$stmt->{name}.items = NULL;");
+                } else {
+                    emit_line($out, $indent, "StringList $stmt->{name} = $expr_code;");
+                }
             } else {
                 compile_error("Unsupported let type: $decl_type");
             }
@@ -1233,6 +1669,16 @@ sub compile_block {
                     immutable   => 0,
                 }
             );
+
+            if ($decl_type eq 'number_or_null') {
+                if ($expr_type eq 'null') {
+                    clear_nonnull_fact_for_var_name($ctx, $stmt->{name});
+                } elsif (is_number_like_type($expr_type)) {
+                    set_nonnull_fact_for_var_name($ctx, $stmt->{name});
+                } else {
+                    clear_nonnull_fact_for_var_name($ctx, $stmt->{name});
+                }
+            }
             next;
         }
 
@@ -1264,6 +1710,10 @@ sub compile_block {
 
             if ($expr_type eq 'number') {
                 emit_line($out, $indent, "const int64_t $stmt->{name} = $expr_code;");
+            } elsif ($expr_type eq 'number_or_null') {
+                emit_line($out, $indent, "const NullableNumber $stmt->{name} = $expr_code;");
+            } elsif ($expr_type eq 'indexed_number') {
+                emit_line($out, $indent, "const IndexedNumber $stmt->{name} = $expr_code;");
             } elsif ($expr_type eq 'bool') {
                 emit_line($out, $indent, "const int $stmt->{name} = $expr_code;");
             } elsif ($expr_type eq 'string') {
@@ -1273,6 +1723,8 @@ sub compile_block {
                 emit_line($out, $indent, "StringList $stmt->{name} = $expr_code;");
             } elsif ($expr_type eq 'number_list') {
                 emit_line($out, $indent, "NumberList $stmt->{name} = $expr_code;");
+            } elsif ($expr_type eq 'indexed_number_list') {
+                emit_line($out, $indent, "IndexedNumberList $stmt->{name} = $expr_code;");
             } else {
                 compile_error("Unsupported const expression type for '$stmt->{name}': $expr_type");
             }
@@ -1287,7 +1739,7 @@ sub compile_block {
                 && scalar(@{ $stmt->{expr}{args} }) == 0)
             {
                 my ($size_recv_code, $size_recv_type) = compile_expr($stmt->{expr}{recv}, $ctx);
-                if ($size_recv_type eq 'string' || $size_recv_type eq 'string_list' || $size_recv_type eq 'number_list') {
+                if ($size_recv_type eq 'string' || $size_recv_type eq 'string_list' || $size_recv_type eq 'number_list' || $size_recv_type eq 'indexed_number_list') {
                     $const_info{size_of_recv_code} = $size_recv_code;
                     $const_info{size_of_recv_type} = $size_recv_type;
                 }
@@ -1298,6 +1750,28 @@ sub compile_block {
                 $stmt->{name},
                 \%const_info
             );
+            next;
+        }
+
+        if ($stmt->{kind} eq 'const_try_tail_expr') {
+            compile_error("try expression with '?.' is currently only supported in number | error functions")
+              if $current_fn_return ne 'number_or_error';
+
+            my $tmp = '__metac_chain' . $ctx->{tmp_counter}++;
+            my $first_stmt = {
+                kind => 'const_try_expr',
+                name => $tmp,
+                expr => $stmt->{first},
+            };
+            compile_block([ $first_stmt ], $ctx, $out, $indent, $current_fn_return);
+
+            my $tail_expr = parse_expr("$tmp.$stmt->{tail_raw}");
+            my $final_stmt = {
+                kind => 'const',
+                name => $stmt->{name},
+                expr => $tail_expr,
+            };
+            compile_block([ $final_stmt ], $ctx, $out, $indent, $current_fn_return);
             next;
         }
 
@@ -1628,7 +2102,7 @@ sub compile_block {
 
             my ($expr_code, $expr_type) = compile_expr($stmt->{expr}, $ctx);
             compile_error("Typed assignment expression mismatch for '$stmt->{name}': expected $stmt->{type}, got $expr_type")
-              if $expr_type ne $stmt->{type};
+              if !type_matches_expected($stmt->{type}, $expr_type);
 
             my $target = $info->{c_name};
             if ($stmt->{type} eq 'number') {
@@ -1645,15 +2119,39 @@ sub compile_block {
                       if $constraints->{negative} && $v >= 0;
                 }
 
-                my $rhs = $expr_code;
+                my $rhs = number_like_to_c_expr($expr_code, $expr_type, "typed assignment for '$stmt->{name}'");
                 if (defined $constraints->{range} && $constraints->{wrap}) {
                     $rhs = "metac_wrap_range($rhs, $constraints->{range}{min}, $constraints->{range}{max})";
                 }
                 emit_line($out, $indent, "$target = $rhs;");
+            } elsif ($stmt->{type} eq 'number_or_null') {
+                my $rhs = number_or_null_to_c_expr($expr_code, $expr_type, "typed assignment for '$stmt->{name}'");
+                emit_line($out, $indent, "$target = $rhs;");
+                if ($expr_type eq 'null') {
+                    clear_nonnull_fact_for_var_name($ctx, $stmt->{name});
+                } elsif (is_number_like_type($expr_type)) {
+                    set_nonnull_fact_for_var_name($ctx, $stmt->{name});
+                } else {
+                    clear_nonnull_fact_for_var_name($ctx, $stmt->{name});
+                }
             } elsif ($stmt->{type} eq 'string') {
                 emit_line($out, $indent, "metac_copy_str($target, sizeof($target), $expr_code);");
             } elsif ($stmt->{type} eq 'bool') {
                 emit_line($out, $indent, "$target = $expr_code;");
+            } elsif ($stmt->{type} eq 'number_list') {
+                if ($expr_type eq 'empty_list') {
+                    emit_line($out, $indent, "$target.count = 0;");
+                    emit_line($out, $indent, "$target.items = NULL;");
+                } else {
+                    emit_line($out, $indent, "$target = $expr_code;");
+                }
+            } elsif ($stmt->{type} eq 'string_list') {
+                if ($expr_type eq 'empty_list') {
+                    emit_line($out, $indent, "$target.count = 0;");
+                    emit_line($out, $indent, "$target.items = NULL;");
+                } else {
+                    emit_line($out, $indent, "$target = $expr_code;");
+                }
             } else {
                 compile_error("Unsupported typed assignment type: $stmt->{type}");
             }
@@ -1668,20 +2166,40 @@ sub compile_block {
 
             my ($expr_code, $expr_type) = compile_expr($stmt->{expr}, $ctx);
             compile_error("Type mismatch in assignment to '$stmt->{name}': expected $info->{type}, got $expr_type")
-              if $expr_type ne $info->{type};
+              if !type_matches_expected($info->{type}, $expr_type);
 
             if ($info->{type} eq 'number') {
                 my $constraints = $info->{constraints} // parse_constraints(undef);
+                my $rhs = number_like_to_c_expr($expr_code, $expr_type, "assignment to '$stmt->{name}'");
                 if (defined $constraints->{range} && $constraints->{wrap}) {
                     emit_line($out, $indent,
-                        "$target = metac_wrap_range($expr_code, $constraints->{range}{min}, $constraints->{range}{max});");
+                        "$target = metac_wrap_range($rhs, $constraints->{range}{min}, $constraints->{range}{max});");
                 } else {
-                    emit_line($out, $indent, "$target = $expr_code;");
+                    emit_line($out, $indent, "$target = $rhs;");
                 }
+            } elsif ($info->{type} eq 'number_or_null') {
+                my $rhs = number_or_null_to_c_expr($expr_code, $expr_type, "assignment to '$stmt->{name}'");
+                emit_line($out, $indent, "$target = $rhs;");
+                if ($expr_type eq 'null') {
+                    clear_nonnull_fact_for_var_name($ctx, $stmt->{name});
+                } elsif (is_number_like_type($expr_type)) {
+                    set_nonnull_fact_for_var_name($ctx, $stmt->{name});
+                } else {
+                    clear_nonnull_fact_for_var_name($ctx, $stmt->{name});
+                }
+            } elsif ($info->{type} eq 'indexed_number') {
+                emit_line($out, $indent, "$target = $expr_code;");
             } elsif ($info->{type} eq 'bool') {
                 emit_line($out, $indent, "$target = $expr_code;");
             } elsif ($info->{type} eq 'string') {
                 emit_line($out, $indent, "metac_copy_str($target, sizeof($target), $expr_code);");
+            } elsif ($info->{type} eq 'number_list' || $info->{type} eq 'string_list') {
+                if ($expr_type eq 'empty_list') {
+                    emit_line($out, $indent, "$target.count = 0;");
+                    emit_line($out, $indent, "$target.items = NULL;");
+                } else {
+                    emit_line($out, $indent, "$target = $expr_code;");
+                }
             } else {
                 compile_error("Unsupported assignment target type for '$stmt->{name}': $info->{type}");
             }
@@ -1698,10 +2216,9 @@ sub compile_block {
                 compile_error("'+=' requires numeric target '$stmt->{name}'")
                   if $info->{type} ne 'number';
                 my ($expr_code, $expr_type) = compile_expr($stmt->{expr}, $ctx);
-                compile_error("'+=' requires numeric expression for '$stmt->{name}'")
-                  if $expr_type ne 'number';
+                my $rhs = number_like_to_c_expr($expr_code, $expr_type, "'+=' for '$stmt->{name}'");
 
-                my $combined = "($target + $expr_code)";
+                my $combined = "($target + $rhs)";
                 my $constraints = $info->{constraints} // parse_constraints(undef);
                 if (defined $constraints->{range} && $constraints->{wrap}) {
                     emit_line($out, $indent,
@@ -1792,6 +2309,13 @@ sub compile_block {
             next;
         }
 
+        if ($stmt->{kind} eq 'continue') {
+            compile_error("continue is only valid inside a loop")
+              if ($ctx->{loop_depth} // 0) <= 0;
+            emit_line($out, $indent, 'continue;');
+            next;
+        }
+
         if ($stmt->{kind} eq 'destructure_match') {
             my $src = lookup_var($ctx, $stmt->{source_var});
             compile_error("match() source must be an existing string variable: $stmt->{source_var}")
@@ -1844,6 +2368,8 @@ sub compile_block {
 
         if ($stmt->{kind} eq 'if') {
             my $size_check = size_check_from_condition($stmt->{cond}, $ctx);
+            my $nullable_check = nullable_number_check_from_condition($stmt->{cond}, $ctx);
+            my $nullable_nonnull_on_false = nullable_number_names_non_null_on_false_expr($stmt->{cond}, $ctx);
             my ($cond_code, $cond_type) = compile_expr($stmt->{cond}, $ctx);
             compile_error("if condition must evaluate to bool, got $cond_type") if $cond_type ne 'bool';
 
@@ -1851,6 +2377,9 @@ sub compile_block {
             new_scope($ctx);
             if (defined $size_check && $size_check->{op} eq '==') {
                 set_list_len_fact($ctx, $size_check->{key}, $size_check->{len});
+            }
+            if (defined $nullable_check && $nullable_check->{op} eq '!=') {
+                declare_not_null_number_shadow($ctx, $nullable_check->{name});
             }
             compile_block($stmt->{then_body}, $ctx, $out, $indent + 2, $current_fn_return);
             pop_scope($ctx);
@@ -1861,6 +2390,9 @@ sub compile_block {
                 new_scope($ctx);
                 if (defined $size_check && $size_check->{op} eq '!=') {
                     set_list_len_fact($ctx, $size_check->{key}, $size_check->{len});
+                }
+                if (defined $nullable_check && $nullable_check->{op} eq '==') {
+                    declare_not_null_number_shadow($ctx, $nullable_check->{name});
                 }
                 compile_block($stmt->{else_body}, $ctx, $out, $indent + 2, $current_fn_return);
                 pop_scope($ctx);
@@ -1881,6 +2413,36 @@ sub compile_block {
                     set_list_len_fact($ctx, $size_check->{key}, $size_check->{len});
                 }
             }
+
+            if (defined $nullable_check) {
+                my $then_returns = block_definitely_returns($stmt->{then_body});
+                my $else_returns = defined($stmt->{else_body}) ? block_definitely_returns($stmt->{else_body}) : 0;
+
+                if (!defined $stmt->{else_body} && $nullable_check->{op} eq '==' && $then_returns) {
+                    set_nonnull_fact_for_var_name($ctx, $nullable_check->{name});
+                }
+                if (defined $stmt->{else_body} && $nullable_check->{op} eq '==' && $then_returns && !$else_returns) {
+                    set_nonnull_fact_for_var_name($ctx, $nullable_check->{name});
+                }
+                if (defined $stmt->{else_body} && $nullable_check->{op} eq '!=' && $else_returns && !$then_returns) {
+                    set_nonnull_fact_for_var_name($ctx, $nullable_check->{name});
+                }
+            }
+
+            if (defined $nullable_nonnull_on_false && @$nullable_nonnull_on_false) {
+                my $then_returns = block_definitely_returns($stmt->{then_body});
+                my $else_returns = defined($stmt->{else_body}) ? block_definitely_returns($stmt->{else_body}) : 0;
+                if (!defined $stmt->{else_body} && $then_returns) {
+                    for my $name (@$nullable_nonnull_on_false) {
+                        set_nonnull_fact_for_var_name($ctx, $name);
+                    }
+                }
+                if (defined $stmt->{else_body} && $then_returns && !$else_returns) {
+                    for my $name (@$nullable_nonnull_on_false) {
+                        set_nonnull_fact_for_var_name($ctx, $name);
+                    }
+                }
+            }
             next;
         }
 
@@ -1890,15 +2452,17 @@ sub compile_block {
             if ($current_fn_return eq 'number_or_error') {
                 if ($expr_type eq 'number') {
                     emit_line($out, $indent, "return ok_number($expr_code);");
+                } elsif ($expr_type eq 'indexed_number') {
+                    my $num_expr = number_like_to_c_expr($expr_code, $expr_type, "return");
+                    emit_line($out, $indent, "return ok_number($num_expr);");
                 } elsif ($expr_type eq 'error') {
                     emit_line($out, $indent, "return $expr_code;");
                 } else {
                     compile_error("return type mismatch: expected number or error for number|error function");
                 }
             } elsif ($current_fn_return eq 'number') {
-                compile_error("return type mismatch: expected number return")
-                  if $expr_type ne 'number';
-                emit_line($out, $indent, "return $expr_code;");
+                my $num_expr = number_like_to_c_expr($expr_code, $expr_type, "return");
+                emit_line($out, $indent, "return $num_expr;");
             } elsif ($current_fn_return eq 'bool') {
                 compile_error("return type mismatch: expected bool return")
                   if $expr_type ne 'bool';
@@ -1906,6 +2470,12 @@ sub compile_block {
             } else {
                 compile_error("Unsupported function return mode: $current_fn_return");
             }
+            next;
+        }
+
+        if ($stmt->{kind} eq 'expr_stmt') {
+            my ($expr_code, undef) = compile_expr($stmt->{expr}, $ctx);
+            emit_line($out, $indent, "(void)($expr_code);");
             next;
         }
 
@@ -1979,6 +2549,20 @@ sub emit_param_bindings {
             next;
         }
 
+        if ($param->{type} eq 'number_or_null') {
+            emit_line($out, $indent, "const NullableNumber $name = $in_name;");
+            declare_var(
+                $ctx,
+                $name,
+                {
+                    type      => 'number_or_null',
+                    immutable => 1,
+                    c_name    => $name,
+                }
+            );
+            next;
+        }
+
         if ($param->{type} eq 'bool') {
             emit_line($out, $indent, "const int $name = $in_name;");
             declare_var(
@@ -2019,6 +2603,7 @@ sub compile_number_or_error_function {
 
     my $stmts = parse_function_body($fn);
     my @out;
+    my @helper_defs;
     my $sig_params = render_c_params($params);
     push @out, "static ResultNumber $fn->{name}($sig_params) {";
     push @out, '  int __metac_line_no = 0;';
@@ -2027,9 +2612,13 @@ sub compile_number_or_error_function {
     my $ctx = {
         scopes      => [ {} ],
         fact_scopes => [ {} ],
+        nonnull_scopes => [ {} ],
         tmp_counter => 0,
         functions   => $function_sigs,
         loop_depth  => 0,
+        helper_defs => \@helper_defs,
+        helper_counter => 0,
+        current_function => $fn->{name},
     };
 
     emit_param_bindings($params, $ctx, \@out, 2, 'number_or_error');
@@ -2037,7 +2626,11 @@ sub compile_number_or_error_function {
     my $missing_return_msg = c_escape_string("Missing return in function $fn->{name}");
     push @out, "  return err_number($missing_return_msg, __metac_line_no, \"\");";
     push @out, '}';
-    return join("\n", @out) . "\n";
+    my $fn_code = join("\n", @out) . "\n";
+    if (@helper_defs) {
+        return join("\n", @helper_defs) . "\n" . $fn_code;
+    }
+    return $fn_code;
 }
 
 
@@ -2048,6 +2641,7 @@ sub compile_number_function {
 
     my $stmts = parse_function_body($fn);
     my @out;
+    my @helper_defs;
     my $sig_params = render_c_params($params);
     push @out, "static int64_t $fn->{name}($sig_params) {";
     push @out, '  int __metac_line_no = 0;';
@@ -2056,16 +2650,24 @@ sub compile_number_function {
     my $ctx = {
         scopes      => [ {} ],
         fact_scopes => [ {} ],
+        nonnull_scopes => [ {} ],
         tmp_counter => 0,
         functions   => $function_sigs,
         loop_depth  => 0,
+        helper_defs => \@helper_defs,
+        helper_counter => 0,
+        current_function => $fn->{name},
     };
 
     emit_param_bindings($params, $ctx, \@out, 2, 'number');
     compile_block($stmts, $ctx, \@out, 2, 'number');
     push @out, '  return 0;';
     push @out, '}';
-    return join("\n", @out) . "\n";
+    my $fn_code = join("\n", @out) . "\n";
+    if (@helper_defs) {
+        return join("\n", @helper_defs) . "\n" . $fn_code;
+    }
+    return $fn_code;
 }
 
 
@@ -2076,6 +2678,7 @@ sub compile_bool_function {
 
     my $stmts = parse_function_body($fn);
     my @out;
+    my @helper_defs;
     my $sig_params = render_c_params($params);
     push @out, "static int $fn->{name}($sig_params) {";
     push @out, '  int __metac_line_no = 0;';
@@ -2084,16 +2687,24 @@ sub compile_bool_function {
     my $ctx = {
         scopes      => [ {} ],
         fact_scopes => [ {} ],
+        nonnull_scopes => [ {} ],
         tmp_counter => 0,
         functions   => $function_sigs,
         loop_depth  => 0,
+        helper_defs => \@helper_defs,
+        helper_counter => 0,
+        current_function => $fn->{name},
     };
 
     emit_param_bindings($params, $ctx, \@out, 2, 'bool');
     compile_block($stmts, $ctx, \@out, 2, 'bool');
     push @out, '  return 0;';
     push @out, '}';
-    return join("\n", @out) . "\n";
+    my $fn_code = join("\n", @out) . "\n";
+    if (@helper_defs) {
+        return join("\n", @helper_defs) . "\n" . $fn_code;
+    }
+    return $fn_code;
 }
 
 
@@ -2122,340 +2733,6 @@ sub emit_function_prototypes {
     }
 
     return join("\n", @out) . "\n";
-}
-
-
-sub runtime_prelude {
-    return <<'C_RUNTIME';
-#include <ctype.h>
-#include <errno.h>
-#include <limits.h>
-#include <regex.h>
-#include <stdarg.h>
-#include <stdint.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-
-typedef struct {
-  int is_error;
-  int64_t value;
-  char message[160];
-} ResultNumber;
-
-typedef struct {
-  size_t count;
-  char **items;
-} StringList;
-
-typedef struct {
-  size_t count;
-  int64_t *items;
-} NumberList;
-
-typedef struct {
-  int is_error;
-  StringList value;
-  char message[160];
-} ResultStringList;
-
-static ResultNumber ok_number(int64_t value) {
-  ResultNumber out;
-  out.is_error = 0;
-  out.value = value;
-  out.message[0] = '\0';
-  return out;
-}
-
-static ResultNumber err_number(const char *message, int line_no, const char *line_text) {
-  ResultNumber out;
-  out.is_error = 1;
-  out.value = 0;
-  snprintf(out.message, sizeof(out.message), "%s (line %d: %s)", message, line_no, line_text);
-  return out;
-}
-
-static const char *metac_fmt(const char *fmt, ...) {
-  static char out[1024];
-  va_list ap;
-  va_start(ap, fmt);
-  vsnprintf(out, sizeof(out), fmt, ap);
-  va_end(ap);
-  return out;
-}
-
-static char *metac_strdup_local(const char *s) {
-  size_t n = strlen(s);
-  char *out = (char *)malloc(n + 1);
-  if (out == NULL) {
-    return NULL;
-  }
-  memcpy(out, s, n + 1);
-  return out;
-}
-
-static char *metac_read_all_stdin(void) {
-  size_t cap = 4096;
-  size_t len = 0;
-  char *buf = (char *)malloc(cap);
-  if (buf == NULL) {
-    return NULL;
-  }
-
-  int ch = 0;
-  while ((ch = fgetc(stdin)) != EOF) {
-    if (len + 1 >= cap) {
-      size_t next = cap * 2;
-      char *grown = (char *)realloc(buf, next);
-      if (grown == NULL) {
-        free(buf);
-        return NULL;
-      }
-      buf = grown;
-      cap = next;
-    }
-    buf[len++] = (char)ch;
-  }
-  buf[len] = '\0';
-  return buf;
-}
-
-static int64_t metac_strlen(const char *s) {
-  if (s == NULL) {
-    return 0;
-  }
-  size_t n = strlen(s);
-  if (n > (size_t)INT64_MAX) {
-    return INT64_MAX;
-  }
-  return (int64_t)n;
-}
-
-static int64_t metac_char_at(const char *s, int64_t idx) {
-  if (s == NULL || idx < 0) {
-    return -1;
-  }
-  size_t n = strlen(s);
-  if ((uint64_t)idx >= n) {
-    return -1;
-  }
-  return (int64_t)(unsigned char)s[idx];
-}
-
-static StringList metac_chunk_string(const char *input, int64_t chunk_size) {
-  StringList out;
-  out.count = 0;
-  out.items = NULL;
-
-  if (input == NULL) {
-    return out;
-  }
-
-  if (chunk_size <= 0) {
-    return out;
-  }
-
-  size_t len = strlen(input);
-  if (len == 0) {
-    return out;
-  }
-
-  size_t n = (size_t)chunk_size;
-  size_t count = (len + n - 1) / n;
-  char **items = (char **)calloc(count, sizeof(char *));
-  if (items == NULL) {
-    return out;
-  }
-
-  for (size_t i = 0; i < count; i++) {
-    size_t start = i * n;
-    size_t seg_len = n;
-    if (start + seg_len > len) {
-      seg_len = len - start;
-    }
-    char *tok = (char *)malloc(seg_len + 1);
-    if (tok == NULL) {
-      return out;
-    }
-    memcpy(tok, input + start, seg_len);
-    tok[seg_len] = '\0';
-    items[i] = tok;
-  }
-
-  out.count = count;
-  out.items = items;
-  return out;
-}
-
-static ResultStringList metac_split_string(const char *input, const char *delim) {
-  ResultStringList out;
-  out.is_error = 0;
-  out.value.count = 0;
-  out.value.items = NULL;
-  out.message[0] = '\0';
-
-  if (input == NULL) {
-    out.is_error = 1;
-    snprintf(out.message, sizeof(out.message), "split input is null");
-    return out;
-  }
-  if (delim == NULL || delim[0] == '\0') {
-    out.is_error = 1;
-    snprintf(out.message, sizeof(out.message), "split delimiter is empty");
-    return out;
-  }
-
-  size_t delim_len = strlen(delim);
-  size_t count = 1;
-  const char *scan = input;
-  while (1) {
-    const char *p = strstr(scan, delim);
-    if (p == NULL) {
-      break;
-    }
-    count++;
-    scan = p + delim_len;
-  }
-
-  char **items = (char **)calloc(count, sizeof(char *));
-  if (items == NULL) {
-    out.is_error = 1;
-    snprintf(out.message, sizeof(out.message), "out of memory allocating split items");
-    return out;
-  }
-
-  size_t idx = 0;
-  const char *start = input;
-  while (1) {
-    const char *p = strstr(start, delim);
-    size_t len = (p == NULL) ? strlen(start) : (size_t)(p - start);
-    char *tok = (char *)malloc(len + 1);
-    if (tok == NULL) {
-      out.is_error = 1;
-      snprintf(out.message, sizeof(out.message), "out of memory allocating split token");
-      return out;
-    }
-    memcpy(tok, start, len);
-    tok[len] = '\0';
-    items[idx++] = tok;
-
-    if (p == NULL) {
-      break;
-    }
-    start = p + delim_len;
-  }
-
-  out.value.count = idx;
-  out.value.items = items;
-  return out;
-}
-
-static void metac_copy_str(char *dst, size_t dst_sz, const char *src) {
-  if (dst_sz == 0) {
-    return;
-  }
-  strncpy(dst, src, dst_sz - 1);
-  dst[dst_sz - 1] = '\0';
-}
-
-static int metac_streq(const char *a, const char *b) {
-  return strcmp(a, b) == 0;
-}
-
-static int64_t metac_max(int64_t a, int64_t b) {
-  return (a > b) ? a : b;
-}
-
-static int64_t metac_min(int64_t a, int64_t b) {
-  return (a < b) ? a : b;
-}
-
-static int64_t metac_wrap_range(int64_t value, int64_t min, int64_t max) {
-  int64_t span = (max - min) + 1;
-  int64_t shifted = value - min;
-  int64_t r = shifted % span;
-  if (r < 0) {
-    r += span;
-  }
-  return min + r;
-}
-
-static int metac_parse_int(const char *text, int64_t *out) {
-  char *end = NULL;
-  errno = 0;
-  long long value = strtoll(text, &end, 10);
-  if (text[0] == '\0' || *end != '\0' || errno == ERANGE) {
-    return 0;
-  }
-  *out = (int64_t)value;
-  return 1;
-}
-
-static void metac_rstrip_newline(char *s) {
-  size_t len = strlen(s);
-  while (len > 0 && (s[len - 1] == '\n' || s[len - 1] == '\r')) {
-    s[len - 1] = '\0';
-    len--;
-  }
-}
-
-static int metac_match_groups(
-    const char *input,
-    const char *pattern,
-    int expected_groups,
-    char **outs,
-    size_t out_cap,
-    char *err,
-    size_t err_sz) {
-  regex_t re;
-  regmatch_t matches[16];
-  char anchored[512];
-  char line[512];
-
-  if (expected_groups <= 0 || expected_groups > 15) {
-    snprintf(err, err_sz, "Unsupported capture count");
-    return 0;
-  }
-
-  snprintf(anchored, sizeof(anchored), "^%s$", pattern);
-  metac_copy_str(line, sizeof(line), input);
-  metac_rstrip_newline(line);
-
-  if (regcomp(&re, anchored, REG_EXTENDED) != 0) {
-    snprintf(err, err_sz, "Invalid regex pattern");
-    return 0;
-  }
-
-  int rc = regexec(&re, line, (size_t)expected_groups + 1, matches, 0);
-  if (rc != 0) {
-    regfree(&re);
-    snprintf(err, err_sz, "Pattern match failed");
-    return 0;
-  }
-
-  for (int i = 0; i < expected_groups; i++) {
-    regmatch_t m = matches[i + 1];
-    if (m.rm_so < 0 || m.rm_eo < m.rm_so) {
-      regfree(&re);
-      snprintf(err, err_sz, "Missing capture group");
-      return 0;
-    }
-
-    size_t len = (size_t)(m.rm_eo - m.rm_so);
-    if (len >= out_cap) {
-      regfree(&re);
-      snprintf(err, err_sz, "Capture too long");
-      return 0;
-    }
-
-    memcpy(outs[i], line + m.rm_so, len);
-    outs[i][len] = '\0';
-  }
-
-  regfree(&re);
-  return 1;
-}
-C_RUNTIME
 }
 
 
@@ -2502,41 +2779,44 @@ sub compile_source {
         compile_error("Unsupported function return type for '$name'; supported: number | error, number, bool");
     }
 
-    my $c = runtime_prelude();
-    $c .= "\n";
-    $c .= emit_function_prototypes(\@ordered_names, $functions);
-    $c .= "\n\n";
+    my $non_runtime = '';
+    $non_runtime .= emit_function_prototypes(\@ordered_names, $functions);
+    $non_runtime .= "\n\n";
     for my $name (@ordered_names) {
         if ($number_error_functions{$name}) {
-            $c .= compile_number_or_error_function(
+            $non_runtime .= compile_number_or_error_function(
                 $functions->{$name},
                 $functions->{$name}{parsed_params},
                 \%function_sigs
             );
-            $c .= "\n";
+            $non_runtime .= "\n";
             next;
         }
         if ($number_functions{$name}) {
-            $c .= compile_number_function(
+            $non_runtime .= compile_number_function(
                 $functions->{$name},
                 $functions->{$name}{parsed_params},
                 \%function_sigs
             );
-            $c .= "\n";
+            $non_runtime .= "\n";
             next;
         }
         if ($bool_functions{$name}) {
-            $c .= compile_bool_function(
+            $non_runtime .= compile_bool_function(
                 $functions->{$name},
                 $functions->{$name}{parsed_params},
                 \%function_sigs
             );
-            $c .= "\n";
+            $non_runtime .= "\n";
             next;
         }
         compile_error("Internal: unclassified function '$name'");
     }
-    $c .= compile_main_body($main, \%number_error_functions);
+    $non_runtime .= compile_main_body($main, \%number_error_functions);
+
+    my $c = runtime_prelude_for_code($non_runtime);
+    $c .= "\n";
+    $c .= $non_runtime;
     return $c;
 }
 

@@ -8,7 +8,10 @@ It is feature-generic within the supported subset: the compiler does not hardcod
 - `compiler/metac.pl`: thin CLI entrypoint
 - `compiler/lib/MetaC/Support.pm`: shared helpers (errors, trimming, constraints, CSV-like splitting, emit helpers)
 - `compiler/lib/MetaC/Parser.pm`: source parsing into AST-style statement/expression structures
-- `compiler/lib/MetaC/Codegen.pm`: typing checks, diagnostics, C lowering, runtime prelude emission
+- `compiler/lib/MetaC/Codegen.pm`: top-level typing checks and C lowering orchestration
+- `compiler/lib/MetaC/CodegenType.pm`: codegen type helpers (parameter C signatures and number-like conversions)
+- `compiler/lib/MetaC/CodegenScope.pm`: scope table and flow-fact helpers (list arity and nullable facts)
+- `compiler/lib/MetaC/CodegenRuntime.pm`: generated C runtime prelude text
 
 ## Compile MetaC -> C
 
@@ -63,6 +66,7 @@ Test cases live in `compiler/tests/cases/`:
 - numeric backend note:
   - MetaC `number` currently lowers to signed 64-bit (`int64_t`) in generated C
   - silent overflow is still possible in the current backend for large arithmetic; bigint semantics are not implemented yet
+  - generated C runtime helper emission is usage-pruned (unused `metac_*` helper functions are omitted)
 
 - `function main() { ... }`
 - `function <name>(): number | error { ... }`
@@ -76,12 +80,16 @@ Test cases live in `compiler/tests/cases/`:
 - `let <id>: number with range(0,99) + wrap = <expr>`
 - `let <id>: number with <constraint + constraint + ...> = <expr>`
 - `let <id>: number = <number_expr>`
+- `let <id>: number | null = <number_expr-or-null>`
 - `let <id>: string = <string_expr>`
+- `let <id>: number[] = []`
+- `let <id>: string[] = []`
 - `let <id> = <expr>` (type inference for `number`, `string`, `bool`)
 - `const <id> = <expr>` with inferred immutable type (`number`, `bool`, `string`, `string_list`, `number_list`)
 - `const <id> = split(<string>, <delimiter>)?` with error propagation
 - `while <bool_expr> { ... }`
 - `break` (inside `for`/`while` loops)
+- `continue` (inside `for`/`while` loops)
 - compound assignment: `<id> += <number_expr>`
 - increment/decrement: `<id>++`, `<id>--`
 - `for const <id> in lines(STDIN)? { ... }`
@@ -97,19 +105,27 @@ Test cases live in `compiler/tests/cases/`:
 - expression grammar includes:
   - arithmetic: `+`, `-`, `*`, `/`, `%` (integer division/modulo)
   - unary minus: `-x`
-  - equality/comparisons: `==`, `!=`, `<`, `>`, `<=`, `>=`
+  - equality/comparisons: `==`, `!=`, `<`, `>`, `<=`, `>=`, `||`
   - boolean literals: `true`, `false`
+  - null literal: `null` (currently for `number | null`)
   - typed function calls: `fn(...)` for `number`- and `bool`-return functions
   - numeric parsing builtin: `parseNumber(<string>)` (fallible; use with `?` or via `map(parseNumber)?`)
   - method calls: `<expr>.<method>(...)`
-    - string methods: `.size()`, `.chunk(<number>)`
-    - list methods: `<string_list>.size()`, `<number_list>.size()`
+    - string methods: `.size()`, `.chunk(<number>)`, `.chars()`
+    - string methods operate on UTF-8 symbols (code points), not raw bytes
+    - list methods: `.size()`, `.slice(<number>)`, `.max()`, `.sort()` (on number lists), `.reduce(<initial>, (acc, item) => <number-expr>)`
+    - mutable list methods: `.push(<value>)` on mutable `number_list`/`string_list` variables
+    - all major scalar/list types: `.log()` (prints value, returns original value)
+  - lambda expressions:
+    - single parameter: `x => <expr>`
+    - two parameter: `(a, b) => <expr>` (used by `reduce`)
   - indexing:
-    - `<string-expr>[<number-expr>]` (returns numeric character code)
+    - `<string-expr>[<number-expr>]` (returns numeric UTF-8 symbol code point)
     - `<string-list-expr>[<number-expr>]` (returns `string`)
     - `<number-list-expr>[<number-expr>]` (returns `number`)
     - index access requires compile-time in-bounds proof
   - numeric builtins: `max(a,b)`, `min(a,b)`
+  - logging builtin: `log(x)` (prints value, returns original value)
 - interpolation templates in string literals:
   - `"Invalid range: ${range}"`
 - explicit error expression:

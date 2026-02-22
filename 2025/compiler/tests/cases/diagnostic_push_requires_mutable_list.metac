@@ -1,0 +1,12 @@
+function main() {
+  printf("Result: %d\n", run() or (e) => {
+    printf("Error! %s\n", e.message)
+    return 1
+  })
+}
+
+function run(): number | error {
+  const digits = "12".chars().map(parseNumber)?
+  digits.push(3)
+  return 0
+}

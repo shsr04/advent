@@ -41,6 +41,12 @@ Track all language features here. Add items as we iterate.
 27. `F-027` Boolean literals + list-valued `const` declarations - `implemented`
 28. `F-028` Inline list assert helper (`.assert(x => predicate, message)?`) - `implemented`
 29. `F-029` 64-bit numeric backend for `number` - `implemented`
+30. `F-030` Mutable list initialization + push method - `implemented`
+31. `F-031` Nullable number type (`number | null`) - `implemented`
+32. `F-032` Logical OR (`||`) with short-circuit nullable narrowing - `implemented`
+33. `F-033` Codegen module split (type/scope/runtime extraction) - `implemented`
+34. `F-034` List reduce method with two-parameter lambdas - `implemented`
+35. `F-035` Runtime helper dead-stripping in generated C - `implemented`
 
 ## Feature Record Template
 
@@ -247,3 +253,51 @@ Use this block for each feature:
 - Key guarantees: MetaC `number` now lowers to `int64_t` across values, function signatures, lists, parsing, and iteration
 - Blocking questions: exact-integer / bigint semantics and overflow policy for future correctness levels
 - Notes/evidence: runtime/codegen migration in `compiler/lib/MetaC/Codegen.pm`; regression coverage in `compiler/tests/cases/parse_number_64bit.metac`; day2 real input now runs
+
+### F-030 `Mutable List Initialization + Push`
+- Status: implemented
+- Spec file: n/a (task-driven implementation for day3b)
+- Correctness classes: C0/C1/C3
+- Key guarantees: typed mutable list declarations support explicit empty literal initialization (`let xs: number[] = []` / `let xs: string[] = []`), and `push(...)` mutates only mutable list variables with type-checked element appends
+- Blocking questions: non-empty list literals and fallible list capacity/error policy
+- Notes/evidence: parser/codegen/runtime updates in `compiler/lib/MetaC/Parser.pm` and `compiler/lib/MetaC/Codegen.pm`; regression coverage in `compiler/tests/cases/list_push_mutable_number.metac`, `compiler/tests/cases/diagnostic_empty_list_requires_type.metac`, and `compiler/tests/cases/diagnostic_push_requires_mutable_list.metac`
+
+### F-031 `Nullable Number Type`
+- Status: implemented
+- Spec file: n/a (task-driven implementation for day3b)
+- Correctness classes: C0/C1/C3
+- Key guarantees: supports `null` literal and `number | null` type for declarations/assignments, typed equality checks against `null`, and branch-local narrowing to `number` for safe arithmetic/comparison
+- Blocking questions: generalized nullable unions for non-number types and nullable function return modes
+- Notes/evidence: parser/codegen/runtime updates in `compiler/lib/MetaC/Parser.pm` and `compiler/lib/MetaC/Codegen.pm`; regression coverage in `compiler/tests/cases/null_number_branch_narrowing.metac` and `compiler/tests/cases/diagnostic_nullable_number_requires_check.metac`
+
+### F-032 `Logical OR with Nullable-aware RHS Narrowing`
+- Status: implemented
+- Spec file: n/a (task-driven implementation for day3b)
+- Correctness classes: C0/C1/C3
+- Key guarantees: supports `||` in boolean expressions with short-circuit codegen and nullable-number narrowing on RHS for `x == null || <rhs-using-x-as-number>`
+- Blocking questions: generalized boolean connective support (`&&`) and richer control-flow fact propagation
+- Notes/evidence: parser/codegen updates in `compiler/lib/MetaC/Parser.pm` and `compiler/lib/MetaC/Codegen.pm`; regression coverage in `compiler/tests/cases/null_or_short_circuit_narrowing.metac`
+
+### F-033 `Codegen Module Split`
+- Status: implemented
+- Spec file: n/a (task-driven refactor)
+- Correctness classes: C0/C3
+- Key guarantees: preserved compiler behavior while splitting codegen internals into focused modules for type helpers, scope/fact helpers, and runtime prelude emission
+- Blocking questions: further split opportunities for expression lowering and statement lowering layers
+- Notes/evidence: new modules `compiler/lib/MetaC/CodegenType.pm`, `compiler/lib/MetaC/CodegenScope.pm`, and `compiler/lib/MetaC/CodegenRuntime.pm`; full regression suite remains green (`make test`)
+
+### F-034 `List Reduce Method`
+- Status: implemented
+- Spec file: n/a (task-driven implementation for day3b)
+- Correctness classes: C0/C1/C3
+- Key guarantees: supports `<list>.reduce(initial, (acc, item) => expr)` for `number_list` and `string_list` with deterministic left-to-right accumulation and numeric accumulator typing
+- Blocking questions: reducer closure capture model beyond explicit lambda parameters
+- Notes/evidence: parser/codegen/runtime updates in `compiler/lib/MetaC/Parser.pm`, `compiler/lib/MetaC/Codegen.pm`, and `compiler/lib/MetaC/CodegenRuntime.pm`; regression coverage in `compiler/tests/cases/reduce_number_string_lists.metac` and `compiler/tests/cases/diagnostic_reduce_requires_lambda2.metac`
+
+### F-035 `Runtime Helper Dead-stripping`
+- Status: implemented
+- Spec file: n/a (task-driven implementation for day3b warning cleanup)
+- Correctness classes: C0/C3
+- Key guarantees: generated C now includes only runtime helper functions actually referenced by compiled program code plus transitive runtime dependencies
+- Blocking questions: optional future extension to strip unused runtime typedef/includes where safe
+- Notes/evidence: runtime dependency pruning implemented in `compiler/lib/MetaC/CodegenRuntime.pm` and wired in `compiler/lib/MetaC/Codegen.pm`; full regression suite remains green (`make test`); day3b C no longer emits unused-runtime helper warnings like `metac_log_string_list`

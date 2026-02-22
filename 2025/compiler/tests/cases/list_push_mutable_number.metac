@@ -1,0 +1,19 @@
+function main() {
+  printf("Result: %d\n", run() or (e) => {
+    printf("Error! %s\n", e.message)
+    return 1
+  })
+}
+
+function run(): number | error {
+  let values: number[] = []
+  values.push(4)
+  values.push(2)
+
+  let sum = 0
+  for const value in values {
+    sum += value
+  }
+
+  return sum
+}
