@@ -41,7 +41,8 @@ sub split_top_level_commas {
     my ($text) = @_;
     my @parts;
     my $current = '';
-    my $depth = 0;
+    my $paren_depth = 0;
+    my $bracket_depth = 0;
     my $in_string = 0;
     my $escape = 0;
     my @chars = split //, $text;
@@ -70,17 +71,28 @@ sub split_top_level_commas {
         }
 
         if ($ch eq '(') {
-            $depth++;
+            $paren_depth++;
             $current .= $ch;
             next;
         }
         if ($ch eq ')') {
-            $depth--;
-            compile_error("Unbalanced ')' in parameter list") if $depth < 0;
+            $paren_depth--;
+            compile_error("Unbalanced ')' in parameter list") if $paren_depth < 0;
             $current .= $ch;
             next;
         }
-        if ($ch eq ',' && $depth == 0) {
+        if ($ch eq '[') {
+            $bracket_depth++;
+            $current .= $ch;
+            next;
+        }
+        if ($ch eq ']') {
+            $bracket_depth--;
+            compile_error("Unbalanced ']' in parameter list") if $bracket_depth < 0;
+            $current .= $ch;
+            next;
+        }
+        if ($ch eq ',' && $paren_depth == 0 && $bracket_depth == 0) {
             push @parts, trim($current);
             $current = '';
             next;
@@ -88,7 +100,8 @@ sub split_top_level_commas {
         $current .= $ch;
     }
 
-    compile_error("Unbalanced '(' in parameter list") if $depth != 0;
+    compile_error("Unbalanced '(' in parameter list") if $paren_depth != 0;
+    compile_error("Unbalanced '[' in parameter list") if $bracket_depth != 0;
     push @parts, trim($current) if trim($current) ne '';
     return \@parts;
 }

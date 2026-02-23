@@ -4,6 +4,7 @@ use warnings;
 use Exporter 'import';
 
 use MetaC::Support qw(compile_error);
+use MetaC::TypeSpec qw(is_matrix_type matrix_type_meta is_matrix_member_type matrix_member_meta);
 
 our @EXPORT_OK = qw(
     param_c_type
@@ -20,6 +21,12 @@ sub param_c_type {
     return 'NullableNumber' if $param->{type} eq 'number_or_null';
     return 'int' if $param->{type} eq 'bool';
     return 'const char *' if $param->{type} eq 'string';
+    if (is_matrix_type($param->{type})) {
+        my $meta = matrix_type_meta($param->{type});
+        compile_error("Unsupported matrix parameter element type '$meta->{elem}'")
+          if $meta->{elem} ne 'number';
+        return 'MatrixNumber';
+    }
     compile_error("Unsupported parameter type: $param->{type}");
 }
 
@@ -33,6 +40,10 @@ sub is_number_like_type {
     my ($type) = @_;
     return 1 if $type eq 'number';
     return 1 if $type eq 'indexed_number';
+    if (is_matrix_member_type($type)) {
+        my $meta = matrix_member_meta($type);
+        return 1 if $meta->{elem} eq 'number';
+    }
     return 0;
 }
 
@@ -40,6 +51,10 @@ sub number_like_to_c_expr {
     my ($code, $type, $where) = @_;
     return $code if $type eq 'number';
     return "(($code).value)" if $type eq 'indexed_number';
+    if (is_matrix_member_type($type)) {
+        my $meta = matrix_member_meta($type);
+        return "(($code).value)" if $meta->{elem} eq 'number';
+    }
     compile_error("$where requires number operand, got $type");
 }
 
@@ -47,8 +62,14 @@ sub type_matches_expected {
     my ($expected, $actual) = @_;
     return 1 if $expected eq $actual;
     return 1 if $expected eq 'number' && $actual eq 'indexed_number';
+    if ($expected eq 'number' && is_matrix_member_type($actual)) {
+        my $meta = matrix_member_meta($actual);
+        return 1 if $meta->{elem} eq 'number';
+    }
     return 1 if $expected eq 'number_or_null' && ($actual eq 'number' || $actual eq 'indexed_number' || $actual eq 'null');
     return 1 if ($expected eq 'number_list' || $expected eq 'string_list') && $actual eq 'empty_list';
+    return 1 if is_matrix_type($expected) && $actual eq 'empty_list';
+    return 1 if is_matrix_type($expected) && is_matrix_type($actual) && $expected eq $actual;
     return 0;
 }
 
