@@ -66,23 +66,47 @@ sub _compile_block_stage_decls {
                 }
             } elsif (is_matrix_type($decl_type)) {
                 my $meta = matrix_type_meta($decl_type);
-                compile_error("matrix variables are currently supported only for matrix(number)")
-                  if $meta->{elem} ne 'number';
                 if ($expr_type eq 'empty_list') {
                     my $size_expr = '((NumberList){0, NULL})';
                     if ($meta->{has_size}) {
                         $size_expr = "metac_number_list_from_array((int64_t[]){ " . join(', ', @{ $meta->{sizes} }) . " }, " . scalar(@{ $meta->{sizes} }) . ")";
                     }
-                    emit_line($out, $indent, "MatrixNumber $stmt->{name} = metac_matrix_number_new($meta->{dim}, $size_expr);");
+                    if ($meta->{elem} eq 'number') {
+                        emit_line($out, $indent, "MatrixNumber $stmt->{name} = metac_matrix_number_new($meta->{dim}, $size_expr);");
+                    } elsif ($meta->{elem} eq 'string') {
+                        emit_line($out, $indent, "MatrixString $stmt->{name} = metac_matrix_string_new($meta->{dim}, $size_expr);");
+                    } else {
+                        compile_error("Unsupported matrix variable element type '$meta->{elem}'");
+                    }
                 } else {
                     compile_error("Type mismatch in let '$stmt->{name}': expected $decl_type, got $expr_type")
                       if $expr_type ne $decl_type;
-                    emit_line($out, $indent, "MatrixNumber $stmt->{name} = $expr_code;");
+                    if ($meta->{elem} eq 'number') {
+                        emit_line($out, $indent, "MatrixNumber $stmt->{name} = $expr_code;");
+                    } elsif ($meta->{elem} eq 'string') {
+                        emit_line($out, $indent, "MatrixString $stmt->{name} = $expr_code;");
+                    } else {
+                        compile_error("Unsupported matrix variable element type '$meta->{elem}'");
+                    }
                 }
             } elsif (is_matrix_member_list_type($decl_type)) {
-                emit_line($out, $indent, "MatrixNumberMemberList $stmt->{name} = $expr_code;");
+                my $meta = matrix_member_list_meta($decl_type);
+                if ($meta->{elem} eq 'number') {
+                    emit_line($out, $indent, "MatrixNumberMemberList $stmt->{name} = $expr_code;");
+                } elsif ($meta->{elem} eq 'string') {
+                    emit_line($out, $indent, "MatrixStringMemberList $stmt->{name} = $expr_code;");
+                } else {
+                    compile_error("Unsupported matrix member list type: $decl_type");
+                }
             } elsif (is_matrix_member_type($decl_type)) {
-                emit_line($out, $indent, "MatrixNumberMember $stmt->{name} = $expr_code;");
+                my $meta = matrix_member_meta($decl_type);
+                if ($meta->{elem} eq 'number') {
+                    emit_line($out, $indent, "MatrixNumberMember $stmt->{name} = $expr_code;");
+                } elsif ($meta->{elem} eq 'string') {
+                    emit_line($out, $indent, "MatrixStringMember $stmt->{name} = $expr_code;");
+                } else {
+                    compile_error("Unsupported matrix member type: $decl_type");
+                }
             } else {
                 compile_error("Unsupported let type: $decl_type");
             }
@@ -153,11 +177,32 @@ sub _compile_block_stage_decls {
             } elsif ($expr_type eq 'indexed_number_list') {
                 emit_line($out, $indent, "IndexedNumberList $stmt->{name} = $expr_code;");
             } elsif (is_matrix_type($expr_type)) {
-                emit_line($out, $indent, "MatrixNumber $stmt->{name} = $expr_code;");
+                my $meta = matrix_type_meta($expr_type);
+                if ($meta->{elem} eq 'number') {
+                    emit_line($out, $indent, "MatrixNumber $stmt->{name} = $expr_code;");
+                } elsif ($meta->{elem} eq 'string') {
+                    emit_line($out, $indent, "MatrixString $stmt->{name} = $expr_code;");
+                } else {
+                    compile_error("Unsupported matrix const expression element type '$meta->{elem}'");
+                }
             } elsif (is_matrix_member_list_type($expr_type)) {
-                emit_line($out, $indent, "MatrixNumberMemberList $stmt->{name} = $expr_code;");
+                my $meta = matrix_member_list_meta($expr_type);
+                if ($meta->{elem} eq 'number') {
+                    emit_line($out, $indent, "MatrixNumberMemberList $stmt->{name} = $expr_code;");
+                } elsif ($meta->{elem} eq 'string') {
+                    emit_line($out, $indent, "MatrixStringMemberList $stmt->{name} = $expr_code;");
+                } else {
+                    compile_error("Unsupported matrix member list expression type: $expr_type");
+                }
             } elsif (is_matrix_member_type($expr_type)) {
-                emit_line($out, $indent, "MatrixNumberMember $stmt->{name} = $expr_code;");
+                my $meta = matrix_member_meta($expr_type);
+                if ($meta->{elem} eq 'number') {
+                    emit_line($out, $indent, "MatrixNumberMember $stmt->{name} = $expr_code;");
+                } elsif ($meta->{elem} eq 'string') {
+                    emit_line($out, $indent, "MatrixStringMember $stmt->{name} = $expr_code;");
+                } else {
+                    compile_error("Unsupported matrix member expression type: $expr_type");
+                }
             } else {
                 compile_error("Unsupported const expression type for '$stmt->{name}': $expr_type");
             }
@@ -168,7 +213,7 @@ sub _compile_block_stage_decls {
             );
             if ($expr_type eq 'number'
                 && $stmt->{expr}{kind} eq 'method_call'
-                && $stmt->{expr}{method} eq 'size'
+                && ($stmt->{expr}{method} eq 'size' || $stmt->{expr}{method} eq 'count')
                 && scalar(@{ $stmt->{expr}{args} }) == 0)
             {
                 my ($size_recv_code, $size_recv_type) = compile_expr($stmt->{expr}{recv}, $ctx);
@@ -182,6 +227,118 @@ sub _compile_block_stage_decls {
                 $ctx,
                 $stmt->{name},
                 \%const_info
+            );
+            return 1;
+        }
+
+        if ($stmt->{kind} eq 'const_typed') {
+            my ($expr_code, $expr_type) = compile_expr($stmt->{expr}, $ctx);
+            my $decl_type = $stmt->{type};
+            compile_error("Type mismatch in const '$stmt->{name}': expected $decl_type, got $expr_type")
+              if !type_matches_expected($decl_type, $expr_type);
+
+            my $constraints = $stmt->{constraints} // parse_constraints(undef);
+            if (($constraints->{positive} || $constraints->{negative} || defined $constraints->{range} || $constraints->{wrap}) && $decl_type ne 'number') {
+                compile_error("Numeric constraints require number type for constant '$stmt->{name}'");
+            }
+
+            if ($decl_type eq 'number') {
+                if ($stmt->{expr}{kind} eq 'num') {
+                    my $v = int($stmt->{expr}{value});
+                    if (defined $constraints->{range} && !$constraints->{wrap}) {
+                        compile_error("range($constraints->{range}{min},$constraints->{range}{max}) constant '$stmt->{name}' initialized out of range")
+                          if $v < $constraints->{range}{min} || $v > $constraints->{range}{max};
+                    }
+                    compile_error("Constant '$stmt->{name}' requires positive value")
+                      if $constraints->{positive} && $v <= 0;
+                    compile_error("Constant '$stmt->{name}' requires negative value")
+                      if $constraints->{negative} && $v >= 0;
+                }
+
+                my $init_expr = number_like_to_c_expr($expr_code, $expr_type, "const '$stmt->{name}'");
+                if (defined $constraints->{range} && $constraints->{wrap}) {
+                    $init_expr = "metac_wrap_range($init_expr, $constraints->{range}{min}, $constraints->{range}{max})";
+                }
+                emit_line($out, $indent, "const int64_t $stmt->{name} = $init_expr;");
+            } elsif ($decl_type eq 'number_or_null') {
+                my $init_expr = number_or_null_to_c_expr($expr_code, $expr_type, "const '$stmt->{name}'");
+                emit_line($out, $indent, "const NullableNumber $stmt->{name} = $init_expr;");
+            } elsif ($decl_type eq 'indexed_number') {
+                emit_line($out, $indent, "const IndexedNumber $stmt->{name} = $expr_code;");
+            } elsif ($decl_type eq 'string') {
+                emit_line($out, $indent, 'char ' . $stmt->{name} . '[256];');
+                emit_line($out, $indent, "metac_copy_str($stmt->{name}, sizeof($stmt->{name}), $expr_code);");
+            } elsif ($decl_type eq 'bool') {
+                emit_line($out, $indent, "const int $stmt->{name} = $expr_code;");
+            } elsif ($decl_type eq 'number_list') {
+                if ($expr_type eq 'empty_list') {
+                    emit_line($out, $indent, "NumberList $stmt->{name};");
+                    emit_line($out, $indent, "$stmt->{name}.count = 0;");
+                    emit_line($out, $indent, "$stmt->{name}.items = NULL;");
+                } else {
+                    emit_line($out, $indent, "NumberList $stmt->{name} = $expr_code;");
+                }
+            } elsif ($decl_type eq 'string_list') {
+                if ($expr_type eq 'empty_list') {
+                    emit_line($out, $indent, "StringList $stmt->{name};");
+                    emit_line($out, $indent, "$stmt->{name}.count = 0;");
+                    emit_line($out, $indent, "$stmt->{name}.items = NULL;");
+                } else {
+                    emit_line($out, $indent, "StringList $stmt->{name} = $expr_code;");
+                }
+            } elsif (is_matrix_type($decl_type)) {
+                my $meta = matrix_type_meta($decl_type);
+                if ($expr_type eq 'empty_list') {
+                    my $size_expr = '((NumberList){0, NULL})';
+                    if ($meta->{has_size}) {
+                        $size_expr = "metac_number_list_from_array((int64_t[]){ " . join(', ', @{ $meta->{sizes} }) . " }, " . scalar(@{ $meta->{sizes} }) . ")";
+                    }
+                    if ($meta->{elem} eq 'number') {
+                        emit_line($out, $indent, "MatrixNumber $stmt->{name} = metac_matrix_number_new($meta->{dim}, $size_expr);");
+                    } elsif ($meta->{elem} eq 'string') {
+                        emit_line($out, $indent, "MatrixString $stmt->{name} = metac_matrix_string_new($meta->{dim}, $size_expr);");
+                    } else {
+                        compile_error("Unsupported matrix constant element type '$meta->{elem}'");
+                    }
+                } else {
+                    if ($meta->{elem} eq 'number') {
+                        emit_line($out, $indent, "MatrixNumber $stmt->{name} = $expr_code;");
+                    } elsif ($meta->{elem} eq 'string') {
+                        emit_line($out, $indent, "MatrixString $stmt->{name} = $expr_code;");
+                    } else {
+                        compile_error("Unsupported matrix constant element type '$meta->{elem}'");
+                    }
+                }
+            } elsif (is_matrix_member_list_type($decl_type)) {
+                my $meta = matrix_member_list_meta($decl_type);
+                if ($meta->{elem} eq 'number') {
+                    emit_line($out, $indent, "MatrixNumberMemberList $stmt->{name} = $expr_code;");
+                } elsif ($meta->{elem} eq 'string') {
+                    emit_line($out, $indent, "MatrixStringMemberList $stmt->{name} = $expr_code;");
+                } else {
+                    compile_error("Unsupported matrix member list const type: $decl_type");
+                }
+            } elsif (is_matrix_member_type($decl_type)) {
+                my $meta = matrix_member_meta($decl_type);
+                if ($meta->{elem} eq 'number') {
+                    emit_line($out, $indent, "MatrixNumberMember $stmt->{name} = $expr_code;");
+                } elsif ($meta->{elem} eq 'string') {
+                    emit_line($out, $indent, "MatrixStringMember $stmt->{name} = $expr_code;");
+                } else {
+                    compile_error("Unsupported matrix member const type: $decl_type");
+                }
+            } else {
+                compile_error("Unsupported const type: $decl_type");
+            }
+
+            declare_var(
+                $ctx,
+                $stmt->{name},
+                {
+                    type        => $decl_type,
+                    constraints => $constraints,
+                    immutable   => 1,
+                }
             );
             return 1;
         }
@@ -324,27 +481,37 @@ sub _compile_block_stage_decls {
 
             if ($expr->{kind} eq 'method_call' && $expr->{method} eq 'insert') {
                 my ($recv_code, $recv_type) = compile_expr($expr->{recv}, $ctx);
-                compile_error("insert(...)? receiver must be matrix(number), got $recv_type")
+                compile_error("insert(...)? receiver must be matrix(...), got $recv_type")
                   if !is_matrix_type($recv_type);
                 my $meta = matrix_type_meta($recv_type);
-                compile_error("insert(...)? is currently supported only for matrix(number)")
-                  if $meta->{elem} ne 'number';
 
                 my $actual = scalar @{ $expr->{args} };
                 compile_error("insert(...)? expects exactly 2 args: insert(value, coords)")
                   if $actual != 2;
                 my ($value_code, $value_type) = compile_expr($expr->{args}[0], $ctx);
-                my $value_num = number_like_to_c_expr($value_code, $value_type, "insert(...)?");
                 my ($coord_code, $coord_type) = compile_expr($expr->{args}[1], $ctx);
                 compile_error("insert(...)? coordinates must be number[]")
                   if $coord_type ne 'number_list';
 
                 my $tmp = '__metac_matrix_insert' . $ctx->{tmp_counter}++;
-                emit_line($out, $indent, "ResultMatrixNumber $tmp = metac_matrix_number_insert_try($recv_code, $value_num, $coord_code);");
-                emit_line($out, $indent, "if ($tmp.is_error) {");
-                emit_line($out, $indent + 2, "return err_number($tmp.message, __metac_line_no, \"\");");
-                emit_line($out, $indent, "}");
-                emit_line($out, $indent, "MatrixNumber $stmt->{name} = $tmp.value;");
+                if ($meta->{elem} eq 'number') {
+                    my $value_num = number_like_to_c_expr($value_code, $value_type, "insert(...)?");
+                    emit_line($out, $indent, "ResultMatrixNumber $tmp = metac_matrix_number_insert_try($recv_code, $value_num, $coord_code);");
+                    emit_line($out, $indent, "if ($tmp.is_error) {");
+                    emit_line($out, $indent + 2, "return err_number($tmp.message, __metac_line_no, \"\");");
+                    emit_line($out, $indent, "}");
+                    emit_line($out, $indent, "MatrixNumber $stmt->{name} = $tmp.value;");
+                } elsif ($meta->{elem} eq 'string') {
+                    compile_error("insert(...)? value must be string for matrix(string), got $value_type")
+                      if $value_type ne 'string';
+                    emit_line($out, $indent, "ResultMatrixString $tmp = metac_matrix_string_insert_try($recv_code, $value_code, $coord_code);");
+                    emit_line($out, $indent, "if ($tmp.is_error) {");
+                    emit_line($out, $indent + 2, "return err_number($tmp.message, __metac_line_no, \"\");");
+                    emit_line($out, $indent, "}");
+                    emit_line($out, $indent, "MatrixString $stmt->{name} = $tmp.value;");
+                } else {
+                    compile_error("insert(...)? is unsupported for matrix element type '$meta->{elem}'");
+                }
 
                 declare_var(
                     $ctx,

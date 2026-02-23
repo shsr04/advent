@@ -3,7 +3,15 @@ use strict;
 use warnings;
 use Exporter 'import';
 
-use MetaC::Support qw(compile_error strip_comments trim split_top_level_commas parse_constraints);
+use MetaC::Support qw(
+    compile_error
+    set_error_line
+    clear_error_line
+    strip_comments
+    trim
+    split_top_level_commas
+    parse_constraints
+);
 use MetaC::TypeSpec qw(normalize_type_annotation apply_matrix_constraints is_matrix_type);
 
 our @EXPORT_OK = qw(

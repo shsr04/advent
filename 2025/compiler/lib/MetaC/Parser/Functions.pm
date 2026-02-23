@@ -87,6 +87,7 @@ sub collect_functions {
     my $idx = 0;
 
     while ($idx < @lines) {
+        set_error_line($idx + 1);
         my $line = strip_comments($lines[$idx]);
         $line =~ s/\s+$//;
         my $trimmed = trim($line);
@@ -99,6 +100,7 @@ sub collect_functions {
         my $header = parse_function_header($trimmed);
         if (defined $header) {
             my ($name, $args, $return_type) = ($header->{name}, $header->{args}, $header->{return_type});
+            my $header_line_no = $idx + 1;
 
             compile_error("Duplicate function definition: $name") if exists $functions{$name};
 
@@ -107,6 +109,7 @@ sub collect_functions {
             $idx++;
 
             while ($idx < @lines) {
+                set_error_line($idx + 1);
                 my $body_line = strip_comments($lines[$idx]);
                 $body_line =~ s/\s+$//;
 
@@ -127,27 +130,34 @@ sub collect_functions {
             compile_error("Unterminated function body for '$name'") if $brace_depth != 0;
 
             $functions{$name} = {
-                name        => $name,
-                args        => $args,
-                return_type => $return_type,
-                body_lines  => \@body,
+                name               => $name,
+                args               => $args,
+                return_type        => $return_type,
+                header_line_no     => $header_line_no,
+                body_start_line_no => $header_line_no + 1,
+                body_lines         => \@body,
             };
 
             $idx++;
             next;
         }
 
-        compile_error("Unexpected top-level syntax on line " . ($idx + 1) . ": $trimmed");
+        compile_error("Unexpected top-level syntax: $trimmed");
     }
 
+    clear_error_line();
     return \%functions;
 }
 
 
 sub parse_function_params {
     my ($fn) = @_;
+    set_error_line($fn->{header_line_no});
     my $args = trim($fn->{args});
-    return [] if $args eq '';
+    if ($args eq '') {
+        clear_error_line();
+        return [];
+    }
 
     my $parts = split_top_level_commas($args);
     my @params;
@@ -178,6 +188,7 @@ sub parse_function_params {
         };
     }
 
+    clear_error_line();
     return \@params;
 }
 

@@ -75,45 +75,73 @@ sub compile_expr {
             compile_error("Method 'members()' expects 0 args, got $actual")
               if $actual != 0;
             my $meta = matrix_type_meta($recv_type);
-            compile_error("matrix members are currently supported only for matrix(number)")
-              if $meta->{elem} ne 'number';
-            return ("metac_matrix_number_members($recv_code)", matrix_member_list_type($recv_type));
+            if ($meta->{elem} eq 'number') {
+                return ("metac_matrix_number_members($recv_code)", matrix_member_list_type($recv_type));
+            }
+            if ($meta->{elem} eq 'string') {
+                return ("metac_matrix_string_members($recv_code)", matrix_member_list_type($recv_type));
+            }
+            compile_error("matrix members are unsupported for element type '$meta->{elem}'");
         }
 
         if (is_matrix_type($recv_type) && $method eq 'insert') {
             compile_error("Method 'insert(...)' expects 2 args, got $actual")
               if $actual != 2;
             my $meta = matrix_type_meta($recv_type);
-            compile_error("matrix insert is currently supported only for matrix(number)")
-              if $meta->{elem} ne 'number';
 
             my ($value_code, $value_type) = compile_expr($expr->{args}[0], $ctx);
-            my $value_num = number_like_to_c_expr($value_code, $value_type, "Method 'insert(...)'");
             my ($coord_code, $coord_type) = compile_expr($expr->{args}[1], $ctx);
             compile_error("Method 'insert(...)' requires number[] coordinates, got $coord_type")
               if $coord_type ne 'number_list';
 
-            return ("metac_matrix_number_insert_or_die($recv_code, $value_num, $coord_code)", $recv_type);
+            if ($meta->{elem} eq 'number') {
+                my $value_num = number_like_to_c_expr($value_code, $value_type, "Method 'insert(...)'");
+                return ("metac_matrix_number_insert_or_die($recv_code, $value_num, $coord_code)", $recv_type);
+            }
+            if ($meta->{elem} eq 'string') {
+                compile_error("Method 'insert(...)' on matrix(string) expects string value, got $value_type")
+                  if $value_type ne 'string';
+                return ("metac_matrix_string_insert_or_die($recv_code, $value_code, $coord_code)", $recv_type);
+            }
+            compile_error("matrix insert is unsupported for element type '$meta->{elem}'");
         }
 
         if (is_matrix_type($recv_type) && $method eq 'neighbours') {
             compile_error("Method 'neighbours(...)' expects 1 arg, got $actual")
               if $actual != 1;
             my $meta = matrix_type_meta($recv_type);
-            compile_error("matrix neighbours are currently supported only for matrix(number)")
-              if $meta->{elem} ne 'number';
 
             my ($coord_code, $coord_type) = compile_expr($expr->{args}[0], $ctx);
             compile_error("Method 'neighbours(...)' requires number[] coordinates, got $coord_type")
               if $coord_type ne 'number_list';
 
-            return ("metac_matrix_number_neighbours($recv_code, $coord_code)", matrix_neighbor_list_type($recv_type));
+            if ($meta->{elem} eq 'number') {
+                return ("metac_matrix_number_neighbours($recv_code, $coord_code)", matrix_neighbor_list_type($recv_type));
+            }
+            if ($meta->{elem} eq 'string') {
+                return ("metac_matrix_string_neighbours($recv_code, $coord_code)", matrix_neighbor_list_type($recv_type));
+            }
+            compile_error("matrix neighbours are unsupported for element type '$meta->{elem}'");
         }
 
         if (is_matrix_member_type($recv_type) && $method eq 'index') {
             compile_error("Method 'index()' expects 0 args, got $actual")
               if $actual != 0;
             return ("(($recv_code).index)", 'number_list');
+        }
+
+        if (is_matrix_member_type($recv_type) && $method eq 'neighbours') {
+            compile_error("Method 'neighbours()' expects 0 args, got $actual")
+              if $actual != 0;
+            my $meta = matrix_member_meta($recv_type);
+
+            if ($meta->{elem} eq 'number') {
+                return ("metac_matrix_number_neighbours(($recv_code).matrix, ($recv_code).index)", 'number_list');
+            }
+            if ($meta->{elem} eq 'string') {
+                return ("metac_matrix_string_neighbours(($recv_code).matrix, ($recv_code).index)", 'string_list');
+            }
+            compile_error("Method 'neighbours()' is unsupported for matrix element type '$meta->{elem}'");
         }
 
         if ($recv_type eq 'string' && $method eq 'size') {
@@ -136,15 +164,47 @@ sub compile_expr {
             return ("metac_chars_string($recv_code)", 'string_list');
         }
 
-        if (($recv_type eq 'string_list' || $recv_type eq 'number_list' || $recv_type eq 'indexed_number_list') && $method eq 'size') {
-            compile_error("Method 'size()' expects 0 args, got $actual")
+        if (($recv_type eq 'string_list' || $recv_type eq 'number_list' || $recv_type eq 'indexed_number_list')
+            && ($method eq 'size' || $method eq 'count'))
+        {
+            compile_error("Method '$method()' expects 0 args, got $actual")
               if $actual != 0;
             return ("((int64_t)$recv_code.count)", 'number');
         }
-        if (is_matrix_member_list_type($recv_type) && $method eq 'size') {
-            compile_error("Method 'size()' expects 0 args, got $actual")
+        if (is_matrix_member_list_type($recv_type) && ($method eq 'size' || $method eq 'count')) {
+            compile_error("Method '$method()' expects 0 args, got $actual")
               if $actual != 0;
             return ("((int64_t)$recv_code.count)", 'number');
+        }
+
+        if (($recv_type eq 'string_list' || $recv_type eq 'number_list' || is_matrix_member_list_type($recv_type))
+            && $method eq 'filter')
+        {
+            compile_error("Method 'filter(...)' expects 1 arg, got $actual")
+              if $actual != 1;
+            my $predicate = $expr->{args}[0];
+            compile_error("filter(...) predicate must be a single-parameter lambda, e.g. x => x > 0")
+              if $predicate->{kind} ne 'lambda1';
+            $ctx->{helper_defs} = [] if !defined $ctx->{helper_defs};
+            my $helper_name = compile_filter_lambda_helper(
+                lambda    => $predicate,
+                recv_type => $recv_type,
+                ctx       => $ctx,
+            );
+            if ($recv_type eq 'string_list') {
+                return ("metac_filter_string_list($recv_code, $helper_name)", 'string_list');
+            }
+            if ($recv_type eq 'number_list') {
+                return ("metac_filter_number_list($recv_code, $helper_name)", 'number_list');
+            }
+            my $member_meta = matrix_member_list_meta($recv_type);
+            if ($member_meta->{elem} eq 'number') {
+                return ("metac_filter_matrix_number_member_list($recv_code, $helper_name)", $recv_type);
+            }
+            if ($member_meta->{elem} eq 'string') {
+                return ("metac_filter_matrix_string_member_list($recv_code, $helper_name)", $recv_type);
+            }
+            compile_error("Method 'filter(...)' is unsupported for matrix member element type '$member_meta->{elem}'");
         }
 
         if (($recv_type eq 'string_list' || $recv_type eq 'number_list') && $method eq 'slice') {
@@ -226,7 +286,10 @@ sub compile_expr {
                 return ("metac_log_indexed_number_list($recv_code)", 'indexed_number_list');
             }
             if (is_matrix_type($recv_type)) {
-                return ("metac_log_matrix_number($recv_code)", $recv_type);
+                my $meta = matrix_type_meta($recv_type);
+                return ("metac_log_matrix_number($recv_code)", $recv_type) if $meta->{elem} eq 'number';
+                return ("metac_log_matrix_string($recv_code)", $recv_type) if $meta->{elem} eq 'string';
+                compile_error("Method 'log()' is unsupported for matrix element type '$meta->{elem}'");
             }
         }
 
@@ -321,7 +384,10 @@ sub compile_expr {
                     return ("metac_log_indexed_number_list($arg_code)", 'indexed_number_list');
                 }
                 if (is_matrix_type($arg_type)) {
-                    return ("metac_log_matrix_number($arg_code)", $arg_type);
+                    my $meta = matrix_type_meta($arg_type);
+                    return ("metac_log_matrix_number($arg_code)", $arg_type) if $meta->{elem} eq 'number';
+                    return ("metac_log_matrix_string($arg_code)", $arg_type) if $meta->{elem} eq 'string';
+                    compile_error("Builtin 'log' does not support matrix element type '$meta->{elem}'");
                 }
                 compile_error("Builtin 'log' does not support argument type '$arg_type'");
             }
@@ -389,6 +455,12 @@ sub compile_expr {
 
         if ($expr->{op} eq '==' || $expr->{op} eq '!=') {
             my $op = $expr->{op};
+            my $l_is_string_like = $l_type eq 'string'
+              || (is_matrix_member_type($l_type) && matrix_member_meta($l_type)->{elem} eq 'string');
+            my $r_is_string_like = $r_type eq 'string'
+              || (is_matrix_member_type($r_type) && matrix_member_meta($r_type)->{elem} eq 'string');
+            my $l_string_code = $l_type eq 'string' ? $l_code : "(($l_code).value)";
+            my $r_string_code = $r_type eq 'string' ? $r_code : "(($r_code).value)";
             if (($l_type eq 'number_or_null' && $r_type eq 'null') || ($l_type eq 'null' && $r_type eq 'number_or_null')) {
                 my $nullable_code = $l_type eq 'number_or_null' ? $l_code : $r_code;
                 if ($op eq '==') {
@@ -420,6 +492,10 @@ sub compile_expr {
                 my $r_num = number_like_to_c_expr($r_code, $r_type, "Operator '$op'");
                 return ("($l_num $op $r_num)", 'bool');
             }
+            if ($l_is_string_like && $r_is_string_like) {
+                return ("metac_streq($l_string_code, $r_string_code)", 'bool') if $op eq '==';
+                return ("(!metac_streq($l_string_code, $r_string_code))", 'bool');
+            }
             compile_error("Type mismatch in '$op': $l_type vs $r_type") if $l_type ne $r_type;
             return ("($l_code $op $r_code)", 'bool') if $l_type eq 'bool';
             if ($l_type eq 'string') {
@@ -445,12 +521,14 @@ sub compile_block {
     my ($stmts, $ctx, $out, $indent, $current_fn_return) = @_;
 
     for my $stmt (@$stmts) {
+        set_error_line($stmt->{line});
         next if _compile_block_stage_decls($stmt, $ctx, $out, $indent, $current_fn_return);
         next if _compile_block_stage_try($stmt, $ctx, $out, $indent, $current_fn_return);
         next if _compile_block_stage_assign_loops($stmt, $ctx, $out, $indent, $current_fn_return);
         next if _compile_block_stage_control($stmt, $ctx, $out, $indent, $current_fn_return);
         compile_error("Unsupported statement kind: $stmt->{kind}");
     }
+    clear_error_line();
 }
 
 

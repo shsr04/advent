@@ -100,85 +100,38 @@ sub emit_filter_assignment {
     my $ctx = $args{ctx};
     my $out = $args{out};
     my $indent = $args{indent};
-    my $propagate_errors = $args{propagate_errors} ? 1 : 0;
 
     my ($recv_code, $recv_type) = compile_expr($expr->{recv}, $ctx);
-    compile_error("filter(...) receiver must be string_list or number_list, got $recv_type")
-      if $recv_type ne 'string_list' && $recv_type ne 'number_list';
+    compile_error("filter(...) receiver must be string_list, number_list, or matrix member list, got $recv_type")
+      if $recv_type ne 'string_list'
+      && $recv_type ne 'number_list'
+      && !is_matrix_member_list_type($recv_type);
     my $actual = scalar @{ $expr->{args} };
     compile_error("filter(...) expects exactly 1 predicate arg")
       if $actual != 1;
     my $predicate = $expr->{args}[0];
     compile_error("filter(...) predicate must be a single-parameter lambda, e.g. x => x > 0")
       if $predicate->{kind} ne 'lambda1';
-
-    my $source = '__metac_filter_src' . $ctx->{tmp_counter}++;
-    my $count = '__metac_filter_count' . $ctx->{tmp_counter}++;
-    my $idx = '__metac_filter_i' . $ctx->{tmp_counter}++;
-    my $out_count = '__metac_filter_out_count' . $ctx->{tmp_counter}++;
-
-    my $elem_type = $recv_type eq 'string_list' ? 'string' : 'number';
-    my $elem_expr = $source . ".items[$idx]";
-    my ($pred_code, $pred_type);
-    new_scope($ctx);
-    declare_var(
-        $ctx,
-        $predicate->{param},
-        {
-            type      => $elem_type,
-            immutable => 1,
-            c_name    => $elem_expr,
-        }
+    $ctx->{helper_defs} = [] if !defined $ctx->{helper_defs};
+    my $helper_name = compile_filter_lambda_helper(
+        lambda    => $predicate,
+        recv_type => $recv_type,
+        ctx       => $ctx,
     );
-    ($pred_code, $pred_type) = compile_expr($predicate->{body}, $ctx);
-    pop_scope($ctx);
-    compile_error("filter(...) predicate must evaluate to bool")
-      if $pred_type ne 'bool';
 
     if ($recv_type eq 'string_list') {
-        my $out_items = '__metac_filter_items' . $ctx->{tmp_counter}++;
-        emit_line($out, $indent, "StringList $source = $recv_code;");
-        emit_line($out, $indent, "size_t $count = $source.count;");
-        emit_line($out, $indent, "char **$out_items = (char **)calloc($count == 0 ? 1 : $count, sizeof(char *));");
-        emit_line($out, $indent, "if ($out_items == NULL) {");
-        if ($propagate_errors) {
-            emit_line($out, $indent + 2, "return err_number(\"out of memory in filter\", __metac_line_no, \"\");");
-        } else {
-            emit_line($out, $indent + 2, "fprintf(stderr, \"out of memory in filter\\n\");");
-            emit_line($out, $indent + 2, "exit(1);");
-        }
-        emit_line($out, $indent, "}");
-        emit_line($out, $indent, "size_t $out_count = 0;");
-        emit_line($out, $indent, "for (size_t $idx = 0; $idx < $count; $idx++) {");
-        emit_line($out, $indent + 2, "if ($pred_code) {");
-        emit_line($out, $indent + 4, "${out_items}[$out_count++] = $source.items[$idx];");
-        emit_line($out, $indent + 2, "}");
-        emit_line($out, $indent, "}");
-        emit_line($out, $indent, "StringList $name;");
-        emit_line($out, $indent, "$name.count = $out_count;");
-        emit_line($out, $indent, "$name.items = $out_items;");
+        emit_line($out, $indent, "StringList $name = metac_filter_string_list($recv_code, $helper_name);");
+    } elsif ($recv_type eq 'number_list') {
+        emit_line($out, $indent, "NumberList $name = metac_filter_number_list($recv_code, $helper_name);");
     } else {
-        my $out_items = '__metac_filter_items' . $ctx->{tmp_counter}++;
-        emit_line($out, $indent, "NumberList $source = $recv_code;");
-        emit_line($out, $indent, "size_t $count = $source.count;");
-        emit_line($out, $indent, "int64_t *$out_items = (int64_t *)calloc($count == 0 ? 1 : $count, sizeof(int64_t));");
-        emit_line($out, $indent, "if ($out_items == NULL) {");
-        if ($propagate_errors) {
-            emit_line($out, $indent + 2, "return err_number(\"out of memory in filter\", __metac_line_no, \"\");");
+        my $member_meta = matrix_member_list_meta($recv_type);
+        if ($member_meta->{elem} eq 'number') {
+            emit_line($out, $indent, "MatrixNumberMemberList $name = metac_filter_matrix_number_member_list($recv_code, $helper_name);");
+        } elsif ($member_meta->{elem} eq 'string') {
+            emit_line($out, $indent, "MatrixStringMemberList $name = metac_filter_matrix_string_member_list($recv_code, $helper_name);");
         } else {
-            emit_line($out, $indent + 2, "fprintf(stderr, \"out of memory in filter\\n\");");
-            emit_line($out, $indent + 2, "exit(1);");
+            compile_error("filter(...) is unsupported for matrix member element type '$member_meta->{elem}'");
         }
-        emit_line($out, $indent, "}");
-        emit_line($out, $indent, "size_t $out_count = 0;");
-        emit_line($out, $indent, "for (size_t $idx = 0; $idx < $count; $idx++) {");
-        emit_line($out, $indent + 2, "if ($pred_code) {");
-        emit_line($out, $indent + 4, "${out_items}[$out_count++] = $source.items[$idx];");
-        emit_line($out, $indent + 2, "}");
-        emit_line($out, $indent, "}");
-        emit_line($out, $indent, "NumberList $name;");
-        emit_line($out, $indent, "$name.count = $out_count;");
-        emit_line($out, $indent, "$name.items = $out_items;");
     }
 
     declare_var(

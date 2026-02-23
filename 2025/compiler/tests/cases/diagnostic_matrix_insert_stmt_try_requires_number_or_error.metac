@@ -1,0 +1,9 @@
+function main() {
+  printf("Result: %d\n", run())
+}
+
+function run(): number {
+  let grid: matrix(number) with dim(2) = []
+  grid.insert(1, [0, 0])?
+  return 0
+}

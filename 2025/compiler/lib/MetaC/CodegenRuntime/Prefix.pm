@@ -65,6 +65,7 @@ typedef struct {
 } MatrixNumber;
 
 typedef struct {
+  MatrixNumber matrix;
   int64_t value;
   NumberList index;
 } MatrixNumberMember;
@@ -79,6 +80,33 @@ typedef struct {
   MatrixNumber value;
   char message[160];
 } ResultMatrixNumber;
+
+typedef struct {
+  int64_t dimensions;
+  int has_size_spec;
+  int64_t *size_spec;
+  size_t entry_count;
+  size_t entry_cap;
+  int64_t *coords;
+  char **values;
+} MatrixString;
+
+typedef struct {
+  int is_error;
+  MatrixString value;
+  char message[160];
+} ResultMatrixString;
+
+typedef struct {
+  MatrixString matrix;
+  const char *value;
+  NumberList index;
+} MatrixStringMember;
+
+typedef struct {
+  size_t count;
+  MatrixStringMember *items;
+} MatrixStringMemberList;
 C_RUNTIME_PREFIX
 }
 

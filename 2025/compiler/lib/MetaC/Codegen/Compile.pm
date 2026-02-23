@@ -106,7 +106,14 @@ sub emit_param_bindings {
         }
 
         if (is_matrix_type($param->{type})) {
-            emit_line($out, $indent, "const MatrixNumber $name = $in_name;");
+            my $meta = matrix_type_meta($param->{type});
+            if ($meta->{elem} eq 'number') {
+                emit_line($out, $indent, "const MatrixNumber $name = $in_name;");
+            } elsif ($meta->{elem} eq 'string') {
+                emit_line($out, $indent, "const MatrixString $name = $in_name;");
+            } else {
+                compile_error("Unsupported matrix parameter element type '$meta->{elem}'");
+            }
             declare_var(
                 $ctx,
                 $name,

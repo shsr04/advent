@@ -313,6 +313,13 @@ sub parse_expr {
                             };
                         }
                     }
+                } elsif ($accept_op->(')') && $accept_op->('=>')) {
+                    my $body = $parse_lambda->();
+                    return {
+                        kind  => 'lambda1',
+                        param => $param1,
+                        body  => $body,
+                    };
                 }
             }
             $idx = $save_idx;

@@ -23,9 +23,9 @@ sub param_c_type {
     return 'const char *' if $param->{type} eq 'string';
     if (is_matrix_type($param->{type})) {
         my $meta = matrix_type_meta($param->{type});
-        compile_error("Unsupported matrix parameter element type '$meta->{elem}'")
-          if $meta->{elem} ne 'number';
-        return 'MatrixNumber';
+        return 'MatrixNumber' if $meta->{elem} eq 'number';
+        return 'MatrixString' if $meta->{elem} eq 'string';
+        compile_error("Unsupported matrix parameter element type '$meta->{elem}'");
     }
     compile_error("Unsupported parameter type: $param->{type}");
 }

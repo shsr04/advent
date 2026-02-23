@@ -147,6 +147,113 @@ static int64_t metac_reduce_string_list(StringList list, int64_t initial, int64_
   return acc;
 }
 
+static NumberList metac_filter_number_list(NumberList list, int (*predicate)(int64_t)) {
+  NumberList out;
+  out.count = 0;
+  out.items = NULL;
+  if (list.count == 0 || list.items == NULL) {
+    return out;
+  }
+
+  int64_t *items = (int64_t *)calloc(list.count == 0 ? 1 : list.count, sizeof(int64_t));
+  if (items == NULL) {
+    return out;
+  }
+
+  size_t out_count = 0;
+  for (size_t i = 0; i < list.count; i++) {
+    if (predicate == NULL || predicate(list.items[i])) {
+      items[out_count++] = list.items[i];
+    }
+  }
+  out.count = out_count;
+  out.items = items;
+  return out;
+}
+
+static StringList metac_filter_string_list(StringList list, int (*predicate)(const char *)) {
+  StringList out;
+  out.count = 0;
+  out.items = NULL;
+  if (list.count == 0 || list.items == NULL) {
+    return out;
+  }
+
+  char **items = (char **)calloc(list.count == 0 ? 1 : list.count, sizeof(char *));
+  if (items == NULL) {
+    return out;
+  }
+
+  size_t out_count = 0;
+  for (size_t i = 0; i < list.count; i++) {
+    const char *item = list.items[i] == NULL ? "" : list.items[i];
+    if (predicate == NULL || predicate(item)) {
+      items[out_count++] = (char *)item;
+    }
+  }
+  out.count = out_count;
+  out.items = items;
+  return out;
+}
+
+static MatrixNumberMemberList metac_filter_matrix_number_member_list(
+    MatrixNumberMemberList list,
+    int (*predicate)(MatrixNumberMember)
+) {
+  MatrixNumberMemberList out;
+  out.count = 0;
+  out.items = NULL;
+  if (list.count == 0 || list.items == NULL) {
+    return out;
+  }
+
+  MatrixNumberMember *items =
+      (MatrixNumberMember *)calloc(list.count == 0 ? 1 : list.count, sizeof(MatrixNumberMember));
+  if (items == NULL) {
+    return out;
+  }
+
+  size_t out_count = 0;
+  for (size_t i = 0; i < list.count; i++) {
+    MatrixNumberMember item = list.items[i];
+    if (predicate == NULL || predicate(item)) {
+      items[out_count++] = item;
+    }
+  }
+  out.count = out_count;
+  out.items = items;
+  return out;
+}
+
+static MatrixStringMemberList metac_filter_matrix_string_member_list(
+    MatrixStringMemberList list,
+    int (*predicate)(MatrixStringMember)
+) {
+  MatrixStringMemberList out;
+  out.count = 0;
+  out.items = NULL;
+  if (list.count == 0 || list.items == NULL) {
+    return out;
+  }
+
+  MatrixStringMember *items =
+      (MatrixStringMember *)calloc(list.count == 0 ? 1 : list.count, sizeof(MatrixStringMember));
+  if (items == NULL) {
+    return out;
+  }
+
+  size_t out_count = 0;
+  for (size_t i = 0; i < list.count; i++) {
+    MatrixStringMember item = list.items[i];
+    if (predicate == NULL || predicate(item)) {
+      items[out_count++] = item;
+    }
+  }
+  out.count = out_count;
+  out.items = items;
+  return out;
+}
+
 static int64_t metac_number_list_push(NumberList *list, int64_t value) {
   if (list == NULL) {
     fprintf(stderr, "push on null number list\n");

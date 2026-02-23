@@ -1,0 +1,11 @@
+function main() {
+  printf("Result: %d\n", run() or (e) => {
+    printf("Error! %s\n", e.message)
+    return 1
+  })
+}
+
+function run(): number | error {
+  max(1, 2)?
+  return 0
+}

@@ -1,0 +1,18 @@
+function main() {
+  printf("Result: %d\n", run() or (e) => {
+    printf("Error! %s\n", e.message)
+    return 1
+  })
+}
+
+function run(): number | error {
+  let grid: matrix(string) with dim(2), matrixSize([2, 2]) = []
+  grid.insert("@", [0, 0])
+  grid.insert(".", [0, 1])
+  grid.insert("@", [1, 0])
+  grid.insert(".", [1, 1])
+
+  const marked = grid.members().filter((x) => x == "@")
+  const sparse = marked.filter((cell) => cell.neighbours().filter((n) => n == "@").count() < 2)
+  return sparse.count()
+}

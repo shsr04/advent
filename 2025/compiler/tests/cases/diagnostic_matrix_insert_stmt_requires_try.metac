@@ -1,0 +1,12 @@
+function main() {
+  printf("Result: %d\n", run() or (e) => {
+    printf("Error! %s\n", e.message)
+    return 1
+  })
+}
+
+function run(): number | error {
+  let grid: matrix(number) with dim(2) = []
+  grid.insert(1, [0, 0])
+  return 0
+}

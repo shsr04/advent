@@ -58,7 +58,10 @@ sub expr_ast_equal {
 
 sub expr_is_size_of_container {
     my ($expr, $recv_code, $recv_type, $ctx) = @_;
-    if ($expr->{kind} eq 'method_call' && $expr->{method} eq 'size' && scalar(@{ $expr->{args} }) == 0) {
+    if ($expr->{kind} eq 'method_call'
+        && ($expr->{method} eq 'size' || $expr->{method} eq 'count')
+        && scalar(@{ $expr->{args} }) == 0)
+    {
         my ($inner_code, $inner_type) = compile_expr($expr->{recv}, $ctx);
         return 0 if $inner_type ne $recv_type;
         return $inner_code eq $recv_code;
@@ -96,7 +99,10 @@ sub prove_non_negative_expr {
         return 0 if !defined $info->{range_min_expr};
         return prove_non_negative_expr($info->{range_min_expr}, $ctx);
     }
-    if ($expr->{kind} eq 'method_call' && $expr->{method} eq 'size' && scalar(@{ $expr->{args} }) == 0) {
+    if ($expr->{kind} eq 'method_call'
+        && ($expr->{method} eq 'size' || $expr->{method} eq 'count')
+        && scalar(@{ $expr->{args} }) == 0)
+    {
         my (undef, $recv_type) = compile_expr($expr->{recv}, $ctx);
         return 1 if $recv_type eq 'string' || $recv_type eq 'string_list' || $recv_type eq 'number_list' || $recv_type eq 'indexed_number_list';
         return 0;
@@ -177,6 +183,7 @@ sub decompose_iterable_expression {
 
     return {
         kind       => 'list',
+        base_expr  => $base,
         base_code  => $base_code,
         base_type  => $base_type,
         predicates => \@predicates,
@@ -266,7 +273,14 @@ sub emit_for_each_from_iterable_expr {
     } elsif ($iter->{base_type} eq 'indexed_number_list') {
         emit_line($out, $indent, "IndexedNumberList $container = $iter->{base_code};");
     } elsif (is_matrix_member_list_type($iter->{base_type})) {
-        emit_line($out, $indent, "MatrixNumberMemberList $container = $iter->{base_code};");
+        my $member_meta = matrix_member_list_meta($iter->{base_type});
+        if ($member_meta->{elem} eq 'number') {
+            emit_line($out, $indent, "MatrixNumberMemberList $container = $iter->{base_code};");
+        } elsif ($member_meta->{elem} eq 'string') {
+            emit_line($out, $indent, "MatrixStringMemberList $container = $iter->{base_code};");
+        } else {
+            compile_error("Unsupported matrix member list iterable type '$iter->{base_type}'");
+        }
     } else {
         emit_line($out, $indent, "NumberList $container = $iter->{base_code};");
     }
@@ -282,6 +296,17 @@ sub emit_for_each_from_iterable_expr {
         $elem_type = "matrix_member<$member_meta->{elem};d=$member_meta->{dim}>";
     }
     my $elem_expr = "$container.items[$idx_name]";
+    my ($member_matrix_code, $member_matrix_type);
+    if (is_matrix_member_list_type($iter->{base_type})
+        && $iter->{base_expr}{kind} eq 'method_call'
+        && $iter->{base_expr}{method} eq 'members')
+    {
+        my ($src_code, $src_type) = compile_expr($iter->{base_expr}{recv}, $ctx);
+        if (is_matrix_type($src_type)) {
+            $member_matrix_code = $src_code;
+            $member_matrix_type = $src_type;
+        }
+    }
     my $pred_codes = compile_filter_predicate_codes(
         predicates  => $iter->{predicates},
         param_type  => $elem_type,
@@ -304,6 +329,8 @@ sub emit_for_each_from_iterable_expr {
         var_type          => $elem_type,
         var_c_expr        => $elem_expr,
         var_index_c_expr  => "((int64_t)$idx_name)",
+        member_matrix_code => $member_matrix_code,
+        member_matrix_type => $member_matrix_type,
     );
     emit_line($out, $indent, "}");
 }

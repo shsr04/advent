@@ -3,7 +3,15 @@ use strict;
 use warnings;
 use Exporter 'import';
 
-use MetaC::Support qw(compile_error c_escape_string parse_constraints emit_line trim);
+use MetaC::Support qw(
+    compile_error
+    set_error_line
+    clear_error_line
+    c_escape_string
+    parse_constraints
+    emit_line
+    trim
+);
 use MetaC::Parser qw(collect_functions parse_function_params parse_capture_groups infer_group_type parse_function_body parse_expr);
 use MetaC::CodegenType qw(
     param_c_type

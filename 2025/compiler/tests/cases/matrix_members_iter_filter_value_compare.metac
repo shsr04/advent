@@ -1,0 +1,20 @@
+function main() {
+  printf("Result: %d\n", run() or (e) => {
+    printf("Error! %s\n", e.message)
+    return 1
+  })
+}
+
+function run(): number | error {
+  let grid: matrix(string) with dim(2), matrixSize([2, 2]) = []
+  grid.insert("@", [0, 0])
+  grid.insert(".", [0, 1])
+  grid.insert("@", [1, 0])
+  grid.insert(".", [1, 1])
+
+  let count = 0
+  for const cell in grid.members().filter((x) => x == "@") {
+    count++
+  }
+  return count
+}

@@ -1,0 +1,28 @@
+function main() {
+  printf("Result: %d\n", findAccessible() or (e) => {
+    printf("Error! %s\n", e.message)
+    return 1
+  })
+}
+
+function findAccessible(): number|error {
+  const rows = split(STDIN, "\n")?
+  
+  let grid: matrix(string) with dim(2) = []
+    
+  for const row in rows {
+    for const cell in row.chars() {
+      grid.insert(cell, [row.index(), cell.index()])?
+    }
+  }
+  
+  let accessible = 0
+  for const cell in grid.members().filter((x) => x == "@") {
+      const adj = cell.neighbours()
+        .filter((x) => x == "@")
+        .count()
+      if adj < 4 { accessible++ }
+  }
+  
+  return accessible
+}

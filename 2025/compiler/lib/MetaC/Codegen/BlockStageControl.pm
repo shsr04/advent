@@ -112,8 +112,132 @@ sub _compile_block_stage_control {
         }
 
         if ($stmt->{kind} eq 'expr_stmt') {
+            my $expr = $stmt->{expr};
+            if ($expr->{kind} eq 'method_call' && $expr->{method} eq 'insert' && $expr->{recv}{kind} eq 'ident') {
+                my $recv_name = $expr->{recv}{name};
+                my $recv_info = lookup_var($ctx, $recv_name);
+                compile_error("Unknown variable: $recv_name")
+                  if !defined $recv_info;
+                compile_error("Cannot mutate immutable variable '$recv_name'")
+                  if $recv_info->{immutable};
+
+                my $recv_type = $recv_info->{type};
+                compile_error("Method 'insert(...)' statement receiver must be matrix(...), got $recv_type")
+                  if !is_matrix_type($recv_type);
+                my $meta = matrix_type_meta($recv_type);
+
+                my $actual = scalar @{ $expr->{args} };
+                compile_error("Method 'insert(...)' expects 2 args, got $actual")
+                  if $actual != 2;
+
+                my ($value_code, $value_type) = compile_expr($expr->{args}[0], $ctx);
+                my ($coord_code, $coord_type) = compile_expr($expr->{args}[1], $ctx);
+                compile_error("Method 'insert(...)' requires number[] coordinates, got $coord_type")
+                  if $coord_type ne 'number_list';
+                compile_error("Method 'insert(...)' is fallible on unconstrained matrix; handle it with '?'")
+                  if !$meta->{has_size};
+
+                my $target = $recv_info->{c_name};
+                my ($insert_die, $value_arg);
+                if ($meta->{elem} eq 'number') {
+                    $insert_die = 'metac_matrix_number_insert_or_die';
+                    $value_arg = number_like_to_c_expr($value_code, $value_type, "Method 'insert(...)' statement form");
+                } elsif ($meta->{elem} eq 'string') {
+                    compile_error("Method 'insert(...)' on matrix(string) expects string value, got $value_type")
+                      if $value_type ne 'string';
+                    $insert_die = 'metac_matrix_string_insert_or_die';
+                    $value_arg = $value_code;
+                } else {
+                    compile_error("matrix insert statement form is unsupported for element type '$meta->{elem}'");
+                }
+
+                emit_line($out, $indent, "$target = $insert_die($target, $value_arg, $coord_code);");
+                return 1;
+            }
+
             my ($expr_code, undef) = compile_expr($stmt->{expr}, $ctx);
             emit_line($out, $indent, "(void)($expr_code);");
+            return 1;
+        }
+
+        if ($stmt->{kind} eq 'expr_stmt_try') {
+            compile_error("try expression statement with '?' is currently only supported in number | error functions")
+              if $current_fn_return ne 'number_or_error';
+
+            my $expr = $stmt->{expr};
+            if ($expr->{kind} eq 'method_call'
+                && $expr->{method} eq 'insert'
+                && $expr->{recv}{kind} eq 'ident')
+            {
+                my $recv_name = $expr->{recv}{name};
+                my $recv_info = lookup_var($ctx, $recv_name);
+                compile_error("Unknown variable: $recv_name")
+                  if !defined $recv_info;
+                compile_error("Cannot mutate immutable variable '$recv_name'")
+                  if $recv_info->{immutable};
+
+                my $recv_type = $recv_info->{type};
+                compile_error("Method 'insert(...)' statement receiver must be matrix(...), got $recv_type")
+                  if !is_matrix_type($recv_type);
+                my $meta = matrix_type_meta($recv_type);
+
+                my $actual = scalar @{ $expr->{args} };
+                compile_error("Method 'insert(...)' expects 2 args, got $actual")
+                  if $actual != 2;
+
+                my ($value_code, $value_type) = compile_expr($expr->{args}[0], $ctx);
+                my ($coord_code, $coord_type) = compile_expr($expr->{args}[1], $ctx);
+                compile_error("Method 'insert(...)' requires number[] coordinates, got $coord_type")
+                  if $coord_type ne 'number_list';
+
+                my $target = $recv_info->{c_name};
+                my ($result_type, $insert_try, $value_arg);
+                if ($meta->{elem} eq 'number') {
+                    $result_type = 'ResultMatrixNumber';
+                    $insert_try = 'metac_matrix_number_insert_try';
+                    $value_arg = number_like_to_c_expr($value_code, $value_type, "Method 'insert(...)' statement try-form");
+                } elsif ($meta->{elem} eq 'string') {
+                    compile_error("Method 'insert(...)' on matrix(string) expects string value, got $value_type")
+                      if $value_type ne 'string';
+                    $result_type = 'ResultMatrixString';
+                    $insert_try = 'metac_matrix_string_insert_try';
+                    $value_arg = $value_code;
+                } else {
+                    compile_error("matrix insert statement try-form is unsupported for element type '$meta->{elem}'");
+                }
+
+                my $tmp = '__metac_matrix_insert' . $ctx->{tmp_counter}++;
+                emit_line($out, $indent, "$result_type $tmp = $insert_try($target, $value_arg, $coord_code);");
+                emit_line($out, $indent, "if ($tmp.is_error) {");
+                emit_line($out, $indent + 2, "return err_number($tmp.message, __metac_line_no, \"\");");
+                emit_line($out, $indent, "}");
+                emit_line($out, $indent, "$target = $tmp.value;");
+                return 1;
+            }
+
+            # Reuse the existing try-expression assignment lowering for all other fallible forms.
+            my $supported_stmt_try = 0;
+            if ($expr->{kind} eq 'call' && ($expr->{name} eq 'split' || $expr->{name} eq 'parseNumber')) {
+                $supported_stmt_try = 1;
+            } elsif ($expr->{kind} eq 'method_call'
+                && ($expr->{method} eq 'map' || $expr->{method} eq 'filter' || $expr->{method} eq 'assert'))
+            {
+                $supported_stmt_try = 1;
+            }
+            compile_error("Unsupported try expression in statement context")
+              if !$supported_stmt_try;
+
+            # Reuse existing const_try_expr lowering for supported non-mutating try-forms.
+            my $tmp_name = '__metac_stmt_try' . $ctx->{tmp_counter}++;
+            my $tmp_stmt = {
+                kind => 'const_try_expr',
+                name => $tmp_name,
+                expr => $expr,
+                line => $stmt->{line},
+            };
+            new_scope($ctx);
+            compile_block([ $tmp_stmt ], $ctx, $out, $indent, $current_fn_return);
+            pop_scope($ctx);
             return 1;
         }
 

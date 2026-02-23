@@ -1,0 +1,24 @@
+function main() {
+  printf("Result: %d\n", run() or (e) => {
+    printf("Error! %s\n", e.message)
+    return 1
+  })
+}
+
+function run(): number | error {
+  let grid: matrix(string) with dim(2), matrixSize([3, 3]) = []
+  grid.insert("@", [1, 1])
+  grid.insert("@", [1, 2])
+  grid.insert("@", [2, 1])
+  grid.insert(".", [0, 0])
+
+  let marked = 0
+  for const cell in grid.members() {
+    const around = cell.neighbours().filter((x) => x == "@").count()
+    if around >= 1 {
+      marked++
+    }
+  }
+
+  return marked
+}

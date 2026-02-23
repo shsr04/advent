@@ -64,6 +64,76 @@ sub compile_reduce_lambda_helper {
     return $helper_name;
 }
 
+sub compile_filter_lambda_helper {
+    my (%args) = @_;
+    my $lambda = $args{lambda};
+    my $recv_type = $args{recv_type};
+    my $ctx = $args{ctx};
+
+    compile_error("filter(...) argument must be a single-parameter lambda, e.g. x => x > 0")
+      if $lambda->{kind} ne 'lambda1';
+
+    my ($item_type, $item_c_type);
+    if ($recv_type eq 'number_list') {
+        $item_type = 'number';
+        $item_c_type = 'int64_t';
+    } elsif ($recv_type eq 'string_list') {
+        $item_type = 'string';
+        $item_c_type = 'const char *';
+    } elsif (is_matrix_member_list_type($recv_type)) {
+        my $member_meta = matrix_member_list_meta($recv_type);
+        $item_type = "matrix_member<$member_meta->{elem};d=$member_meta->{dim}>";
+        if ($member_meta->{elem} eq 'number') {
+            $item_c_type = 'MatrixNumberMember';
+        } elsif ($member_meta->{elem} eq 'string') {
+            $item_c_type = 'MatrixStringMember';
+        } else {
+            compile_error("filter(...) is unsupported for matrix member element type '$member_meta->{elem}'");
+        }
+    } else {
+        compile_error("filter(...) receiver must be string_list, number_list, or matrix member list, got $recv_type");
+    }
+    my $param = $lambda->{param};
+
+    my $lambda_ctx = {
+        scopes      => [ {} ],
+        fact_scopes => [ {} ],
+        nonnull_scopes => [ {} ],
+        tmp_counter => $ctx->{tmp_counter},
+        functions   => $ctx->{functions},
+        loop_depth  => 0,
+        helper_defs => $ctx->{helper_defs},
+        helper_counter => $ctx->{helper_counter},
+        current_function => $ctx->{current_function},
+    };
+
+    declare_var(
+        $lambda_ctx,
+        $param,
+        {
+            type      => $item_type,
+            immutable => 1,
+            c_name    => $param,
+        }
+    );
+
+    my ($body_code, $body_type) = compile_expr($lambda->{body}, $lambda_ctx);
+    $ctx->{helper_counter} = $lambda_ctx->{helper_counter};
+    compile_error("filter(...) lambda must return bool")
+      if $body_type ne 'bool';
+
+    my $helper_counter = $ctx->{helper_counter} // 0;
+    my $helper_name = '__metac_filter_' . ($ctx->{current_function} // 'fn') . '_' . $helper_counter;
+    $ctx->{helper_counter} = $helper_counter + 1;
+
+    my @helper_lines;
+    push @helper_lines, "static int $helper_name($item_c_type $param) {";
+    push @helper_lines, "  return $body_code;";
+    push @helper_lines, '}';
+    push @{ $ctx->{helper_defs} }, join("\n", @helper_lines);
+    return $helper_name;
+}
+
 
 sub compile_reduce_call {
     my (%args) = @_;
@@ -107,6 +177,8 @@ sub emit_loop_body_with_binding {
     my $var_index_c_expr = $args{var_index_c_expr};
     my $range_min_expr = $args{range_min_expr};
     my $range_max_expr = $args{range_max_expr};
+    my $member_matrix_code = $args{member_matrix_code};
+    my $member_matrix_type = $args{member_matrix_type};
 
     new_scope($ctx);
     my %var_info = (
@@ -117,6 +189,10 @@ sub emit_loop_body_with_binding {
     if ($var_type eq 'number' && defined $range_min_expr && defined $range_max_expr) {
         $var_info{range_min_expr} = $range_min_expr;
         $var_info{range_max_expr} = $range_max_expr;
+    }
+    if (is_matrix_member_type($var_type) && defined($member_matrix_code) && defined($member_matrix_type)) {
+        $var_info{member_matrix_code} = $member_matrix_code;
+        $var_info{member_matrix_type} = $member_matrix_type;
     }
     if (defined $var_index_c_expr) {
         $var_info{index_c_expr} = $var_index_c_expr;
@@ -129,9 +205,13 @@ sub emit_loop_body_with_binding {
         emit_line($out, $indent, "const IndexedNumber $var_name = $var_c_expr;");
     } elsif (is_matrix_member_type($var_type)) {
         my $member_meta = matrix_member_meta($var_type);
-        compile_error("Unsupported matrix member loop type '$var_type'")
-          if $member_meta->{elem} ne 'number';
-        emit_line($out, $indent, "const MatrixNumberMember $var_name = $var_c_expr;");
+        if ($member_meta->{elem} eq 'number') {
+            emit_line($out, $indent, "const MatrixNumberMember $var_name = $var_c_expr;");
+        } elsif ($member_meta->{elem} eq 'string') {
+            emit_line($out, $indent, "const MatrixStringMember $var_name = $var_c_expr;");
+        } else {
+            compile_error("Unsupported matrix member loop type '$var_type'");
+        }
     } else {
         compile_error("Unsupported loop element type '$var_type'");
     }

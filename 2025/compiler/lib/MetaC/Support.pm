@@ -3,10 +3,38 @@ use strict;
 use warnings;
 use Exporter 'import';
 
-our @EXPORT_OK = qw(compile_error strip_comments trim c_escape_string split_top_level_commas parse_constraints emit_line);
+our @EXPORT_OK = qw(
+    compile_error
+    set_error_line
+    clear_error_line
+    strip_comments
+    trim
+    c_escape_string
+    split_top_level_commas
+    parse_constraints
+    emit_line
+);
+
+my $CURRENT_ERROR_LINE;
+
+sub set_error_line {
+    my ($line) = @_;
+    if (defined($line) && $line =~ /^\d+$/ && $line > 0) {
+        $CURRENT_ERROR_LINE = int($line);
+        return;
+    }
+    $CURRENT_ERROR_LINE = undef;
+}
+
+sub clear_error_line {
+    $CURRENT_ERROR_LINE = undef;
+}
 
 sub compile_error {
     my ($msg) = @_;
+    if (defined $CURRENT_ERROR_LINE) {
+        die "compile error on line $CURRENT_ERROR_LINE: $msg\n";
+    }
     die "compile error: $msg\n";
 }
 
