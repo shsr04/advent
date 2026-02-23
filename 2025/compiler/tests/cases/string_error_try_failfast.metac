@@ -1,0 +1,12 @@
+function main() {
+  const text = run()?
+  log(text)
+}
+
+function run(): string | error {
+  const bad = parseNumber("x")?
+  if bad > 0 {
+    return "ok"
+  }
+  return "ok"
+}

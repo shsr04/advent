@@ -221,6 +221,14 @@ sub nullable_number_non_null_on_false_expr {
     return $check->{name};
 }
 
+sub nullable_number_non_null_on_true_expr {
+    my ($expr, $ctx) = @_;
+    my $check = nullable_number_check_from_condition($expr, $ctx);
+    return undef if !defined $check;
+    return undef if $check->{op} ne '!=';
+    return $check->{name};
+}
+
 
 sub nullable_number_names_non_null_on_false_expr {
     my ($expr, $ctx) = @_;
@@ -234,6 +242,23 @@ sub nullable_number_names_non_null_on_false_expr {
     }
 
     my $single = nullable_number_non_null_on_false_expr($expr, $ctx);
+    push @names, $single if defined $single;
+    return \@names;
+}
+
+
+sub nullable_number_names_non_null_on_true_expr {
+    my ($expr, $ctx) = @_;
+    my @names;
+
+    if ($expr->{kind} eq 'binop' && $expr->{op} eq '&&') {
+        my $left = nullable_number_names_non_null_on_true_expr($expr->{left}, $ctx);
+        my $right = nullable_number_names_non_null_on_true_expr($expr->{right}, $ctx);
+        push @names, @$left, @$right;
+        return \@names;
+    }
+
+    my $single = nullable_number_non_null_on_true_expr($expr, $ctx);
     push @names, $single if defined $single;
     return \@names;
 }

@@ -1,0 +1,17 @@
+function main() {
+  const result = run()
+  log("Result: ${result}")
+}
+
+function maybeFlag(s: string): bool | error {
+  const n = parseNumber(s)?
+  return n > 3
+}
+
+function run(): number {
+  const flag = maybeFlag("8")?
+  if flag {
+    return 7
+  }
+  return 0
+}

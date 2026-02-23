@@ -1,0 +1,8 @@
+function main() {
+  const text = run()?
+  log(text)
+}
+
+function run(): string | error {
+  return "ok"
+}

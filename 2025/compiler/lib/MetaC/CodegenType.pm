@@ -4,7 +4,15 @@ use warnings;
 use Exporter 'import';
 
 use MetaC::Support qw(compile_error);
-use MetaC::TypeSpec qw(is_matrix_type matrix_type_meta is_matrix_member_type matrix_member_meta);
+use MetaC::TypeSpec qw(
+    is_matrix_type
+    matrix_type_meta
+    is_matrix_member_type
+    matrix_member_meta
+    is_union_type
+    union_member_types
+    type_is_number_or_null
+);
 
 our @EXPORT_OK = qw(
     param_c_type
@@ -60,13 +68,20 @@ sub number_like_to_c_expr {
 
 sub type_matches_expected {
     my ($expected, $actual) = @_;
+    if (is_union_type($expected)) {
+        my $members = union_member_types($expected);
+        for my $member (@$members) {
+            return 1 if type_matches_expected($member, $actual);
+        }
+        return 0;
+    }
     return 1 if $expected eq $actual;
     return 1 if $expected eq 'number' && $actual eq 'indexed_number';
     if ($expected eq 'number' && is_matrix_member_type($actual)) {
         my $meta = matrix_member_meta($actual);
         return 1 if $meta->{elem} eq 'number';
     }
-    return 1 if $expected eq 'number_or_null' && ($actual eq 'number' || $actual eq 'indexed_number' || $actual eq 'null');
+    return 1 if type_is_number_or_null($expected) && ($actual eq 'number' || $actual eq 'indexed_number' || $actual eq 'null');
     return 1 if ($expected eq 'number_list' || $expected eq 'string_list') && $actual eq 'empty_list';
     return 1 if is_matrix_type($expected) && $actual eq 'empty_list';
     return 1 if is_matrix_type($expected) && is_matrix_type($actual) && $expected eq $actual;
@@ -75,7 +90,7 @@ sub type_matches_expected {
 
 sub number_or_null_to_c_expr {
     my ($code, $type, $where) = @_;
-    return $code if $type eq 'number_or_null';
+    return $code if type_is_number_or_null($type);
     if (is_number_like_type($type)) {
         my $num = number_like_to_c_expr($code, $type, $where);
         return "metac_some_number($num)";

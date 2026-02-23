@@ -1,8 +1,6 @@
 function main() {
-  printf("Result: %d\n", solve() or (e) => {
-    printf("Error! %s\n", e.message)
-    return 1
-  })
+  const result = solve()?
+  log("Result: ${result}")
 }
 
 function toLen(s: string): number {

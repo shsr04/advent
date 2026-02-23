@@ -1,8 +1,6 @@
 function main() {
-  printf("Result: %d\n", probe() or (e) => {
-    printf("Error! %s\n", e.message)
-    return 1
-  })
+  const result = probe()?
+  log("Result: ${result}")
 }
 
 function probe(): number | error {

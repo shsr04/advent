@@ -68,8 +68,11 @@ Test cases live in `compiler/tests/cases/`:
   - silent overflow is still possible in the current backend for large arithmetic; bigint semantics are not implemented yet
   - generated C runtime helper emission is usage-pruned (unused `metac_*` helper functions are omitted)
 
-- `function main() { ... }`
+- `function main() { ... }` (generic parsed statement lowering; no hardcoded entrypoint body pattern)
 - `function <name>(): number | error { ... }`
+- `function <name>(): bool | error { ... }`
+- `function <name>(): string | error { ... }`
+- `function <name>(): <union>` for scalar unions over `number`, `bool`, `string`, `error`, `null` (return-lowering supported)
 - `function <name>(<typed params>): number { ... }`
 - typed parameters:
   - `<id>: number`
@@ -105,7 +108,7 @@ Test cases live in `compiler/tests/cases/`:
 - expression grammar includes:
   - arithmetic: `+`, `-`, `*`, `/`, `%` (integer division/modulo)
   - unary minus: `-x`
-  - equality/comparisons: `==`, `!=`, `<`, `>`, `<=`, `>=`, `||`
+  - equality/comparisons: `==`, `!=`, `<`, `>`, `<=`, `>=`, `&&`, `||`
   - boolean literals: `true`, `false`
   - null literal: `null` (currently for `number | null`)
   - typed function calls: `fn(...)` for `number`- and `bool`-return functions
@@ -138,11 +141,15 @@ Test cases live in `compiler/tests/cases/`:
 - fail-fast try assignment:
   - `const <id> = <fallible-expression>?`
   - supported fallible expressions include:
+    - calls to user functions returning `number | error`
+    - calls to user functions returning `bool | error`
+    - calls to user functions returning `string | error`
     - `split(<string>, <string>)`
     - `parseNumber(<string>)`
     - `<string_list>.map(<mapper>)` when mapper returns `number | error`
     - `<list>.filter(x => <predicate>)`
     - `<list>.assert(x => x.size() == <numeric-literal-size>, <message>)`
+  - in `number | error` functions, `?` propagates the error; in non-error-return functions, `?` fail-fasts the process with exit code `2`
 
 ## Genericity Rule
 

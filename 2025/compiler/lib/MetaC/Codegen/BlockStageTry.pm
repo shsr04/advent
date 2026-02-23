@@ -5,9 +5,6 @@ use warnings;
 sub _compile_block_stage_try {
     my ($stmt, $ctx, $out, $indent, $current_fn_return) = @_;
         if ($stmt->{kind} eq 'const_try_chain') {
-            compile_error("try-chain with '?' is currently only supported in number | error functions")
-              if $current_fn_return ne 'number_or_error';
-
             my $prev_name;
             my $first_target = @{ $stmt->{steps} } ? '__metac_chain' . $ctx->{tmp_counter}++ : $stmt->{name};
             my $first_stmt = {

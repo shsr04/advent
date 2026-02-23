@@ -12,6 +12,7 @@ This directory is the canonical workspace for designing a meta language that com
 ## File Map
 
 - `language-charter.md`: project goals, invariants, and non-goals.
+- `normative-reference.md`: **normative reference of the language syntax and semantics**
 - `feature-log.md`: roadmap and per-feature status.
 - `feature-template.md`: required structure for each feature proposal.
 - `correctness-framework.md`: proof model and release gates.

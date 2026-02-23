@@ -396,7 +396,12 @@ sub compile_expr {
 
         my $return_type = $sig->{return_type};
         compile_error("Function '$expr->{name}' returning '$return_type' is not expression-callable")
-          if $return_type ne 'number' && $return_type ne 'bool';
+          if $return_type ne 'number'
+          && $return_type ne 'bool'
+          && !type_is_number_or_error($return_type)
+          && !type_is_bool_or_error($return_type)
+          && !type_is_string_or_error($return_type)
+          && !is_supported_generic_union_return($return_type);
 
         my $expected = scalar @{ $sig->{params} };
         my $actual = scalar @{ $expr->{args} };
@@ -420,10 +425,35 @@ sub compile_expr {
             push @arg_code, $arg_c;
         }
 
-        my $result_type = $return_type eq 'bool' ? 'bool' : 'number';
-        return ("$expr->{name}(" . join(', ', @arg_code) . ")", $result_type);
+        if ($return_type eq 'bool') {
+            return ("$expr->{name}(" . join(', ', @arg_code) . ")", 'bool');
+        }
+        if ($return_type eq 'number') {
+            return ("$expr->{name}(" . join(', ', @arg_code) . ")", 'number');
+        }
+        return ("$expr->{name}(" . join(', ', @arg_code) . ")", $return_type);
     }
     if ($expr->{kind} eq 'binop') {
+        if ($expr->{op} eq '&&') {
+            my ($l_code, $l_type) = compile_expr($expr->{left}, $ctx);
+            compile_error("Operator '&&' requires bool operands, got $l_type and <unknown>")
+              if $l_type ne 'bool';
+
+            my ($r_code, $r_type);
+            my $narrow_name = nullable_number_non_null_on_true_expr($expr->{left}, $ctx);
+            if (defined $narrow_name) {
+                new_scope($ctx);
+                declare_not_null_number_shadow($ctx, $narrow_name);
+                ($r_code, $r_type) = compile_expr($expr->{right}, $ctx);
+                pop_scope($ctx);
+            } else {
+                ($r_code, $r_type) = compile_expr($expr->{right}, $ctx);
+            }
+            compile_error("Operator '&&' requires bool operands, got $l_type and $r_type")
+              if $r_type ne 'bool';
+            return ("($l_code && $r_code)", 'bool');
+        }
+
         if ($expr->{op} eq '||') {
             my ($l_code, $l_type) = compile_expr($expr->{left}, $ctx);
             compile_error("Operator '||' requires bool operands, got $l_type and <unknown>")

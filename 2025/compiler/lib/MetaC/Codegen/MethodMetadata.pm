@@ -129,7 +129,7 @@ sub map_mapper_info {
             builtin     => 0,
         };
     }
-    if ($sig->{return_type} eq 'number | error') {
+    if (type_is_number_or_error($sig->{return_type})) {
         return {
             name        => $mapper_name,
             return_mode => 'number_or_error',

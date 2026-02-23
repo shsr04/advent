@@ -7,6 +7,16 @@ use MetaC::Support qw(compile_error trim);
 
 our @EXPORT_OK = qw(
     normalize_type_annotation
+    is_union_type
+    union_member_types
+    union_contains_member
+    is_supported_generic_union_return
+    type_is_number_or_error
+    type_is_bool_or_error
+    type_is_string_or_error
+    type_is_number_or_null
+    non_error_member_of_error_union
+    type_without_union_member
     apply_matrix_constraints
     is_matrix_type
     matrix_type_meta
@@ -101,18 +111,242 @@ sub _build_matrix_type {
     return $encoded;
 }
 
-sub normalize_type_annotation {
+sub _strip_outer_parens {
+    my ($text) = @_;
+    my $s = trim($text // '');
+    while ($s =~ /^\(.*\)$/) {
+        my @chars = split //, $s;
+        my $depth = 0;
+        my $ok = 1;
+        for (my $i = 0; $i < @chars; $i++) {
+            my $ch = $chars[$i];
+            if ($ch eq '(') {
+                $depth++;
+            } elsif ($ch eq ')') {
+                $depth--;
+                if ($depth < 0) {
+                    $ok = 0;
+                    last;
+                }
+                if ($depth == 0 && $i != $#chars) {
+                    $ok = 0;
+                    last;
+                }
+            }
+        }
+        last if !$ok || $depth != 0;
+        $s = trim(substr($s, 1, -1));
+    }
+    return $s;
+}
+
+sub _split_top_level_union {
+    my ($text) = @_;
+    my @parts;
+    my $current = '';
+    my $paren_depth = 0;
+    my $bracket_depth = 0;
+    my $in_string = 0;
+    my $escape = 0;
+    my @chars = split //, ($text // '');
+
+    for my $ch (@chars) {
+        if ($in_string) {
+            $current .= $ch;
+            if ($escape) {
+                $escape = 0;
+                next;
+            }
+            if ($ch eq '\\') {
+                $escape = 1;
+                next;
+            }
+            if ($ch eq '"') {
+                $in_string = 0;
+            }
+            next;
+        }
+
+        if ($ch eq '"') {
+            $in_string = 1;
+            $current .= $ch;
+            next;
+        }
+        if ($ch eq '(') {
+            $paren_depth++;
+            $current .= $ch;
+            next;
+        }
+        if ($ch eq ')') {
+            $paren_depth--;
+            compile_error("Unbalanced ')' in union type annotation") if $paren_depth < 0;
+            $current .= $ch;
+            next;
+        }
+        if ($ch eq '[') {
+            $bracket_depth++;
+            $current .= $ch;
+            next;
+        }
+        if ($ch eq ']') {
+            $bracket_depth--;
+            compile_error("Unbalanced ']' in union type annotation") if $bracket_depth < 0;
+            $current .= $ch;
+            next;
+        }
+        if ($ch eq '|' && $paren_depth == 0 && $bracket_depth == 0) {
+            push @parts, trim($current);
+            $current = '';
+            next;
+        }
+        $current .= $ch;
+    }
+
+    compile_error("Unbalanced delimiters in union type annotation")
+      if $paren_depth != 0 || $bracket_depth != 0;
+    my $tail = trim($current);
+    push @parts, $tail if $tail ne '';
+    return \@parts;
+}
+
+sub _normalize_single_type {
     my ($type) = @_;
-    $type = trim($type // '');
-    $type =~ s/\s+//g;
-    return 'bool' if $type eq 'boolean';
-    return 'number_list' if $type eq 'number[]';
-    return 'string_list' if $type eq 'string[]';
-    return 'number_or_null' if $type eq 'number|null' || $type eq 'null|number';
-    if ($type =~ /^matrix\((number|string)\)$/) {
+    my $t = trim($type // '');
+    $t = _strip_outer_parens($t);
+    $t =~ s/\s+//g;
+
+    return 'bool' if $t eq 'boolean';
+    return 'number_list' if $t eq 'number[]';
+    return 'string_list' if $t eq 'string[]';
+    if ($t =~ /^matrix\((number|string)\)$/) {
         return _build_matrix_type(elem => $1, dim => 2, sizes => undef);
     }
-    return $type;
+    return $t;
+}
+
+sub normalize_type_annotation {
+    my ($type) = @_;
+    my $raw = _strip_outer_parens(trim($type // ''));
+    my $parts = _split_top_level_union($raw);
+
+    if (@$parts > 1) {
+        my %seen;
+        my @members;
+        for my $part (@$parts) {
+            my $n = normalize_type_annotation($part);
+            my $nested = union_member_types($n);
+            for my $m (@$nested) {
+                next if $seen{$m};
+                $seen{$m} = 1;
+                push @members, $m;
+            }
+        }
+        @members = sort @members;
+        return 'number_or_null' if @members == 2 && $members[0] eq 'null' && $members[1] eq 'number';
+        return 'number | error' if @members == 2 && $members[0] eq 'error' && $members[1] eq 'number';
+        return join(' | ', @members);
+    }
+
+    return _normalize_single_type($raw);
+}
+
+sub union_member_types {
+    my ($type) = @_;
+    my $t = trim($type // '');
+    return ['number', 'null'] if $t eq 'number_or_null';
+    if ($t =~ /\|/) {
+        my @parts = map { trim($_) } split /\|/, $t;
+        my @members = grep { $_ ne '' } @parts;
+        return \@members;
+    }
+    return [ $t ];
+}
+
+sub is_union_type {
+    my ($type) = @_;
+    my $members = union_member_types($type);
+    return @$members > 1 ? 1 : 0;
+}
+
+sub union_contains_member {
+    my ($type, $member) = @_;
+    my $members = union_member_types($type);
+    for my $m (@$members) {
+        return 1 if $m eq $member;
+    }
+    return 0;
+}
+
+sub _is_runtime_scalar_member {
+    my ($member) = @_;
+    return 1 if $member eq 'number';
+    return 1 if $member eq 'bool';
+    return 1 if $member eq 'string';
+    return 1 if $member eq 'error';
+    return 1 if $member eq 'null';
+    return 0;
+}
+
+sub is_supported_generic_union_return {
+    my ($type) = @_;
+    return 0 if !is_union_type($type);
+    my $members = union_member_types($type);
+    for my $m (@$members) {
+        return 0 if !_is_runtime_scalar_member($m);
+    }
+    return 1;
+}
+
+sub type_is_number_or_error {
+    my ($type) = @_;
+    my $members = union_member_types($type);
+    return 0 if @$members != 2;
+    my %set = map { $_ => 1 } @$members;
+    return $set{number} && $set{error} ? 1 : 0;
+}
+
+sub type_is_bool_or_error {
+    my ($type) = @_;
+    my $members = union_member_types($type);
+    return 0 if @$members != 2;
+    my %set = map { $_ => 1 } @$members;
+    return $set{bool} && $set{error} ? 1 : 0;
+}
+
+sub type_is_string_or_error {
+    my ($type) = @_;
+    my $members = union_member_types($type);
+    return 0 if @$members != 2;
+    my %set = map { $_ => 1 } @$members;
+    return $set{string} && $set{error} ? 1 : 0;
+}
+
+sub type_is_number_or_null {
+    my ($type) = @_;
+    my $members = union_member_types($type);
+    return 0 if @$members != 2;
+    my %set = map { $_ => 1 } @$members;
+    return $set{number} && $set{null} ? 1 : 0;
+}
+
+sub non_error_member_of_error_union {
+    my ($type) = @_;
+    my $members = union_member_types($type);
+    return undef if @$members != 2;
+    my @non_error = grep { $_ ne 'error' } @$members;
+    return undef if @non_error != 1;
+    return undef if !union_contains_member($type, 'error');
+    return $non_error[0];
+}
+
+sub type_without_union_member {
+    my ($type, $member) = @_;
+    my $members = union_member_types($type);
+    my @rest = grep { $_ ne $member } @$members;
+    compile_error("Cannot remove '$member' from non-union type '$type'")
+      if @rest == @$members;
+    return $rest[0] if @rest == 1;
+    return normalize_type_annotation(join(' | ', @rest));
 }
 
 sub is_matrix_type {

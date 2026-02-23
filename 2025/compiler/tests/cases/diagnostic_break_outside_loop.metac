@@ -1,5 +1,6 @@
 function main() {
-  printf("Result: %d\n", f())
+  const result = f()
+  log("Result: ${result}")
 }
 
 function f(): number {

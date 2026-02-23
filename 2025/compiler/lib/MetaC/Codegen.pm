@@ -36,6 +36,16 @@ use MetaC::CodegenScope qw(
 );
 use MetaC::CodegenRuntime qw(runtime_prelude_for_code);
 use MetaC::TypeSpec qw(
+    normalize_type_annotation
+    union_member_types
+    union_contains_member
+    is_union_type
+    is_supported_generic_union_return
+    type_is_number_or_error
+    type_is_bool_or_error
+    type_is_string_or_error
+    type_is_number_or_null
+    non_error_member_of_error_union
     is_matrix_type
     matrix_type_meta
     matrix_member_type

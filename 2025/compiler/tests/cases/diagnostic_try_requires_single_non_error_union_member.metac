@@ -1,0 +1,8 @@
+function main() {
+  const v = tri()?
+  log(v)
+}
+
+function tri(): number | bool | error {
+  return error("boom")
+}

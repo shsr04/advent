@@ -1,0 +1,14 @@
+function main() {
+  const result = run()
+  log("Result: ${result}")
+}
+
+function run(): number {
+  if true || false && false {
+    let maybe: number | null = null
+    if maybe != null && maybe > 3 {
+      return maybe
+    }
+  }
+  return 7
+}

@@ -47,6 +47,16 @@ Track all language features here. Add items as we iterate.
 33. `F-033` Codegen module split (type/scope/runtime extraction) - `implemented`
 34. `F-034` List reduce method with two-parameter lambdas - `implemented`
 35. `F-035` Runtime helper dead-stripping in generated C - `implemented`
+36. `F-036` Generic program/entrypoint lowering (remove subset-locked `main` pattern) - `implemented`
+37. `F-037` Full boolean connective grammar (`&&`) and precedence parity - `implemented`
+38. `F-038` Generalized union type model (beyond hardcoded unions) - `review`
+39. `F-039` Generic fallibility handlers (`?`, `or`) over all fallible expressions - `review`
+40. `F-040` Constraint engine v2 (`size`, applicability matrix, matrix-size linkage) - `draft`
+41. `F-041` Generic array type model (`T[]`) and operation typing - `draft`
+42. `F-042` Number semantics policy alignment (normative rational model vs backend modes) - `draft`
+43. `F-043` Return-lowering generalization for union return types - `implemented`
+44. `F-044` Normative conformance harness + implementation-percentage gate - `draft`
+45. `F-045` Optional extension: effect-system abstraction for fallibility - `draft`
 
 ## Feature Record Template
 
@@ -301,3 +311,96 @@ Use this block for each feature:
 - Key guarantees: generated C now includes only runtime helper functions actually referenced by compiled program code plus transitive runtime dependencies
 - Blocking questions: optional future extension to strip unused runtime typedef/includes where safe
 - Notes/evidence: runtime dependency pruning implemented in `compiler/lib/MetaC/CodegenRuntime.pm` and wired in `compiler/lib/MetaC/Codegen.pm`; full regression suite remains green (`make test`); day3b C no longer emits unused-runtime helper warnings like `metac_log_string_list`
+
+## Normative Gap Closure Plan (Future)
+
+- Baseline: normative conformance is currently estimated at `55-60%`.
+- Objective: raise normative conformance to `>=90%` without losing deterministic lowering or current regression stability.
+- Stage ordering:
+  1. Stage A (syntax/front-door parity): `F-036`, `F-037`
+  2. Stage B (type/fallibility core): `F-038`, `F-039`
+  3. Stage C (constraints/containers): `F-040`, `F-041`
+  4. Stage D (semantic/backend parity): `F-042`, `F-043`
+  5. Stage E (measurement/release): `F-044`
+  6. Optional generalization track: `F-045`
+- Phase gate rule: each stage must keep existing compiler tests green and add dedicated normative conformance cases before advancing.
+
+### F-036 `Generic Program/Entrypoint Lowering`
+- Status: implemented
+- Spec file: `instructions/normative-f036-program-entrypoint.md` (planned)
+- Correctness classes: C0/C1/C3
+- Key guarantees: remove hardcoded `main` body regex requirements; lower entrypoint behavior via parsed AST statements; keep deterministic C main emission without day-specific patterns.
+- Blocking questions: whether initial version keeps `main` as default entrypoint only or also supports explicit alternate entrypoint selection.
+- Notes/evidence: implemented generic `main` lowering via parsed statement blocks in `compiler/lib/MetaC/Codegen/Compile.pm` (`compile_main_body_generic_void`), removing runtime reliance on legacy `printf(... or handler ...)` pattern matching. Regression suite updated to parser-native `main` bodies and remains green.
+
+### F-037 `Boolean Connective Parity (`&&`)`
+- Status: implemented
+- Spec file: `instructions/normative-f037-boolean-connectives.md` (planned)
+- Correctness classes: C0/C1/C3
+- Key guarantees: parser accepts `&&` with normative precedence (`&&` tighter than `||`); codegen preserves short-circuit semantics and flow-fact safety.
+- Blocking questions: how far to extend fact propagation on `&&` in first pass (minimal correctness vs advanced narrowing).
+- Notes/evidence: parser now tokenizes/parses `&&` between equality and `||` in `compiler/lib/MetaC/Parser/Expr.pm`; short-circuit codegen and RHS nullable narrowing support added in `compiler/lib/MetaC/Codegen/Expr.pm` and `compiler/lib/MetaC/Codegen/Facts.pm`. Coverage: `and_precedence_narrowing` and `diagnostic_and_requires_bool`.
+
+### F-038 `Generalized Union Type Model`
+- Status: review
+- Spec file: `instructions/normative-f038-union-types.md` (planned)
+- Correctness classes: C0/C1/C3/C4
+- Key guarantees: parse and normalize arbitrary type unions (not just specialized aliases like `number | null`); track union membership in type-checker; enable member-safe narrowing paths.
+- Blocking questions: whether unions require nominal tagging strategy in internal type representation immediately, or can start with canonical sorted member sets.
+- Notes/evidence: parser/type layer now normalizes unions canonically in `compiler/lib/MetaC/TypeSpec.pm` (ordering/duplicate collapse, parenthesized unions, alias normalization), and exposes union membership helpers used by codegen return/fallibility classification. Coverage includes `union_return_number_error_normalized` and `diagnostic_union_return_not_lowerable`. Remaining gap to acceptance: generalized runtime representation and narrowing for arbitrary union members.
+
+### F-039 `Generic Fallibility Handling (`?` and `or`)`
+- Status: review
+- Spec file: `instructions/normative-f039-fallibility.md` (planned)
+- Correctness classes: C1/C3/C4
+- Key guarantees: treat any expression containing `error` in its type union as fallible; allow `?` and `or <lambda>` handling uniformly in call and chain contexts; remove return-mode-specific try restrictions.
+- Blocking questions: shape of handler lambda typing for non-`error` future effect members.
+- Notes/evidence: `?` handling is now generalized beyond `number | error` functions for supported fallible forms in const/statement try lowering (`compiler/lib/MetaC/Codegen/BlockStageDecls.pm`, `compiler/lib/MetaC/Codegen/BlockStageControl.pm`), with fail-fast process termination in non-error-return contexts and propagation in `number | error` contexts. Remaining gap for full acceptance: generic `or <lambda>` expression handling and fully type-driven fallibility across arbitrary unions.
+
+### F-040 `Constraint Engine V2`
+- Status: draft
+- Spec file: `instructions/normative-f040-constraints.md` (planned)
+- Correctness classes: C0/C1/C3/C4
+- Key guarantees: support normative `size(n)` constraint and explicit per-type constraint applicability checks; keep `range`, `wrap`, `dim`, `matrixSize` consistent and composable.
+- Blocking questions: whether non-literal constraint arguments are accepted in this stage or deferred behind proof obligations.
+- Notes/evidence: Planned implementation: refactor constraint parser into typed constraint AST; add applicability matrix (`size` on string/array, `range/wrap` on number, `dim/matrixSize` on matrix); integrate matrix dimension-size relation checks. Verification targets: compile-pass/compile-fail diagnostics for each constraint/type pair and mixed constraint chains.
+
+### F-041 `Generic Array Type Model`
+- Status: draft
+- Spec file: `instructions/normative-f041-array-model.md` (planned)
+- Correctness classes: C0/C1/C2/C3
+- Key guarantees: represent arrays as generic `array<T>`/`T[]` rather than fixed `number[]`/`string[]` special cases; type-check indexing and list operations from element type.
+- Blocking questions: ownership/lifetime model for arrays of non-primitive element types in generated C.
+- Notes/evidence: Planned implementation: migrate list typing to parameterized container type; generalize operations (`size`, `slice`, `filter`, destructuring) over element constraints; preserve current fast paths for number/string as backend specializations, not language restrictions. Verification targets: generic array typing tests, migration tests for existing `number[]`/`string[]` programs, UB-safety review for generated container code.
+
+### F-042 `Number Semantics Policy Alignment`
+- Status: draft
+- Spec file: `instructions/normative-f042-number-semantics.md` (planned)
+- Correctness classes: C1/C3/C4
+- Key guarantees: explicitly reconcile normative number-domain statement with backend behavior; define approved numeric modes and diagnostics when a mode cannot preserve promised semantics.
+- Blocking questions: whether rational semantics is mandatory in default mode now or staged behind an opt-in `exact-number` mode.
+- Notes/evidence: Planned implementation: produce decision record with accepted numeric modes; add compiler mode flag and diagnostics for unsupported arithmetic guarantees; keep deterministic lowering per selected mode. Verification targets: mode-specific arithmetic tests, overflow/precision diagnostics, documentation sync with normative reference.
+
+### F-043 `Union Return-Lowering Generalization`
+- Status: implemented
+- Spec file: `instructions/normative-f043-return-lowering.md` (planned)
+- Correctness classes: C1/C2/C3/C4
+- Key guarantees: remove hardcoded function return whitelist (`number | error`, `number`, `bool`); lower union returns via generalized tagged-result strategy compatible with call sites and handlers.
+- Blocking questions: C ABI strategy for nested unions and strings without excessive copying.
+- Notes/evidence: backend now supports generic union-return lowering over scalar members (`number`, `bool`, `string`, `error`, `null`) via `MetaCValue` plus specialized fast paths (`ResultNumber`, `ResultBool`, `ResultStringValue`) in `compiler/lib/MetaC/Codegen/Compile.pm` and runtime modules. Return typing and `?` propagation/fail-fast integrate across these modes in `compiler/lib/MetaC/Codegen/BlockStageControl.pm` and `compiler/lib/MetaC/Codegen/BlockStageDecls.pm`. Coverage includes `union_number_bool_forward`, `bool_error_return_try`, `bool_error_call_try_in_number`, `string_error_return_try`, and `string_error_try_failfast`; full compiler suite remains green.
+
+### F-044 `Normative Conformance Harness + Percentage Gate`
+- Status: draft
+- Spec file: `instructions/normative-f044-conformance-harness.md` (planned)
+- Correctness classes: C0/C1/C3/C4
+- Key guarantees: trace every normative requirement to parser/type/codegen checks and tests; compute reproducible implementation percentage from machine-readable checklist.
+- Blocking questions: denominator policy for open-ended normative items marked `...`.
+- Notes/evidence: Planned implementation: create requirement matrix file (`requirement-id`, `status`, `tests`, `code refs`); add script that derives conformance percentage; integrate into CI/test run and expose deltas in release notes. Verification targets: deterministic percentage output, fail gate on regression of previously satisfied requirements.
+
+### F-045 `Optional Extension: Effect-System Abstraction`
+- Status: draft
+- Spec file: `instructions/normative-f045-effect-abstraction.md` (planned)
+- Correctness classes: C1/C3/C4
+- Key guarantees: generalize fallibility from ad-hoc `error` union checks into effect annotations that can cover future non-error effects without grammar redesign.
+- Blocking questions: whether to prioritize this immediately after `F-039` or defer until baseline normative parity is reached.
+- Notes/evidence: Planned implementation: define minimal effect lattice (`pure`, `throws(error)`, extensible effect set); map current `?`/`or` behavior onto effect rules; keep source compatibility with existing syntax. Verification targets: effect inference/unit tests and backward-compatibility suite with current programs.

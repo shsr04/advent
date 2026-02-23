@@ -1,0 +1,11 @@
+function main() {
+  const result = run()
+  log("Result: ${result}")
+}
+
+function run(): number {
+  if 1 && true {
+    return 1
+  }
+  return 0
+}

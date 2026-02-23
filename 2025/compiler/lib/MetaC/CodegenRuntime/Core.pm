@@ -15,6 +15,24 @@ static ResultNumber ok_number(int64_t value) {
   return out;
 }
 
+static ResultBool ok_bool(int value) {
+  ResultBool out;
+  out.is_error = 0;
+  out.value = value ? 1 : 0;
+  out.message[0] = '\0';
+  return out;
+}
+
+static ResultStringValue ok_string_value(const char *value) {
+  ResultStringValue out;
+  out.is_error = 0;
+  const char *src = value == NULL ? "" : value;
+  strncpy(out.value, src, sizeof(out.value) - 1);
+  out.value[sizeof(out.value) - 1] = '\0';
+  out.message[0] = '\0';
+  return out;
+}
+
 static NullableNumber metac_null_number(void) {
   NullableNumber out;
   out.is_null = 1;
@@ -34,6 +52,74 @@ static ResultNumber err_number(const char *message, int line_no, const char *lin
   out.is_error = 1;
   out.value = 0;
   snprintf(out.message, sizeof(out.message), "%s (line %d: %s)", message, line_no, line_text);
+  return out;
+}
+
+static ResultBool err_bool(const char *message, int line_no, const char *line_text) {
+  ResultBool out;
+  out.is_error = 1;
+  out.value = 0;
+  snprintf(out.message, sizeof(out.message), "%s (line %d: %s)", message, line_no, line_text);
+  return out;
+}
+
+static ResultStringValue err_string_value(const char *message, int line_no, const char *line_text) {
+  ResultStringValue out;
+  out.is_error = 1;
+  out.value[0] = '\0';
+  snprintf(out.message, sizeof(out.message), "%s (line %d: %s)", message, line_no, line_text);
+  return out;
+}
+
+static MetaCValue metac_value_number(int64_t value) {
+  MetaCValue out;
+  out.kind = METAC_VALUE_NUMBER;
+  out.number_value = value;
+  out.bool_value = 0;
+  out.string_value[0] = '\0';
+  out.error_message[0] = '\0';
+  return out;
+}
+
+static MetaCValue metac_value_bool(int value) {
+  MetaCValue out;
+  out.kind = METAC_VALUE_BOOL;
+  out.number_value = 0;
+  out.bool_value = value ? 1 : 0;
+  out.string_value[0] = '\0';
+  out.error_message[0] = '\0';
+  return out;
+}
+
+static MetaCValue metac_value_string(const char *value) {
+  MetaCValue out;
+  out.kind = METAC_VALUE_STRING;
+  out.number_value = 0;
+  out.bool_value = 0;
+  const char *src = value == NULL ? "" : value;
+  strncpy(out.string_value, src, sizeof(out.string_value) - 1);
+  out.string_value[sizeof(out.string_value) - 1] = '\0';
+  out.error_message[0] = '\0';
+  return out;
+}
+
+static MetaCValue metac_value_null(void) {
+  MetaCValue out;
+  out.kind = METAC_VALUE_NULL;
+  out.number_value = 0;
+  out.bool_value = 0;
+  out.string_value[0] = '\0';
+  out.error_message[0] = '\0';
+  return out;
+}
+
+static MetaCValue metac_value_error(const char *message, int line_no, const char *line_text) {
+  MetaCValue out;
+  out.kind = METAC_VALUE_ERROR;
+  out.number_value = 0;
+  out.bool_value = 0;
+  out.string_value[0] = '\0';
+  snprintf(out.error_message, sizeof(out.error_message), "%s (line %d: %s)", message, line_no, line_text);
   return out;
 }
 

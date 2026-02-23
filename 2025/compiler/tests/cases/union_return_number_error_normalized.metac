@@ -1,0 +1,13 @@
+function main() {
+  const result = run()?
+  log("Result: ${result}")
+}
+
+function helper(): number | error | number {
+  return 5
+}
+
+function run(): error | number {
+  const v = helper()?
+  return v
+}

@@ -2,37 +2,43 @@ package MetaC::Codegen;
 use strict;
 use warnings;
 
-sub compile_main_body {
-    my ($main_fn, $number_error_functions) = @_;
-    my $body = join "\n", @{ $main_fn->{body_lines} };
+sub _new_codegen_ctx {
+    my ($function_sigs, $current_function) = @_;
+    my @helper_defs;
+    return (
+        {
+            scopes           => [ {} ],
+            fact_scopes      => [ {} ],
+            nonnull_scopes   => [ {} ],
+            tmp_counter      => 0,
+            functions        => $function_sigs,
+            loop_depth       => 0,
+            helper_defs      => \@helper_defs,
+            helper_counter   => 0,
+            current_function => $current_function,
+        },
+        \@helper_defs,
+    );
+}
 
-    my ($result_fmt, $callee, $err_var) =
-      $body =~ /printf\(\s*(\"(?:\\.|[^\"\\])*\")\s*,\s*([A-Za-z_][A-Za-z0-9_]*)\(\)\s+or\s+\(([A-Za-z_][A-Za-z0-9_]*)\)\s*=>\s*\{/m;
-    compile_error("main must include: printf(<fmt>, <fn>() or (<e>) => { ... })")
-      if !defined $callee;
+sub compile_main_body_generic_void {
+    my ($main_fn, $function_sigs) = @_;
+    my $stmts = parse_function_body($main_fn);
+    my @out;
+    my ($ctx, $helper_defs) = _new_codegen_ctx($function_sigs, 'main');
 
-    compile_error("Function '$callee' is not available as number | error")
-      if !exists $number_error_functions->{$callee};
+    push @out, 'int main(void) {';
+    push @out, '  int __metac_line_no = 0;';
+    push @out, '  char __metac_err[160];';
+    compile_block($stmts, $ctx, \@out, 2, 'void');
+    push @out, '  return 0;';
+    push @out, '}';
 
-    my ($error_fmt) =
-      $body =~ /printf\(\s*(\"(?:\\.|[^\"\\])*\")\s*,\s*\Q$err_var\E\.message\s*\)/m;
-    compile_error("main error handler must print $err_var.message")
-      if !defined $error_fmt;
-
-    my $widened_result_fmt = $result_fmt;
-    $widened_result_fmt =~ s/(?<!%)%d/%lld/g;
-    $widened_result_fmt =~ s/(?<!%)%i/%lli/g;
-
-    my $c = "int main(void) {\n";
-    $c .= "  ResultNumber result = $callee();\n";
-    $c .= "  if (result.is_error) {\n";
-    $c .= "    printf($error_fmt, result.message);\n";
-    $c .= "    return 1;\n";
-    $c .= "  }\n";
-    $c .= "  printf($widened_result_fmt, (long long)result.value);\n";
-    $c .= "  return 0;\n";
-    $c .= "}\n";
-    return $c;
+    my $fn_code = join("\n", @out) . "\n";
+    if (@$helper_defs) {
+        return join("\n", @$helper_defs) . "\n" . $fn_code;
+    }
+    return $fn_code;
 }
 
 
@@ -134,36 +140,115 @@ sub emit_param_bindings {
 sub compile_number_or_error_function {
     my ($fn, $params, $function_sigs) = @_;
     compile_error("Function '$fn->{name}' must have return type: number | error")
-      if !defined($fn->{return_type}) || $fn->{return_type} ne 'number | error';
+      if !defined($fn->{return_type}) || !type_is_number_or_error($fn->{return_type});
 
     my $stmts = parse_function_body($fn);
     my @out;
-    my @helper_defs;
     my $sig_params = render_c_params($params);
     push @out, "static ResultNumber $fn->{name}($sig_params) {";
     push @out, '  int __metac_line_no = 0;';
     push @out, '  char __metac_err[160];';
 
-    my $ctx = {
-        scopes      => [ {} ],
-        fact_scopes => [ {} ],
-        nonnull_scopes => [ {} ],
-        tmp_counter => 0,
-        functions   => $function_sigs,
-        loop_depth  => 0,
-        helper_defs => \@helper_defs,
-        helper_counter => 0,
-        current_function => $fn->{name},
-    };
+    my ($ctx, $helper_defs) = _new_codegen_ctx($function_sigs, $fn->{name});
 
-    emit_param_bindings($params, $ctx, \@out, 2, 'number_or_error');
-    compile_block($stmts, $ctx, \@out, 2, 'number_or_error');
+    emit_param_bindings($params, $ctx, \@out, 2, $fn->{return_type});
+    compile_block($stmts, $ctx, \@out, 2, $fn->{return_type});
     my $missing_return_msg = c_escape_string("Missing return in function $fn->{name}");
     push @out, "  return err_number($missing_return_msg, __metac_line_no, \"\");";
     push @out, '}';
     my $fn_code = join("\n", @out) . "\n";
-    if (@helper_defs) {
-        return join("\n", @helper_defs) . "\n" . $fn_code;
+    if (@$helper_defs) {
+        return join("\n", @$helper_defs) . "\n" . $fn_code;
+    }
+    return $fn_code;
+}
+
+sub compile_bool_or_error_function {
+    my ($fn, $params, $function_sigs) = @_;
+    compile_error("Function '$fn->{name}' must have return type: bool | error")
+      if !defined($fn->{return_type}) || !type_is_bool_or_error($fn->{return_type});
+
+    my $stmts = parse_function_body($fn);
+    my @out;
+    my $sig_params = render_c_params($params);
+    push @out, "static ResultBool $fn->{name}($sig_params) {";
+    push @out, '  int __metac_line_no = 0;';
+    push @out, '  char __metac_err[160];';
+
+    my ($ctx, $helper_defs) = _new_codegen_ctx($function_sigs, $fn->{name});
+
+    emit_param_bindings($params, $ctx, \@out, 2, $fn->{return_type});
+    compile_block($stmts, $ctx, \@out, 2, $fn->{return_type});
+    my $missing_return_msg = c_escape_string("Missing return in function $fn->{name}");
+    push @out, "  return err_bool($missing_return_msg, __metac_line_no, \"\");";
+    push @out, '}';
+    my $fn_code = join("\n", @out) . "\n";
+    if (@$helper_defs) {
+        return join("\n", @$helper_defs) . "\n" . $fn_code;
+    }
+    return $fn_code;
+}
+
+sub compile_string_or_error_function {
+    my ($fn, $params, $function_sigs) = @_;
+    compile_error("Function '$fn->{name}' must have return type: string | error")
+      if !defined($fn->{return_type}) || !type_is_string_or_error($fn->{return_type});
+
+    my $stmts = parse_function_body($fn);
+    my @out;
+    my $sig_params = render_c_params($params);
+    push @out, "static ResultStringValue $fn->{name}($sig_params) {";
+    push @out, '  int __metac_line_no = 0;';
+    push @out, '  char __metac_err[160];';
+
+    my ($ctx, $helper_defs) = _new_codegen_ctx($function_sigs, $fn->{name});
+
+    emit_param_bindings($params, $ctx, \@out, 2, $fn->{return_type});
+    compile_block($stmts, $ctx, \@out, 2, $fn->{return_type});
+    my $missing_return_msg = c_escape_string("Missing return in function $fn->{name}");
+    push @out, "  return err_string_value($missing_return_msg, __metac_line_no, \"\");";
+    push @out, '}';
+    my $fn_code = join("\n", @out) . "\n";
+    if (@$helper_defs) {
+        return join("\n", @$helper_defs) . "\n" . $fn_code;
+    }
+    return $fn_code;
+}
+
+sub _default_generic_union_return_expr {
+    my ($return_type) = @_;
+    my $members = union_member_types($return_type);
+    my $first = $members->[0];
+    return "metac_value_number(0)" if $first eq 'number';
+    return "metac_value_bool(0)" if $first eq 'bool';
+    return "metac_value_string(\"\")" if $first eq 'string';
+    return "metac_value_null()" if $first eq 'null';
+    return "metac_value_error(\"Missing return\", __metac_line_no, \"\")" if $first eq 'error';
+    return "metac_value_error(\"Missing return\", __metac_line_no, \"\")";
+}
+
+sub compile_generic_union_function {
+    my ($fn, $params, $function_sigs) = @_;
+    compile_error("Function '$fn->{name}' has unsupported generic union return type '$fn->{return_type}'")
+      if !defined($fn->{return_type}) || !is_supported_generic_union_return($fn->{return_type});
+
+    my $stmts = parse_function_body($fn);
+    my @out;
+    my $sig_params = render_c_params($params);
+    push @out, "static MetaCValue $fn->{name}($sig_params) {";
+    push @out, '  int __metac_line_no = 0;';
+    push @out, '  char __metac_err[160];';
+
+    my ($ctx, $helper_defs) = _new_codegen_ctx($function_sigs, $fn->{name});
+
+    emit_param_bindings($params, $ctx, \@out, 2, $fn->{return_type});
+    compile_block($stmts, $ctx, \@out, 2, $fn->{return_type});
+    my $fallback = _default_generic_union_return_expr($fn->{return_type});
+    push @out, "  return $fallback;";
+    push @out, '}';
+    my $fn_code = join("\n", @out) . "\n";
+    if (@$helper_defs) {
+        return join("\n", @$helper_defs) . "\n" . $fn_code;
     }
     return $fn_code;
 }
@@ -176,31 +261,20 @@ sub compile_number_function {
 
     my $stmts = parse_function_body($fn);
     my @out;
-    my @helper_defs;
     my $sig_params = render_c_params($params);
     push @out, "static int64_t $fn->{name}($sig_params) {";
     push @out, '  int __metac_line_no = 0;';
     push @out, '  char __metac_err[160];';
 
-    my $ctx = {
-        scopes      => [ {} ],
-        fact_scopes => [ {} ],
-        nonnull_scopes => [ {} ],
-        tmp_counter => 0,
-        functions   => $function_sigs,
-        loop_depth  => 0,
-        helper_defs => \@helper_defs,
-        helper_counter => 0,
-        current_function => $fn->{name},
-    };
+    my ($ctx, $helper_defs) = _new_codegen_ctx($function_sigs, $fn->{name});
 
     emit_param_bindings($params, $ctx, \@out, 2, 'number');
     compile_block($stmts, $ctx, \@out, 2, 'number');
     push @out, '  return 0;';
     push @out, '}';
     my $fn_code = join("\n", @out) . "\n";
-    if (@helper_defs) {
-        return join("\n", @helper_defs) . "\n" . $fn_code;
+    if (@$helper_defs) {
+        return join("\n", @$helper_defs) . "\n" . $fn_code;
     }
     return $fn_code;
 }
@@ -213,31 +287,20 @@ sub compile_bool_function {
 
     my $stmts = parse_function_body($fn);
     my @out;
-    my @helper_defs;
     my $sig_params = render_c_params($params);
     push @out, "static int $fn->{name}($sig_params) {";
     push @out, '  int __metac_line_no = 0;';
     push @out, '  char __metac_err[160];';
 
-    my $ctx = {
-        scopes      => [ {} ],
-        fact_scopes => [ {} ],
-        nonnull_scopes => [ {} ],
-        tmp_counter => 0,
-        functions   => $function_sigs,
-        loop_depth  => 0,
-        helper_defs => \@helper_defs,
-        helper_counter => 0,
-        current_function => $fn->{name},
-    };
+    my ($ctx, $helper_defs) = _new_codegen_ctx($function_sigs, $fn->{name});
 
     emit_param_bindings($params, $ctx, \@out, 2, 'bool');
     compile_block($stmts, $ctx, \@out, 2, 'bool');
     push @out, '  return 0;';
     push @out, '}';
     my $fn_code = join("\n", @out) . "\n";
-    if (@helper_defs) {
-        return join("\n", @helper_defs) . "\n" . $fn_code;
+    if (@$helper_defs) {
+        return join("\n", @$helper_defs) . "\n" . $fn_code;
     }
     return $fn_code;
 }
@@ -260,8 +323,24 @@ sub emit_function_prototypes {
             push @out, "static int64_t $name($sig_params);";
             next;
         }
+        if (type_is_bool_or_error($fn->{return_type})) {
+            push @out, "static ResultBool $name($sig_params);";
+            next;
+        }
+        if (type_is_string_or_error($fn->{return_type})) {
+            push @out, "static ResultStringValue $name($sig_params);";
+            next;
+        }
+        if (is_supported_generic_union_return($fn->{return_type})) {
+            push @out, "static MetaCValue $name($sig_params);";
+            next;
+        }
         if ($fn->{return_type} eq 'bool') {
             push @out, "static int $name($sig_params);";
+            next;
+        }
+        if (type_is_number_or_error($fn->{return_type})) {
+            push @out, "static ResultNumber $name($sig_params);";
             next;
         }
         compile_error("Unsupported function return type for '$name': $fn->{return_type}");
@@ -278,9 +357,12 @@ sub compile_source {
     compile_error("Missing required function: main") if !exists $functions->{main};
 
     my $main = $functions->{main};
-    compile_error("main must not declare arguments in this subset") if $main->{args} ne '';
+    compile_error("main must not declare arguments") if $main->{args} ne '';
 
     my %number_error_functions;
+    my %bool_error_functions;
+    my %string_error_functions;
+    my %generic_union_functions;
     my %number_functions;
     my %bool_functions;
     my %function_sigs;
@@ -288,10 +370,7 @@ sub compile_source {
     for my $name (@ordered_names) {
         my $fn = $functions->{$name};
         if (defined $fn->{return_type}) {
-            my $rt = $fn->{return_type};
-            $rt = 'bool' if $rt eq 'boolean';
-            $rt = 'number | error' if $rt =~ /^number\s*\|\s*error$/;
-            $fn->{return_type} = $rt;
+            $fn->{return_type} = normalize_type_annotation($fn->{return_type});
         }
         $fn->{parsed_params} = parse_function_params($fn);
         $function_sigs{$name} = {
@@ -299,8 +378,20 @@ sub compile_source {
             params      => $fn->{parsed_params},
         };
 
-        if (defined $fn->{return_type} && $fn->{return_type} eq 'number | error') {
+        if (defined $fn->{return_type} && type_is_number_or_error($fn->{return_type})) {
             $number_error_functions{$name} = 1;
+            next;
+        }
+        if (defined $fn->{return_type} && type_is_bool_or_error($fn->{return_type})) {
+            $bool_error_functions{$name} = 1;
+            next;
+        }
+        if (defined $fn->{return_type} && type_is_string_or_error($fn->{return_type})) {
+            $string_error_functions{$name} = 1;
+            next;
+        }
+        if (defined $fn->{return_type} && is_supported_generic_union_return($fn->{return_type})) {
+            $generic_union_functions{$name} = 1;
             next;
         }
         if (defined $fn->{return_type} && $fn->{return_type} eq 'number') {
@@ -311,7 +402,7 @@ sub compile_source {
             $bool_functions{$name} = 1;
             next;
         }
-        compile_error("Unsupported function return type for '$name'; supported: number | error, number, bool");
+        compile_error("Unsupported function return type for '$name'; supported: number | error, bool | error, string | error, generic unions over number/bool/string/error/null, number, bool");
     }
 
     my $non_runtime = '';
@@ -320,6 +411,33 @@ sub compile_source {
     for my $name (@ordered_names) {
         if ($number_error_functions{$name}) {
             $non_runtime .= compile_number_or_error_function(
+                $functions->{$name},
+                $functions->{$name}{parsed_params},
+                \%function_sigs
+            );
+            $non_runtime .= "\n";
+            next;
+        }
+        if ($bool_error_functions{$name}) {
+            $non_runtime .= compile_bool_or_error_function(
+                $functions->{$name},
+                $functions->{$name}{parsed_params},
+                \%function_sigs
+            );
+            $non_runtime .= "\n";
+            next;
+        }
+        if ($string_error_functions{$name}) {
+            $non_runtime .= compile_string_or_error_function(
+                $functions->{$name},
+                $functions->{$name}{parsed_params},
+                \%function_sigs
+            );
+            $non_runtime .= "\n";
+            next;
+        }
+        if ($generic_union_functions{$name}) {
+            $non_runtime .= compile_generic_union_function(
                 $functions->{$name},
                 $functions->{$name}{parsed_params},
                 \%function_sigs
@@ -347,7 +465,8 @@ sub compile_source {
         }
         compile_error("Internal: unclassified function '$name'");
     }
-    $non_runtime .= compile_main_body($main, \%number_error_functions);
+    my $main_code = compile_main_body_generic_void($main, \%function_sigs);
+    $non_runtime .= $main_code;
 
     my $c = runtime_prelude_for_code($non_runtime);
     $c .= "\n";

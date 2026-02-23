@@ -24,6 +24,32 @@ typedef struct {
 } ResultNumber;
 
 typedef struct {
+  int is_error;
+  int value;
+  char message[160];
+} ResultBool;
+
+typedef struct {
+  int is_error;
+  char value[256];
+  char message[160];
+} ResultStringValue;
+
+#define METAC_VALUE_NUMBER 1
+#define METAC_VALUE_BOOL 2
+#define METAC_VALUE_STRING 3
+#define METAC_VALUE_ERROR 4
+#define METAC_VALUE_NULL 5
+
+typedef struct {
+  int kind;
+  int64_t number_value;
+  int bool_value;
+  char string_value[256];
+  char error_message[160];
+} MetaCValue;
+
+typedef struct {
   int is_null;
   int64_t value;
 } NullableNumber;

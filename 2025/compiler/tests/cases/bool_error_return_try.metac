@@ -1,0 +1,13 @@
+function main() {
+  const ok = run()?
+  if ok {
+    log("Result: 1")
+  } else {
+    log("Result: 0")
+  }
+}
+
+function run(): bool | error {
+  const n = parseNumber("9")?
+  return n > 0
+}

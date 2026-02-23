@@ -35,6 +35,10 @@ sub expr_tokens {
             push @tokens, { type => 'op', value => '||' };
             next;
         }
+        if ($expr =~ /\G&&/gc) {
+            push @tokens, { type => 'op', value => '&&' };
+            next;
+        }
         if ($expr =~ /\G[<>,\+\-\*\/%\.\(\)\[\]]/gc) {
             push @tokens, { type => 'op', value => $& };
             next;
@@ -92,6 +96,7 @@ sub parse_expr {
     my $parse_add;
     my $parse_cmp;
     my $parse_eq;
+    my $parse_and;
     my $parse_or;
     my $parse_lambda;
 
@@ -273,13 +278,25 @@ sub parse_expr {
         return $left;
     };
 
-    $parse_or = sub {
+    $parse_and = sub {
         my $left = $parse_eq->();
+        while (1) {
+            my $tok = $peek->();
+            last if !defined $tok || $tok->{type} ne 'op' || $tok->{value} ne '&&';
+            $idx++;
+            my $right = $parse_eq->();
+            $left = { kind => 'binop', op => '&&', left => $left, right => $right };
+        }
+        return $left;
+    };
+
+    $parse_or = sub {
+        my $left = $parse_and->();
         while (1) {
             my $tok = $peek->();
             last if !defined $tok || $tok->{type} ne 'op' || $tok->{value} ne '||';
             $idx++;
-            my $right = $parse_eq->();
+            my $right = $parse_and->();
             $left = { kind => 'binop', op => '||', left => $left, right => $right };
         }
         return $left;

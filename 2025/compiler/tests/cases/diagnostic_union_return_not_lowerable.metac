@@ -1,0 +1,8 @@
+function main() {
+  const result = run()
+  log("Result: ${result}")
+}
+
+function run(): number | bool {
+  return 1
+}

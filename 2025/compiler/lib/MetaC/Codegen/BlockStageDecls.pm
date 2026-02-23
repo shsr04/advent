@@ -2,6 +2,28 @@ package MetaC::Codegen;
 use strict;
 use warnings;
 
+sub _emit_try_failure {
+    my ($out, $indent, $current_fn_return, $message_expr) = @_;
+    if (type_is_number_or_error($current_fn_return)) {
+        emit_line($out, $indent, "return err_number($message_expr, __metac_line_no, \"\");");
+        return;
+    }
+    if (type_is_bool_or_error($current_fn_return)) {
+        emit_line($out, $indent, "return err_bool($message_expr, __metac_line_no, \"\");");
+        return;
+    }
+    if (type_is_string_or_error($current_fn_return)) {
+        emit_line($out, $indent, "return err_string_value($message_expr, __metac_line_no, \"\");");
+        return;
+    }
+    if (is_supported_generic_union_return($current_fn_return) && union_contains_member($current_fn_return, 'error')) {
+        emit_line($out, $indent, "return metac_value_error($message_expr, __metac_line_no, \"\");");
+        return;
+    }
+    emit_line($out, $indent, "fprintf(stderr, \"%s\\n\", $message_expr);");
+    emit_line($out, $indent, "exit(2);");
+}
+
 sub _compile_block_stage_decls {
     my ($stmt, $ctx, $out, $indent, $current_fn_return) = @_;
         if ($stmt->{kind} eq 'let') {
@@ -344,9 +366,6 @@ sub _compile_block_stage_decls {
         }
 
         if ($stmt->{kind} eq 'const_try_tail_expr') {
-            compile_error("try expression with '?.' is currently only supported in number | error functions")
-              if $current_fn_return ne 'number_or_error';
-
             my $tmp = '__metac_chain' . $ctx->{tmp_counter}++;
             my $first_stmt = {
                 kind => 'const_try_expr',
@@ -366,9 +385,6 @@ sub _compile_block_stage_decls {
         }
 
         if ($stmt->{kind} eq 'const_split_try') {
-            compile_error("split(...)? is currently only supported in number | error functions")
-              if $current_fn_return ne 'number_or_error';
-
             my ($src_code, $src_type) = compile_expr($stmt->{source_expr}, $ctx);
             my ($delim_code, $delim_type) = compile_expr($stmt->{delim_expr}, $ctx);
             compile_error("split source must be string") if $src_type ne 'string';
@@ -377,7 +393,7 @@ sub _compile_block_stage_decls {
             my $tmp = '__metac_split' . $ctx->{tmp_counter}++;
             emit_line($out, $indent, "ResultStringList $tmp = metac_split_string($src_code, $delim_code);");
             emit_line($out, $indent, "if ($tmp.is_error) {");
-            emit_line($out, $indent + 2, "return err_number($tmp.message, __metac_line_no, \"\");");
+            _emit_try_failure($out, $indent + 2, $current_fn_return, "$tmp.message");
             emit_line($out, $indent, "}");
             emit_line($out, $indent, "StringList $stmt->{name} = $tmp.value;");
 
@@ -394,10 +410,63 @@ sub _compile_block_stage_decls {
         }
 
         if ($stmt->{kind} eq 'const_try_expr') {
-            compile_error("try expression with '?' is currently only supported in number | error functions")
-              if $current_fn_return ne 'number_or_error';
-
             my $expr = $stmt->{expr};
+
+            if ($expr->{kind} eq 'call') {
+                my $functions = $ctx->{functions} // {};
+                my $sig = $functions->{ $expr->{name} };
+                my $non_error_member = defined($sig) ? non_error_member_of_error_union($sig->{return_type}) : undef;
+                if (defined($sig) && defined($non_error_member) && ($non_error_member eq 'number' || $non_error_member eq 'bool' || $non_error_member eq 'string')) {
+                    my $expected = scalar @{ $sig->{params} };
+                    my $actual = scalar @{ $expr->{args} };
+                    compile_error("Function '$expr->{name}' expects $expected args, got $actual")
+                      if $expected != $actual;
+
+                    my @arg_code;
+                    for (my $i = 0; $i < $expected; $i++) {
+                        my ($arg_c, $arg_t) = compile_expr($expr->{args}[$i], $ctx);
+                        my $param_t = $sig->{params}[$i]{type};
+                        if ($param_t eq 'number') {
+                            push @arg_code, number_like_to_c_expr($arg_c, $arg_t, "Arg " . ($i + 1) . " to '$expr->{name}'");
+                            next;
+                        }
+                        if ($param_t eq 'number_or_null') {
+                            push @arg_code, number_or_null_to_c_expr($arg_c, $arg_t, "Arg " . ($i + 1) . " to '$expr->{name}'");
+                            next;
+                        }
+                        compile_error("Arg " . ($i + 1) . " to '$expr->{name}' must be $param_t, got $arg_t")
+                          if $arg_t ne $param_t;
+                        push @arg_code, $arg_c;
+                    }
+
+                    my $tmp = '__metac_try_call' . $ctx->{tmp_counter}++;
+                    my $result_c_type = $non_error_member eq 'number' ? 'ResultNumber'
+                      : $non_error_member eq 'bool' ? 'ResultBool'
+                      : 'ResultStringValue';
+                    emit_line($out, $indent, "$result_c_type $tmp = $expr->{name}(" . join(', ', @arg_code) . ");");
+                    emit_line($out, $indent, "if ($tmp.is_error) {");
+                    _emit_try_failure($out, $indent + 2, $current_fn_return, "$tmp.message");
+                    emit_line($out, $indent, "}");
+                    if ($non_error_member eq 'number') {
+                        emit_line($out, $indent, "const int64_t $stmt->{name} = $tmp.value;");
+                    } elsif ($non_error_member eq 'bool') {
+                        emit_line($out, $indent, "const int $stmt->{name} = $tmp.value;");
+                    } else {
+                        emit_line($out, $indent, 'char ' . $stmt->{name} . '[256];');
+                        emit_line($out, $indent, "metac_copy_str($stmt->{name}, sizeof($stmt->{name}), $tmp.value);");
+                    }
+                    declare_var(
+                        $ctx,
+                        $stmt->{name},
+                        {
+                            type      => $non_error_member,
+                            immutable => 1,
+                            c_name    => $stmt->{name},
+                        }
+                    );
+                    return 1;
+                }
+            }
 
             if ($expr->{kind} eq 'call' && $expr->{name} eq 'split') {
                 my $actual = scalar @{ $expr->{args} };
@@ -412,7 +481,7 @@ sub _compile_block_stage_decls {
                 my $tmp = '__metac_split' . $ctx->{tmp_counter}++;
                 emit_line($out, $indent, "ResultStringList $tmp = metac_split_string($src_code, $delim_code);");
                 emit_line($out, $indent, "if ($tmp.is_error) {");
-                emit_line($out, $indent + 2, "return err_number($tmp.message, __metac_line_no, \"\");");
+                _emit_try_failure($out, $indent + 2, $current_fn_return, "$tmp.message");
                 emit_line($out, $indent, "}");
                 emit_line($out, $indent, "StringList $stmt->{name} = $tmp.value;");
 
@@ -439,7 +508,7 @@ sub _compile_block_stage_decls {
                 my $tmp = '__metac_num' . $ctx->{tmp_counter}++;
                 emit_line($out, $indent, "int64_t $tmp = 0;");
                 emit_line($out, $indent, "if (!metac_parse_int($src_code, &$tmp)) {");
-                emit_line($out, $indent + 2, "return err_number(\"Invalid number\", __metac_line_no, $src_code);");
+                _emit_try_failure($out, $indent + 2, $current_fn_return, "metac_fmt(\"Invalid number: %s\", $src_code)");
                 emit_line($out, $indent, "}");
                 emit_line($out, $indent, "const int64_t $stmt->{name} = $tmp;");
 
@@ -498,7 +567,7 @@ sub _compile_block_stage_decls {
                     my $value_num = number_like_to_c_expr($value_code, $value_type, "insert(...)?");
                     emit_line($out, $indent, "ResultMatrixNumber $tmp = metac_matrix_number_insert_try($recv_code, $value_num, $coord_code);");
                     emit_line($out, $indent, "if ($tmp.is_error) {");
-                    emit_line($out, $indent + 2, "return err_number($tmp.message, __metac_line_no, \"\");");
+                    _emit_try_failure($out, $indent + 2, $current_fn_return, "$tmp.message");
                     emit_line($out, $indent, "}");
                     emit_line($out, $indent, "MatrixNumber $stmt->{name} = $tmp.value;");
                 } elsif ($meta->{elem} eq 'string') {
@@ -506,7 +575,7 @@ sub _compile_block_stage_decls {
                       if $value_type ne 'string';
                     emit_line($out, $indent, "ResultMatrixString $tmp = metac_matrix_string_insert_try($recv_code, $value_code, $coord_code);");
                     emit_line($out, $indent, "if ($tmp.is_error) {");
-                    emit_line($out, $indent + 2, "return err_number($tmp.message, __metac_line_no, \"\");");
+                    _emit_try_failure($out, $indent + 2, $current_fn_return, "$tmp.message");
                     emit_line($out, $indent, "}");
                     emit_line($out, $indent, "MatrixString $stmt->{name} = $tmp.value;");
                 } else {
@@ -568,7 +637,7 @@ sub _compile_block_stage_decls {
                   if $pred_type ne 'bool';
 
                 emit_line($out, $indent, "if (!($pred_code)) {");
-                emit_line($out, $indent + 2, "return err_number($msg_code, __metac_line_no, \"\");");
+                _emit_try_failure($out, $indent + 2, $current_fn_return, $msg_code);
                 emit_line($out, $indent, "}");
                 if ($recv_type eq 'string_list') {
                     emit_line($out, $indent, "StringList $stmt->{name} = $tmp;");

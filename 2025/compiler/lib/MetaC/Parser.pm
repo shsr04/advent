@@ -12,7 +12,12 @@ use MetaC::Support qw(
     split_top_level_commas
     parse_constraints
 );
-use MetaC::TypeSpec qw(normalize_type_annotation apply_matrix_constraints is_matrix_type);
+use MetaC::TypeSpec qw(
+    normalize_type_annotation
+    union_member_types
+    apply_matrix_constraints
+    is_matrix_type
+);
 
 our @EXPORT_OK = qw(
     parse_function_header

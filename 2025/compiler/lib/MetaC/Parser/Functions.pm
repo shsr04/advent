@@ -13,14 +13,16 @@ sub parse_declared_type_and_constraints {
     }
 
     my $type = normalize_type_annotation($type_raw);
-    if ($type ne 'number'
-        && $type ne 'string'
-        && $type ne 'bool'
-        && $type ne 'number_list'
-        && $type ne 'string_list'
-        && $type ne 'number_or_null'
-        && !is_matrix_type($type))
-    {
+    my $members = union_member_types($type);
+    for my $m (@$members) {
+        next if $m eq 'number';
+        next if $m eq 'string';
+        next if $m eq 'bool';
+        next if $m eq 'error';
+        next if $m eq 'null';
+        next if $m eq 'number_list';
+        next if $m eq 'string_list';
+        next if is_matrix_type($m);
         compile_error("Unsupported type annotation '$type_raw' in $where");
     }
 

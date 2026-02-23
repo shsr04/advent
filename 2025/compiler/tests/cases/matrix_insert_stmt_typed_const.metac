@@ -1,8 +1,6 @@
 function main() {
-  printf("Result: %d\n", run() or (e) => {
-    printf("Error! %s\n", e.message)
-    return 1
-  })
+  const result = run()?
+  log("Result: ${result}")
 }
 
 function run(): number | error {
