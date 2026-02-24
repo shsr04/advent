@@ -2,6 +2,58 @@ package MetaC::Codegen;
 use strict;
 use warnings;
 
+sub _compile_call_args_for_sig {
+    my ($expr, $sig, $ctx) = @_;
+    my $expected = scalar @{ $sig->{params} };
+    my $actual = scalar @{ $expr->{args} };
+    compile_error("Function '$expr->{name}' expects $expected args, got $actual")
+      if $expected != $actual;
+
+    my @arg_code;
+    for (my $i = 0; $i < $expected; $i++) {
+        my ($arg_c, $arg_t) = compile_expr($expr->{args}[$i], $ctx);
+        my $param_t = $sig->{params}[$i]{type};
+        if ($param_t eq 'number') {
+            push @arg_code, number_like_to_c_expr($arg_c, $arg_t, "Arg " . ($i + 1) . " to '$expr->{name}'");
+            next;
+        }
+        if ($param_t eq 'number_or_null') {
+            push @arg_code, number_or_null_to_c_expr($arg_c, $arg_t, "Arg " . ($i + 1) . " to '$expr->{name}'");
+            next;
+        }
+        if (is_supported_generic_union_return($param_t)) {
+            push @arg_code, generic_union_to_c_expr($arg_c, $arg_t, $param_t, "Arg " . ($i + 1) . " to '$expr->{name}'");
+            next;
+        }
+        compile_error("Arg " . ($i + 1) . " to '$expr->{name}' must be $param_t, got $arg_t")
+          if $arg_t ne $param_t;
+        push @arg_code, $arg_c;
+    }
+
+    return \@arg_code;
+}
+
+sub _emit_or_catch_handler_then_fail {
+    my (%args) = @_;
+    my $ctx = $args{ctx};
+    my $out = $args{out};
+    my $indent = $args{indent};
+    my $current_fn_return = $args{current_fn_return};
+    my $handler = $args{handler};
+    my $err_name = $args{err_name};
+    my $message_expr = $args{message_expr};
+
+    if (defined $handler) {
+        new_scope($ctx);
+        if (defined $err_name && $err_name ne '') {
+            declare_var($ctx, $err_name, { type => 'string', immutable => 1, c_name => $message_expr });
+        }
+        compile_block($handler, $ctx, $out, $indent, $current_fn_return);
+        pop_scope($ctx);
+    }
+    _emit_try_failure($out, $indent, $current_fn_return, $message_expr);
+}
+
 sub _compile_block_stage_decls_try_ops {
     my ($stmt, $ctx, $out, $indent, $current_fn_return) = @_;
     if ($stmt->{kind} eq 'const_try_tail_expr') {
@@ -54,8 +106,7 @@ sub _compile_block_stage_decls_try_ops {
         if ($expr->{kind} eq 'call') {
             my $functions = $ctx->{functions} // {};
             my $sig = $functions->{ $expr->{name} };
-            my $non_error_member = defined($sig) ? non_error_member_of_error_union($sig->{return_type}) : undef;
-            if (defined($sig) && defined($non_error_member) && ($non_error_member eq 'number' || $non_error_member eq 'bool' || $non_error_member eq 'string')) {
+            if (defined($sig) && union_contains_member($sig->{return_type}, 'error')) {
                 my $expected = scalar @{ $sig->{params} };
                 my $actual = scalar @{ $expr->{args} };
                 compile_error("Function '$expr->{name}' expects $expected args, got $actual")
@@ -73,32 +124,64 @@ sub _compile_block_stage_decls_try_ops {
                         push @arg_code, number_or_null_to_c_expr($arg_c, $arg_t, "Arg " . ($i + 1) . " to '$expr->{name}'");
                         next;
                     }
+                    if (is_supported_generic_union_return($param_t)) {
+                        push @arg_code, generic_union_to_c_expr($arg_c, $arg_t, $param_t, "Arg " . ($i + 1) . " to '$expr->{name}'");
+                        next;
+                    }
                     compile_error("Arg " . ($i + 1) . " to '$expr->{name}' must be $param_t, got $arg_t")
                       if $arg_t ne $param_t;
                     push @arg_code, $arg_c;
                 }
 
+                my $return_type = $sig->{return_type};
+                my $non_error_type = type_without_union_member($return_type, 'error');
                 my $tmp = '__metac_try_call' . $ctx->{tmp_counter}++;
-                my $result_c_type = $non_error_member eq 'number' ? 'ResultNumber'
-                  : $non_error_member eq 'bool' ? 'ResultBool'
-                  : 'ResultStringValue';
-                emit_line($out, $indent, "$result_c_type $tmp = $expr->{name}(" . join(', ', @arg_code) . ");");
-                emit_line($out, $indent, "if ($tmp.is_error) {");
-                _emit_try_failure($out, $indent + 2, $current_fn_return, "$tmp.message");
-                emit_line($out, $indent, "}");
-                if ($non_error_member eq 'number') {
+
+                if (type_is_number_or_error($return_type)) {
+                    emit_line($out, $indent, "ResultNumber $tmp = $expr->{name}(" . join(', ', @arg_code) . ");");
+                    emit_line($out, $indent, "if ($tmp.is_error) {");
+                    _emit_try_failure($out, $indent + 2, $current_fn_return, "$tmp.message");
+                    emit_line($out, $indent, "}");
                     emit_line($out, $indent, "const int64_t $stmt->{name} = $tmp.value;");
-                } elsif ($non_error_member eq 'bool') {
+                } elsif (type_is_bool_or_error($return_type)) {
+                    emit_line($out, $indent, "ResultBool $tmp = $expr->{name}(" . join(', ', @arg_code) . ");");
+                    emit_line($out, $indent, "if ($tmp.is_error) {");
+                    _emit_try_failure($out, $indent + 2, $current_fn_return, "$tmp.message");
+                    emit_line($out, $indent, "}");
                     emit_line($out, $indent, "const int $stmt->{name} = $tmp.value;");
-                } else {
+                } elsif (type_is_string_or_error($return_type)) {
+                    emit_line($out, $indent, "ResultStringValue $tmp = $expr->{name}(" . join(', ', @arg_code) . ");");
+                    emit_line($out, $indent, "if ($tmp.is_error) {");
+                    _emit_try_failure($out, $indent + 2, $current_fn_return, "$tmp.message");
+                    emit_line($out, $indent, "}");
                     emit_line($out, $indent, 'char ' . $stmt->{name} . '[256];');
                     emit_line($out, $indent, "metac_copy_str($stmt->{name}, sizeof($stmt->{name}), $tmp.value);");
+                } elsif (is_supported_generic_union_return($return_type)) {
+                    emit_line($out, $indent, "MetaCValue $tmp = $expr->{name}(" . join(', ', @arg_code) . ");");
+                    emit_line($out, $indent, "if ($tmp.kind == METAC_VALUE_ERROR) {");
+                    _emit_try_failure($out, $indent + 2, $current_fn_return, "$tmp.error_message");
+                    emit_line($out, $indent, "}");
+                    if ($non_error_type eq 'number') {
+                        emit_line($out, $indent, "const int64_t $stmt->{name} = $tmp.number_value;");
+                    } elsif ($non_error_type eq 'bool') {
+                        emit_line($out, $indent, "const int $stmt->{name} = $tmp.bool_value;");
+                    } elsif ($non_error_type eq 'string') {
+                        emit_line($out, $indent, 'char ' . $stmt->{name} . '[256];');
+                        emit_line($out, $indent, "metac_copy_str($stmt->{name}, sizeof($stmt->{name}), $tmp.string_value);");
+                    } elsif (is_supported_generic_union_return($non_error_type)) {
+                        emit_line($out, $indent, "const MetaCValue $stmt->{name} = $tmp;");
+                    } else {
+                        compile_error("Unsupported non-error try result type '$non_error_type' from '$expr->{name}'");
+                    }
+                } else {
+                    compile_error("Unsupported fallible return type '$return_type' for '$expr->{name}'");
                 }
+
                 declare_var(
                     $ctx,
                     $stmt->{name},
                     {
-                        type      => $non_error_member,
+                        type      => $non_error_type,
                         immutable => 1,
                         c_name    => $stmt->{name},
                     }
@@ -302,6 +385,105 @@ sub _compile_block_stage_decls_try_ops {
         }
 
         compile_error("Unsupported try expression in const assignment");
+    }
+
+    if ($stmt->{kind} eq 'const_or_catch') {
+        my $expr = $stmt->{expr};
+        compile_error("or catch assignment currently supports fallible function calls")
+          if $expr->{kind} ne 'call';
+
+        my $functions = $ctx->{functions} // {};
+        my $sig = $functions->{ $expr->{name} };
+        compile_error("or catch requires fallible user function call, got '$expr->{name}'")
+          if !defined($sig) || !union_contains_member($sig->{return_type}, 'error');
+
+        my $arg_code = _compile_call_args_for_sig($expr, $sig, $ctx);
+        my $return_type = $sig->{return_type};
+        my $non_error_type = type_without_union_member($return_type, 'error');
+        my $tmp = '__metac_or_call' . $ctx->{tmp_counter}++;
+
+        if (type_is_number_or_error($return_type)) {
+            emit_line($out, $indent, "ResultNumber $tmp = $expr->{name}(" . join(', ', @$arg_code) . ");");
+            emit_line($out, $indent, "if ($tmp.is_error) {");
+            _emit_or_catch_handler_then_fail(
+                ctx               => $ctx,
+                out               => $out,
+                indent            => $indent + 2,
+                current_fn_return => $current_fn_return,
+                handler           => $stmt->{handler},
+                err_name          => $stmt->{err_name},
+                message_expr      => "$tmp.message",
+            );
+            emit_line($out, $indent, "}");
+            emit_line($out, $indent, "const int64_t $stmt->{name} = $tmp.value;");
+        } elsif (type_is_bool_or_error($return_type)) {
+            emit_line($out, $indent, "ResultBool $tmp = $expr->{name}(" . join(', ', @$arg_code) . ");");
+            emit_line($out, $indent, "if ($tmp.is_error) {");
+            _emit_or_catch_handler_then_fail(
+                ctx               => $ctx,
+                out               => $out,
+                indent            => $indent + 2,
+                current_fn_return => $current_fn_return,
+                handler           => $stmt->{handler},
+                err_name          => $stmt->{err_name},
+                message_expr      => "$tmp.message",
+            );
+            emit_line($out, $indent, "}");
+            emit_line($out, $indent, "const int $stmt->{name} = $tmp.value;");
+        } elsif (type_is_string_or_error($return_type)) {
+            emit_line($out, $indent, "ResultStringValue $tmp = $expr->{name}(" . join(', ', @$arg_code) . ");");
+            emit_line($out, $indent, "if ($tmp.is_error) {");
+            _emit_or_catch_handler_then_fail(
+                ctx               => $ctx,
+                out               => $out,
+                indent            => $indent + 2,
+                current_fn_return => $current_fn_return,
+                handler           => $stmt->{handler},
+                err_name          => $stmt->{err_name},
+                message_expr      => "$tmp.message",
+            );
+            emit_line($out, $indent, "}");
+            emit_line($out, $indent, 'char ' . $stmt->{name} . '[256];');
+            emit_line($out, $indent, "metac_copy_str($stmt->{name}, sizeof($stmt->{name}), $tmp.value);");
+        } elsif (is_supported_generic_union_return($return_type)) {
+            emit_line($out, $indent, "MetaCValue $tmp = $expr->{name}(" . join(', ', @$arg_code) . ");");
+            emit_line($out, $indent, "if ($tmp.kind == METAC_VALUE_ERROR) {");
+            _emit_or_catch_handler_then_fail(
+                ctx               => $ctx,
+                out               => $out,
+                indent            => $indent + 2,
+                current_fn_return => $current_fn_return,
+                handler           => $stmt->{handler},
+                err_name          => $stmt->{err_name},
+                message_expr      => "$tmp.error_message",
+            );
+            emit_line($out, $indent, "}");
+            if ($non_error_type eq 'number') {
+                emit_line($out, $indent, "const int64_t $stmt->{name} = $tmp.number_value;");
+            } elsif ($non_error_type eq 'bool') {
+                emit_line($out, $indent, "const int $stmt->{name} = $tmp.bool_value;");
+            } elsif ($non_error_type eq 'string') {
+                emit_line($out, $indent, 'char ' . $stmt->{name} . '[256];');
+                emit_line($out, $indent, "metac_copy_str($stmt->{name}, sizeof($stmt->{name}), $tmp.string_value);");
+            } elsif (is_supported_generic_union_return($non_error_type)) {
+                emit_line($out, $indent, "const MetaCValue $stmt->{name} = $tmp;");
+            } else {
+                compile_error("Unsupported non-error or-catch result type '$non_error_type' from '$expr->{name}'");
+            }
+        } else {
+            compile_error("Unsupported fallible return type '$return_type' for '$expr->{name}'");
+        }
+
+        declare_var(
+            $ctx,
+            $stmt->{name},
+            {
+                type      => $non_error_type,
+                immutable => 1,
+                c_name    => $stmt->{name},
+            }
+        );
+        return 1;
     }
 }
 

@@ -1,0 +1,4 @@
+function main() {
+  rewind
+  log("Result: 0")
+}

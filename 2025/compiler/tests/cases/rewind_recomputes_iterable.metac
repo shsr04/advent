@@ -1,0 +1,21 @@
+function main() {
+  const result = run()?
+  log("Result: ${result}")
+}
+
+function run(): number | error {
+  let seen = 0
+  let end = 2
+  let didRewind = 0
+
+  for const i in seq(1, end) {
+    seen += 1
+    if i == 2 && didRewind == 0 {
+      didRewind = 1
+      end = 3
+      rewind
+    }
+  }
+
+  return seen
+}

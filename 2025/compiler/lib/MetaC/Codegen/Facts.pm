@@ -39,6 +39,38 @@ sub block_definitely_returns {
     return 0;
 }
 
+sub loop_body_uses_rewind_current_loop {
+    my ($stmts) = @_;
+    for my $stmt (@$stmts) {
+        my $kind = $stmt->{kind};
+        return 1 if $kind eq 'rewind';
+
+        if ($kind eq 'if') {
+            return 1 if loop_body_uses_rewind_current_loop($stmt->{then_body});
+            if (defined $stmt->{else_body}) {
+                return 1 if loop_body_uses_rewind_current_loop($stmt->{else_body});
+            }
+            next;
+        }
+
+        if ($kind eq 'let_producer') {
+            return 1 if loop_body_uses_rewind_current_loop($stmt->{body});
+            next;
+        }
+
+        if ($kind eq 'destructure_split_or') {
+            return 1 if loop_body_uses_rewind_current_loop($stmt->{handler});
+            next;
+        }
+
+        if ($kind eq 'const_or_catch' || $kind eq 'expr_or_catch') {
+            return 1 if loop_body_uses_rewind_current_loop($stmt->{handler});
+            next;
+        }
+    }
+    return 0;
+}
+
 
 sub expr_is_stable_for_facts {
     my ($expr, $ctx) = @_;
@@ -292,6 +324,128 @@ sub nullable_number_names_non_null_on_true_expr {
     my $single = nullable_number_non_null_on_true_expr($expr, $ctx);
     push @names, $single if defined $single;
     return \@names;
+}
+
+sub union_member_check_from_condition {
+    my ($cond, $ctx) = @_;
+    return undef if $cond->{kind} ne 'binop';
+    return undef if $cond->{op} ne '==' && $cond->{op} ne '!=';
+
+    my ($ident, $literal) = ($cond->{left}, $cond->{right});
+    if ($ident->{kind} ne 'ident') {
+        ($ident, $literal) = ($cond->{right}, $cond->{left});
+    }
+    return undef if $ident->{kind} ne 'ident';
+
+    my $member;
+    if ($literal->{kind} eq 'num') {
+        $member = 'number';
+    } elsif ($literal->{kind} eq 'bool') {
+        $member = 'bool';
+    } elsif ($literal->{kind} eq 'str') {
+        $member = 'string';
+    } elsif ($literal->{kind} eq 'null') {
+        $member = 'null';
+    } else {
+        return undef;
+    }
+
+    my $info = lookup_var($ctx, $ident->{name});
+    return undef if !defined $info;
+    return undef if !is_supported_generic_union_return($info->{type});
+    return undef if $info->{type} eq 'number_or_null';
+    return undef if !union_contains_member($info->{type}, $member);
+
+    return {
+        name   => $ident->{name},
+        member => $member,
+        op     => $cond->{op},
+    };
+}
+
+sub declare_union_member_shadow {
+    my ($ctx, $name, $member) = @_;
+    my $info = lookup_var($ctx, $name);
+    return if !defined $info;
+    return if !is_supported_generic_union_return($info->{type});
+    return if $info->{type} eq 'number_or_null';
+    return if !union_contains_member($info->{type}, $member);
+
+    my $c_name = $info->{c_name};
+    my %shadow = (
+        immutable => $info->{immutable},
+    );
+    if ($member eq 'number') {
+        $shadow{type} = 'number';
+        $shadow{c_name} = "($c_name.number_value)";
+    } elsif ($member eq 'bool') {
+        $shadow{type} = 'bool';
+        $shadow{c_name} = "($c_name.bool_value)";
+    } elsif ($member eq 'string') {
+        $shadow{type} = 'string';
+        $shadow{c_name} = "($c_name.string_value)";
+    } elsif ($member eq 'null') {
+        $shadow{type} = 'null';
+        $shadow{c_name} = 'metac_null_number()';
+    } else {
+        return;
+    }
+
+    declare_var($ctx, $name, \%shadow);
+}
+
+sub union_member_binding_on_true_expr {
+    my ($expr, $ctx) = @_;
+    my $check = union_member_check_from_condition($expr, $ctx);
+    return undef if !defined $check;
+    return undef if $check->{op} ne '==';
+    return {
+        name   => $check->{name},
+        member => $check->{member},
+    };
+}
+
+sub union_member_binding_on_false_expr {
+    my ($expr, $ctx) = @_;
+    my $check = union_member_check_from_condition($expr, $ctx);
+    return undef if !defined $check;
+    return undef if $check->{op} ne '!=';
+    return {
+        name   => $check->{name},
+        member => $check->{member},
+    };
+}
+
+sub union_member_bindings_on_true_expr {
+    my ($expr, $ctx) = @_;
+    my @bindings;
+
+    if ($expr->{kind} eq 'binop' && $expr->{op} eq '&&') {
+        my $left = union_member_bindings_on_true_expr($expr->{left}, $ctx);
+        my $right = union_member_bindings_on_true_expr($expr->{right}, $ctx);
+        push @bindings, @$left, @$right;
+        return \@bindings;
+    }
+
+    my $single = union_member_binding_on_true_expr($expr, $ctx);
+    push @bindings, $single if defined $single;
+    return \@bindings;
+}
+
+sub union_member_bindings_on_false_expr {
+    my ($expr, $ctx) = @_;
+    my @bindings;
+
+    if ($expr->{kind} eq 'binop' && $expr->{op} eq '||') {
+        my $left = union_member_bindings_on_false_expr($expr->{left}, $ctx);
+        my $right = union_member_bindings_on_false_expr($expr->{right}, $ctx);
+        push @bindings, @$left, @$right;
+        return \@bindings;
+    }
+
+    my $single = union_member_binding_on_false_expr($expr, $ctx);
+    push @bindings, $single if defined $single;
+    return \@bindings;
 }
 
 

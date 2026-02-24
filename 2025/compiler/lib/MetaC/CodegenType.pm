@@ -11,6 +11,8 @@ use MetaC::TypeSpec qw(
     matrix_member_meta
     is_union_type
     union_member_types
+    union_contains_member
+    is_supported_generic_union_return
     type_is_number_or_null
 );
 
@@ -21,6 +23,7 @@ our @EXPORT_OK = qw(
     number_like_to_c_expr
     type_matches_expected
     number_or_null_to_c_expr
+    generic_union_to_c_expr
 );
 
 sub param_c_type {
@@ -30,6 +33,7 @@ sub param_c_type {
     return 'int' if $param->{type} eq 'bool';
     return 'const char *' if $param->{type} eq 'string';
     return 'BoolList' if $param->{type} eq 'bool_list';
+    return 'MetaCValue' if is_supported_generic_union_return($param->{type});
     if (is_matrix_type($param->{type})) {
         my $meta = matrix_type_meta($param->{type});
         return 'MatrixNumber' if $meta->{elem} eq 'number';
@@ -70,6 +74,13 @@ sub number_like_to_c_expr {
 sub type_matches_expected {
     my ($expected, $actual) = @_;
     if (is_union_type($expected)) {
+        if (is_union_type($actual)) {
+            my %allowed = map { $_ => 1 } @{ union_member_types($expected) };
+            for my $member (@{ union_member_types($actual) }) {
+                return 0 if !$allowed{$member};
+            }
+            return 1;
+        }
         my $members = union_member_types($expected);
         for my $member (@$members) {
             return 1 if type_matches_expected($member, $actual);
@@ -98,6 +109,47 @@ sub number_or_null_to_c_expr {
     }
     return "metac_null_number()" if $type eq 'null';
     compile_error("$where requires number|null operand, got $type");
+}
+
+sub generic_union_to_c_expr {
+    my ($code, $actual_type, $expected_union, $where) = @_;
+    compile_error("$where requires generic union target, got $expected_union")
+      if !is_supported_generic_union_return($expected_union);
+
+    if (is_union_type($actual_type)) {
+        compile_error("$where cannot convert '$actual_type' to '$expected_union'")
+          if !type_matches_expected($expected_union, $actual_type);
+        return $code;
+    }
+
+    return $code if $actual_type eq $expected_union;
+
+    if ($actual_type eq 'number' || $actual_type eq 'indexed_number') {
+        compile_error("$where cannot convert number to '$expected_union'")
+          if !union_contains_member($expected_union, 'number');
+        my $num = number_like_to_c_expr($code, $actual_type, $where);
+        return "metac_value_number($num)";
+    }
+
+    if ($actual_type eq 'bool') {
+        compile_error("$where cannot convert bool to '$expected_union'")
+          if !union_contains_member($expected_union, 'bool');
+        return "metac_value_bool($code)";
+    }
+
+    if ($actual_type eq 'string') {
+        compile_error("$where cannot convert string to '$expected_union'")
+          if !union_contains_member($expected_union, 'string');
+        return "metac_value_string($code)";
+    }
+
+    if ($actual_type eq 'null') {
+        compile_error("$where cannot convert null to '$expected_union'")
+          if !union_contains_member($expected_union, 'null');
+        return "metac_value_null()";
+    }
+
+    compile_error("$where cannot convert '$actual_type' to '$expected_union'");
 }
 
 1;

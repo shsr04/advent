@@ -102,7 +102,7 @@ Test cases live in `compiler/tests/cases/`:
   - supports list-valued expressions (`string_list` / `number_list`)
   - supports chained `.filter(x => <bool-expr>)` over either form
 - `const [a, b, ...] = match(source, /<regex-with-captures>/)?`
-- `const [a, b, ...] = split(source, delim) or (e) => { ... }`
+- `const [a, b, ...] = split(source, delim) or catch(e) { ... }`
 - producer initialization: `let <id>: <type> from () => { ... }`
 - typed assignment form: `<id>: <type> [with <constraints>] = <expr>`
 - expression grammar includes:

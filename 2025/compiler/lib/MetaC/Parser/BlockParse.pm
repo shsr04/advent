@@ -101,6 +101,12 @@ sub parse_block {
             next;
         }
 
+        if ($line eq 'rewind') {
+            push @stmts, { kind => 'rewind', line => $line_no };
+            $$idx_ref++;
+            next;
+        }
+
         if ($line =~ /^if\s+(.+)\s*\{$/) {
             my $cond = trim($1);
             $$idx_ref++;
@@ -145,7 +151,7 @@ sub parse_block {
             my ($vars_raw, $rhs) = ($1, trim($2));
             my @vars = map { trim($_) } split /\s*,\s*/, $vars_raw;
             my $split = parse_call_invocation_text($rhs, 'split');
-            if (defined $split && $split->{rest} =~ /^or\s+\(([A-Za-z_][A-Za-z0-9_]*)\)\s*=>\s*\{$/) {
+            if (defined $split && $split->{rest} =~ /^or\s+catch\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)?\s*\)\s*\{$/) {
                 my $err_name = $1;
                 compile_error("split(...) in destructure expects exactly 2 args")
                   if scalar(@{ $split->{args} }) != 2;
@@ -164,6 +170,9 @@ sub parse_block {
                     line        => $line_no,
                 };
                 next;
+            }
+            if (defined $split && $split->{rest} =~ /^or\s+\(([A-Za-z_][A-Za-z0-9_]*)\)\s*=>\s*\{$/) {
+                compile_error("Legacy error handler syntax removed; use 'or catch(<name>) { ... }'");
             }
 
             push @stmts, {
@@ -242,6 +251,22 @@ sub parse_block {
 
         if ($line =~ /^const\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.+)$/) {
             my ($name, $rhs) = ($1, trim($2));
+            if ($rhs =~ /^(.*)\s+or\s+catch\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)?\s*\)\s*\{$/) {
+                my $inner = trim($1);
+                my $err_name = $2;
+                $$idx_ref++;
+                my ($handler_body, $end_reason) = parse_block($lines, $idx_ref, $base_line);
+                compile_error("or catch handler missing closing brace") if $end_reason ne 'close';
+                push @stmts, {
+                    kind    => 'const_or_catch',
+                    name    => $name,
+                    expr    => parse_expr($inner),
+                    err_name => $err_name,
+                    handler => $handler_body,
+                    line    => $line_no,
+                };
+                next;
+            }
             my $split = parse_call_invocation_text($rhs, 'split');
             if (defined $split && $split->{rest} eq '?') {
                 compile_error("split(...) with '?' expects exactly 2 args")
@@ -361,6 +386,26 @@ sub parse_block {
         if ($line =~ /^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.+)$/) {
             push @stmts, { kind => 'assign', name => $1, expr => parse_expr(trim($2)), line => $line_no };
             $$idx_ref++;
+            next;
+        }
+
+        if ($line =~ /^(.*)\s+or\s+catch\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)?\s*\)\s*\{$/) {
+            my $inner = trim($1);
+            my $err_name = $2;
+            my $expr = parse_expr($inner);
+            compile_error("or catch handler requires function or method call expression")
+              if $expr->{kind} ne 'call' && $expr->{kind} ne 'method_call';
+
+            $$idx_ref++;
+            my ($handler_body, $end_reason) = parse_block($lines, $idx_ref, $base_line);
+            compile_error("or catch handler missing closing brace") if $end_reason ne 'close';
+            push @stmts, {
+                kind    => 'expr_or_catch',
+                expr    => $expr,
+                err_name => $err_name,
+                handler => $handler_body,
+                line    => $line_no,
+            };
             next;
         }
 

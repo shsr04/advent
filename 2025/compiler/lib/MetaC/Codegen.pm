@@ -25,6 +25,7 @@ use MetaC::CodegenType qw(
     number_like_to_c_expr
     type_matches_expected
     number_or_null_to_c_expr
+    generic_union_to_c_expr
 );
 use MetaC::CodegenScope qw(
     new_scope
@@ -51,6 +52,7 @@ use MetaC::TypeSpec qw(
     type_is_string_or_error
     type_is_number_or_null
     non_error_member_of_error_union
+    type_without_union_member
     is_matrix_type
     matrix_type_meta
     matrix_member_type

@@ -200,8 +200,12 @@ sub emit_for_each_from_iterable_expr {
     my $out = $args{out};
     my $indent = $args{indent};
     my $current_fn_return = $args{current_fn_return};
+    my $has_rewind = loop_body_uses_rewind_current_loop($stmt->{body});
 
     my $iter = decompose_iterable_expression($iter_expr, $ctx);
+    my $rewind_label = $has_rewind ? ('__metac_rewind_loop' . $ctx->{tmp_counter}++) : undef;
+    emit_line($out, $indent, "$rewind_label: ;") if $has_rewind;
+    push @{ $ctx->{rewind_labels} }, $rewind_label if $has_rewind;
 
     if ($iter->{kind} eq 'seq') {
         my ($start_code, $start_type) = compile_expr($iter->{start_expr}, $ctx);
@@ -265,6 +269,7 @@ sub emit_for_each_from_iterable_expr {
         );
         emit_line($out, $indent + 2, "}");
         emit_line($out, $indent, "}");
+        pop @{ $ctx->{rewind_labels} } if $has_rewind;
         return;
     }
 
@@ -338,6 +343,7 @@ sub emit_for_each_from_iterable_expr {
         member_matrix_type => $member_matrix_type,
     );
     emit_line($out, $indent, "}");
+    pop @{ $ctx->{rewind_labels} } if $has_rewind;
 }
 
 

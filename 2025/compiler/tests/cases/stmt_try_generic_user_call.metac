@@ -1,0 +1,8 @@
+function main() {
+  ping()?
+  log("Result: 1")
+}
+
+function ping(): bool | error {
+  return true
+}

@@ -8,3 +8,8 @@
 # Goals
 You are building a general-purpose compiler for a sophisticated, intuitive programming language. If you encounter concepts and feature requests that could be generalized, do so by all means. This ensures that organically discovered concepts can be used in future programs seamlessly.
 You can refactor and streamline the compiler code as necessary.
+
+# Code guidelines
+- Max file length: 500 lines
+- Max function length: 100 lines
+- Max nesting depth: 3

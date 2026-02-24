@@ -9,7 +9,7 @@ Implemented in `2025/compiler/metac.pl`:
    - generic `for const x in iterable { ... }`
    - `seq(start, end)` iterable in `for` loops (inclusive; ascending/descending).
 2. Split-based destructuring with explicit handler:
-   - `const [a, b] = split(source, "-") or (e) => { ... }`
+   - `const [a, b] = split(source, "-") or catch(e) { ... }`
 3. Error-flow expressions:
    - `?` form for `split(...)?` statement pattern (propagates as `number | error` return).
    - `error("message")` expression constructor in return context.
@@ -24,7 +24,7 @@ Validation:
 - day1/day1b still compile and run.
 - a day2-style compile-check program using:
   - `split(...)?`,
-  - `split(...) or (e) => { ... }`,
+  - `split(...) or catch(e) { ... }`,
   - `seq(start,end)`,
   - `for const ... in ...`,
   - interpolation,

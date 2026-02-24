@@ -38,7 +38,7 @@ sub _compile_block_stage_try {
 
         if ($stmt->{kind} eq 'destructure_split_or') {
             compile_error("split ... or handler is currently only supported in number | error functions")
-              if $current_fn_return ne 'number_or_error';
+              if !type_is_number_or_error($current_fn_return);
 
             my ($src_code, $src_type) = compile_expr($stmt->{source_expr}, $ctx);
             my ($delim_code, $delim_type) = compile_expr($stmt->{delim_expr}, $ctx);
@@ -53,7 +53,9 @@ sub _compile_block_stage_try {
             emit_line($out, $indent, "if ($tmp.is_error || $tmp.value.count != (size_t)$expected) {");
             emit_line($out, $indent + 2, "const char *$handler_err = $tmp.is_error ? $tmp.message : \"Split arity mismatch\";");
             new_scope($ctx);
-            declare_var($ctx, $stmt->{err_name}, { type => 'string', immutable => 1, c_name => $handler_err });
+            if (defined $stmt->{err_name} && $stmt->{err_name} ne '') {
+                declare_var($ctx, $stmt->{err_name}, { type => 'string', immutable => 1, c_name => $handler_err });
+            }
             compile_block($stmt->{handler}, $ctx, $out, $indent + 2, $current_fn_return);
             pop_scope($ctx);
             emit_line($out, $indent + 2, "return err_number($handler_err, __metac_line_no, \"\");");

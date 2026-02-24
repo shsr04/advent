@@ -1,0 +1,15 @@
+function main() {
+  const result = solve()?
+  log("Result: ${result}")
+}
+
+function solve(): number | error {
+  const v = maybeFail() or catch(e) {
+    return 9
+  }
+  return v
+}
+
+function maybeFail(): number | error {
+  return error("nope")
+}

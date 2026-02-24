@@ -2,6 +2,45 @@ package MetaC::Codegen;
 use strict;
 use warnings;
 
+sub _declare_union_member_bindings {
+    my ($ctx, $bindings) = @_;
+    return if !defined $bindings || !@$bindings;
+    for my $binding (@$bindings) {
+        declare_union_member_shadow($ctx, $binding->{name}, $binding->{member});
+    }
+}
+
+sub _compile_union_scalar_comparison {
+    my (%args) = @_;
+    my $union_code = $args{union_code};
+    my $union_type = $args{union_type};
+    my $other_code = $args{other_code};
+    my $other_type = $args{other_type};
+    my $op = $args{op};
+
+    my ($match_code, $member);
+    if ($other_type eq 'number' || $other_type eq 'indexed_number') {
+        my $num = number_like_to_c_expr($other_code, $other_type, "Operator '$op'");
+        $member = 'number';
+        $match_code = "(($union_code.kind == METAC_VALUE_NUMBER) && ($union_code.number_value == $num))";
+    } elsif ($other_type eq 'bool') {
+        $member = 'bool';
+        $match_code = "(($union_code.kind == METAC_VALUE_BOOL) && ($union_code.bool_value == $other_code))";
+    } elsif ($other_type eq 'string') {
+        $member = 'string';
+        $match_code = "(($union_code.kind == METAC_VALUE_STRING) && metac_streq($union_code.string_value, $other_code))";
+    } elsif ($other_type eq 'null') {
+        $member = 'null';
+        $match_code = "($union_code.kind == METAC_VALUE_NULL)";
+    } else {
+        compile_error("Type mismatch in '$op': $union_type vs $other_type");
+    }
+
+    compile_error("Type mismatch in '$op': $union_type does not contain $member")
+      if !union_contains_member($union_type, $member);
+    return $op eq '==' ? $match_code : "(!($match_code))";
+}
+
 sub compile_expr {
     my ($expr, $ctx) = @_;
 
@@ -177,6 +216,10 @@ sub compile_expr {
                 push @arg_code, number_or_null_to_c_expr($arg_c, $arg_t, "Arg " . ($i + 1) . " to '$expr->{name}'");
                 next;
             }
+            if (is_supported_generic_union_return($param_t)) {
+                push @arg_code, generic_union_to_c_expr($arg_c, $arg_t, $param_t, "Arg " . ($i + 1) . " to '$expr->{name}'");
+                next;
+            }
             compile_error("Arg " . ($i + 1) . " to '$expr->{name}' must be $param_t, got $arg_t")
               if $arg_t ne $param_t;
             push @arg_code, $arg_c;
@@ -198,9 +241,11 @@ sub compile_expr {
 
             my ($r_code, $r_type);
             my $narrow_name = nullable_number_non_null_on_true_expr($expr->{left}, $ctx);
-            if (defined $narrow_name) {
+            my $union_bindings = union_member_bindings_on_true_expr($expr->{left}, $ctx);
+            if (defined $narrow_name || (defined $union_bindings && @$union_bindings)) {
                 new_scope($ctx);
-                declare_not_null_number_shadow($ctx, $narrow_name);
+                declare_not_null_number_shadow($ctx, $narrow_name) if defined $narrow_name;
+                _declare_union_member_bindings($ctx, $union_bindings);
                 ($r_code, $r_type) = compile_expr($expr->{right}, $ctx);
                 pop_scope($ctx);
             } else {
@@ -218,9 +263,11 @@ sub compile_expr {
 
             my ($r_code, $r_type);
             my $narrow_name = nullable_number_non_null_on_false_expr($expr->{left}, $ctx);
-            if (defined $narrow_name) {
+            my $union_bindings = union_member_bindings_on_false_expr($expr->{left}, $ctx);
+            if (defined $narrow_name || (defined $union_bindings && @$union_bindings)) {
                 new_scope($ctx);
-                declare_not_null_number_shadow($ctx, $narrow_name);
+                declare_not_null_number_shadow($ctx, $narrow_name) if defined $narrow_name;
+                _declare_union_member_bindings($ctx, $union_bindings);
                 ($r_code, $r_type) = compile_expr($expr->{right}, $ctx);
                 pop_scope($ctx);
             } else {
@@ -242,6 +289,26 @@ sub compile_expr {
 
         if ($expr->{op} eq '==' || $expr->{op} eq '!=') {
             my $op = $expr->{op};
+            if (is_supported_generic_union_return($l_type) && $l_type ne 'number_or_null' && !is_union_type($r_type)) {
+                my $cmp = _compile_union_scalar_comparison(
+                    union_code => $l_code,
+                    union_type => $l_type,
+                    other_code => $r_code,
+                    other_type => $r_type,
+                    op         => $op,
+                );
+                return ($cmp, 'bool');
+            }
+            if (is_supported_generic_union_return($r_type) && $r_type ne 'number_or_null' && !is_union_type($l_type)) {
+                my $cmp = _compile_union_scalar_comparison(
+                    union_code => $r_code,
+                    union_type => $r_type,
+                    other_code => $l_code,
+                    other_type => $l_type,
+                    op         => $op,
+                );
+                return ($cmp, 'bool');
+            }
             my $l_is_string_like = $l_type eq 'string'
               || (is_matrix_member_type($l_type) && matrix_member_meta($l_type)->{elem} eq 'string');
             my $r_is_string_like = $r_type eq 'string'

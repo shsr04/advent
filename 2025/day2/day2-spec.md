@@ -10,7 +10,7 @@ function findRanges(): number | error {
   let invalidSum = 0
   
   for const range in ranges {
-    const [start, end]: number[] with size(2) = split(range, "-") or (e) => {
+    const [start, end]: number[] with size(2) = split(range, "-") or catch(e) {
       return error("Invalid range expression: ${range}")
     }
       .map(parseNumber)? // builtin: parses string to number

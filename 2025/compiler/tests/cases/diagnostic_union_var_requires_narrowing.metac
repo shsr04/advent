@@ -1,0 +1,9 @@
+function main() {
+  const x: number | bool = pick()
+  const y = x + 1
+  log("Result: ${y}")
+}
+
+function pick(): number | bool {
+  return 4
+}

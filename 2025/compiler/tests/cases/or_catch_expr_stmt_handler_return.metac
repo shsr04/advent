@@ -1,0 +1,16 @@
+function main() {
+  const result = solve()?
+  log("Result: ${result}")
+}
+
+function solve(): number | error {
+  ping() or catch(e) {
+    log("Handled: ${e}")
+    return 7
+  }
+  return 1
+}
+
+function ping(): bool | error {
+  return error("boom")
+}

@@ -13,6 +13,7 @@ sub _new_codegen_ctx {
             tmp_counter      => 0,
             functions        => $function_sigs,
             loop_depth       => 0,
+            rewind_labels    => [],
             helper_defs      => \@helper_defs,
             helper_counter   => 0,
             current_function => $current_function,
@@ -21,24 +22,106 @@ sub _new_codegen_ctx {
     );
 }
 
-sub compile_main_body_generic_void {
+sub _helper_def_name {
+    my ($block) = @_;
+    return undef if !defined $block;
+    my ($first_line) = split /\n/, $block, 2;
+    return undef if !defined $first_line;
+    if ($first_line =~ /^\s*static\b.*?\b([A-Za-z_][A-Za-z0-9_]*)\s*\(/) {
+        return $1;
+    }
+    return undef;
+}
+
+sub _prune_unused_helper_defs {
+    my ($helper_defs, $consumer_code) = @_;
+    return [] if !defined $helper_defs || ref($helper_defs) ne 'ARRAY' || !@$helper_defs;
+    $consumer_code = '' if !defined $consumer_code;
+
+    my @ordered_named;
+    my %block_by_name;
+    my @always_keep;
+    for my $block (@$helper_defs) {
+        my $name = _helper_def_name($block);
+        if (!defined $name) {
+            push @always_keep, $block;
+            next;
+        }
+        next if exists $block_by_name{$name};
+        $block_by_name{$name} = $block;
+        push @ordered_named, $name;
+    }
+
+    my %deps;
+    for my $name (@ordered_named) {
+        my $body = $block_by_name{$name};
+        my @calls;
+        for my $callee (@ordered_named) {
+            next if $callee eq $name;
+            push @calls, $callee if $body =~ /\b\Q$callee\E\b/;
+        }
+        $deps{$name} = \@calls;
+    }
+
+    my @roots;
+    for my $name (@ordered_named) {
+        push @roots, $name if $consumer_code =~ /\b\Q$name\E\b/;
+    }
+
+    my %keep = map { $_ => 1 } @roots;
+    my @stack = @roots;
+    while (@stack) {
+        my $name = pop @stack;
+        for my $callee (@{ $deps{$name} // [] }) {
+            next if $keep{$callee};
+            $keep{$callee} = 1;
+            push @stack, $callee;
+        }
+    }
+
+    my @kept = @always_keep;
+    for my $name (@ordered_named) {
+        next if !$keep{$name};
+        push @kept, $block_by_name{$name};
+    }
+    return \@kept;
+}
+
+sub _prepend_helper_defs {
+    my ($helper_defs, $fn_code) = @_;
+    my $kept = _prune_unused_helper_defs($helper_defs, $fn_code);
+    return $fn_code if !@$kept;
+    return join("\n", @$kept) . "\n" . $fn_code;
+}
+
+sub _function_code_with_usage_tracked_locals {
+    my ($lines) = @_;
+    my @out = @$lines;
+    my $fn_code = join("\n", @out) . "\n";
+    my $uses_line_no = $fn_code =~ /\b__metac_line_no\b/ ? 1 : 0;
+    my $uses_err = $fn_code =~ /\b__metac_err\b/ ? 1 : 0;
+
+    my @locals;
+    push @locals, '  int __metac_line_no = 0;' if $uses_line_no;
+    push @locals, '  char __metac_err[160];' if $uses_err;
+    splice @out, 1, 0, @locals if @locals;
+
+    return join("\n", @out) . "\n";
+}
+
+sub compile_main_body_generic_number {
     my ($main_fn, $function_sigs) = @_;
     my $stmts = parse_function_body($main_fn);
     my @out;
     my ($ctx, $helper_defs) = _new_codegen_ctx($function_sigs, 'main');
 
     push @out, 'int main(void) {';
-    push @out, '  int __metac_line_no = 0;';
-    push @out, '  char __metac_err[160];';
-    compile_block($stmts, $ctx, \@out, 2, 'void');
+    compile_block($stmts, $ctx, \@out, 2, 'number');
     push @out, '  return 0;';
     push @out, '}';
 
-    my $fn_code = join("\n", @out) . "\n";
-    if (@$helper_defs) {
-        return join("\n", @$helper_defs) . "\n" . $fn_code;
-    }
-    return $fn_code;
+    my $fn_code = _function_code_with_usage_tracked_locals(\@out);
+    return _prepend_helper_defs($helper_defs, $fn_code);
 }
 
 
@@ -52,8 +135,6 @@ sub compile_number_or_error_function {
     my @out;
     my $sig_params = render_c_params($params);
     push @out, "static ResultNumber $fn->{name}($sig_params) {";
-    push @out, '  int __metac_line_no = 0;';
-    push @out, '  char __metac_err[160];';
 
     my ($ctx, $helper_defs) = _new_codegen_ctx($function_sigs, $fn->{name});
 
@@ -62,11 +143,8 @@ sub compile_number_or_error_function {
     my $missing_return_msg = c_escape_string("Missing return in function $fn->{name}");
     push @out, "  return err_number($missing_return_msg, __metac_line_no, \"\");";
     push @out, '}';
-    my $fn_code = join("\n", @out) . "\n";
-    if (@$helper_defs) {
-        return join("\n", @$helper_defs) . "\n" . $fn_code;
-    }
-    return $fn_code;
+    my $fn_code = _function_code_with_usage_tracked_locals(\@out);
+    return _prepend_helper_defs($helper_defs, $fn_code);
 }
 
 sub compile_bool_or_error_function {
@@ -78,8 +156,6 @@ sub compile_bool_or_error_function {
     my @out;
     my $sig_params = render_c_params($params);
     push @out, "static ResultBool $fn->{name}($sig_params) {";
-    push @out, '  int __metac_line_no = 0;';
-    push @out, '  char __metac_err[160];';
 
     my ($ctx, $helper_defs) = _new_codegen_ctx($function_sigs, $fn->{name});
 
@@ -88,11 +164,8 @@ sub compile_bool_or_error_function {
     my $missing_return_msg = c_escape_string("Missing return in function $fn->{name}");
     push @out, "  return err_bool($missing_return_msg, __metac_line_no, \"\");";
     push @out, '}';
-    my $fn_code = join("\n", @out) . "\n";
-    if (@$helper_defs) {
-        return join("\n", @$helper_defs) . "\n" . $fn_code;
-    }
-    return $fn_code;
+    my $fn_code = _function_code_with_usage_tracked_locals(\@out);
+    return _prepend_helper_defs($helper_defs, $fn_code);
 }
 
 sub compile_string_or_error_function {
@@ -104,8 +177,6 @@ sub compile_string_or_error_function {
     my @out;
     my $sig_params = render_c_params($params);
     push @out, "static ResultStringValue $fn->{name}($sig_params) {";
-    push @out, '  int __metac_line_no = 0;';
-    push @out, '  char __metac_err[160];';
 
     my ($ctx, $helper_defs) = _new_codegen_ctx($function_sigs, $fn->{name});
 
@@ -114,11 +185,8 @@ sub compile_string_or_error_function {
     my $missing_return_msg = c_escape_string("Missing return in function $fn->{name}");
     push @out, "  return err_string_value($missing_return_msg, __metac_line_no, \"\");";
     push @out, '}';
-    my $fn_code = join("\n", @out) . "\n";
-    if (@$helper_defs) {
-        return join("\n", @$helper_defs) . "\n" . $fn_code;
-    }
-    return $fn_code;
+    my $fn_code = _function_code_with_usage_tracked_locals(\@out);
+    return _prepend_helper_defs($helper_defs, $fn_code);
 }
 
 sub _default_generic_union_return_expr {
@@ -142,8 +210,6 @@ sub compile_generic_union_function {
     my @out;
     my $sig_params = render_c_params($params);
     push @out, "static MetaCValue $fn->{name}($sig_params) {";
-    push @out, '  int __metac_line_no = 0;';
-    push @out, '  char __metac_err[160];';
 
     my ($ctx, $helper_defs) = _new_codegen_ctx($function_sigs, $fn->{name});
 
@@ -152,11 +218,8 @@ sub compile_generic_union_function {
     my $fallback = _default_generic_union_return_expr($fn->{return_type});
     push @out, "  return $fallback;";
     push @out, '}';
-    my $fn_code = join("\n", @out) . "\n";
-    if (@$helper_defs) {
-        return join("\n", @$helper_defs) . "\n" . $fn_code;
-    }
-    return $fn_code;
+    my $fn_code = _function_code_with_usage_tracked_locals(\@out);
+    return _prepend_helper_defs($helper_defs, $fn_code);
 }
 
 
@@ -169,8 +232,6 @@ sub compile_number_function {
     my @out;
     my $sig_params = render_c_params($params);
     push @out, "static int64_t $fn->{name}($sig_params) {";
-    push @out, '  int __metac_line_no = 0;';
-    push @out, '  char __metac_err[160];';
 
     my ($ctx, $helper_defs) = _new_codegen_ctx($function_sigs, $fn->{name});
 
@@ -178,11 +239,8 @@ sub compile_number_function {
     compile_block($stmts, $ctx, \@out, 2, 'number');
     push @out, '  return 0;';
     push @out, '}';
-    my $fn_code = join("\n", @out) . "\n";
-    if (@$helper_defs) {
-        return join("\n", @$helper_defs) . "\n" . $fn_code;
-    }
-    return $fn_code;
+    my $fn_code = _function_code_with_usage_tracked_locals(\@out);
+    return _prepend_helper_defs($helper_defs, $fn_code);
 }
 
 
@@ -195,8 +253,6 @@ sub compile_bool_function {
     my @out;
     my $sig_params = render_c_params($params);
     push @out, "static int $fn->{name}($sig_params) {";
-    push @out, '  int __metac_line_no = 0;';
-    push @out, '  char __metac_err[160];';
 
     my ($ctx, $helper_defs) = _new_codegen_ctx($function_sigs, $fn->{name});
 
@@ -204,11 +260,8 @@ sub compile_bool_function {
     compile_block($stmts, $ctx, \@out, 2, 'bool');
     push @out, '  return 0;';
     push @out, '}';
-    my $fn_code = join("\n", @out) . "\n";
-    if (@$helper_defs) {
-        return join("\n", @$helper_defs) . "\n" . $fn_code;
-    }
-    return $fn_code;
+    my $fn_code = _function_code_with_usage_tracked_locals(\@out);
+    return _prepend_helper_defs($helper_defs, $fn_code);
 }
 
 
@@ -264,6 +317,11 @@ sub compile_source {
 
     my $main = $functions->{main};
     compile_error("main must not declare arguments") if $main->{args} ne '';
+    if (defined $main->{return_type}) {
+        $main->{return_type} = normalize_type_annotation($main->{return_type});
+        compile_error("main return type must be number")
+          if $main->{return_type} ne 'number';
+    }
 
     my %number_error_functions;
     my %bool_error_functions;
@@ -371,7 +429,7 @@ sub compile_source {
         }
         compile_error("Internal: unclassified function '$name'");
     }
-    my $main_code = compile_main_body_generic_void($main, \%function_sigs);
+    my $main_code = compile_main_body_generic_number($main, \%function_sigs);
     $non_runtime .= $main_code;
 
     my $c = runtime_prelude_for_code($non_runtime);

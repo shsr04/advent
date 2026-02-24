@@ -83,6 +83,9 @@ sub _compile_block_stage_assign_loops {
                 } else {
                     clear_nonnull_fact_for_var_name($ctx, $stmt->{name});
                 }
+            } elsif (is_supported_generic_union_return($stmt->{type})) {
+                my $rhs = generic_union_to_c_expr($expr_code, $expr_type, $stmt->{type}, "typed assignment for '$stmt->{name}'");
+                emit_line($out, $indent, "$target = $rhs;");
             } elsif ($stmt->{type} eq 'string') {
                 emit_line($out, $indent, "metac_copy_str($target, sizeof($target), $expr_code);");
                 emit_size_constraint_check(
@@ -182,6 +185,9 @@ sub _compile_block_stage_assign_loops {
                 } else {
                     clear_nonnull_fact_for_var_name($ctx, $stmt->{name});
                 }
+            } elsif (is_supported_generic_union_return($info->{type})) {
+                my $rhs = generic_union_to_c_expr($expr_code, $expr_type, $info->{type}, "assignment to '$stmt->{name}'");
+                emit_line($out, $indent, "$target = $rhs;");
             } elsif ($info->{type} eq 'indexed_number') {
                 emit_line($out, $indent, "$target = $expr_code;");
             } elsif ($info->{type} eq 'bool') {
@@ -271,7 +277,10 @@ sub _compile_block_stage_assign_loops {
         }
 
         if ($stmt->{kind} eq 'for_lines') {
+            my $has_rewind = loop_body_uses_rewind_current_loop($stmt->{body});
+            my $rewind_label = $has_rewind ? ('__metac_rewind_loop' . $ctx->{tmp_counter}++) : undef;
             emit_line($out, $indent, '{');
+            emit_line($out, $indent + 2, "$rewind_label: ;") if $has_rewind;
             emit_line($out, $indent + 2, 'char ' . $stmt->{var} . '[512];');
             emit_line($out, $indent + 2, "while (fgets($stmt->{var}, sizeof($stmt->{var}), stdin) != NULL) {");
             emit_line($out, $indent + 4, '__metac_line_no++;');
@@ -280,7 +289,9 @@ sub _compile_block_stage_assign_loops {
             declare_var($ctx, $stmt->{var}, { type => 'string', immutable => 1 });
             my $prev_loop_depth = $ctx->{loop_depth} // 0;
             $ctx->{loop_depth} = $prev_loop_depth + 1;
+            push @{ $ctx->{rewind_labels} }, $rewind_label if $has_rewind;
             compile_block($stmt->{body}, $ctx, $out, $indent + 4, $current_fn_return);
+            pop @{ $ctx->{rewind_labels} } if $has_rewind;
             $ctx->{loop_depth} = $prev_loop_depth;
             pop_scope($ctx);
 
@@ -309,11 +320,16 @@ sub _compile_block_stage_assign_loops {
             compile_error("while condition must evaluate to bool, got $cond_type")
               if $cond_type ne 'bool';
 
+            my $has_rewind = loop_body_uses_rewind_current_loop($stmt->{body});
+            my $rewind_label = $has_rewind ? ('__metac_rewind_loop' . $ctx->{tmp_counter}++) : undef;
+            emit_line($out, $indent, "$rewind_label: ;") if $has_rewind;
             emit_line($out, $indent, "while ($cond_code) {");
             new_scope($ctx);
             my $prev_loop_depth = $ctx->{loop_depth} // 0;
             $ctx->{loop_depth} = $prev_loop_depth + 1;
+            push @{ $ctx->{rewind_labels} }, $rewind_label if $has_rewind;
             compile_block($stmt->{body}, $ctx, $out, $indent + 2, $current_fn_return);
+            pop @{ $ctx->{rewind_labels} } if $has_rewind;
             $ctx->{loop_depth} = $prev_loop_depth;
             pop_scope($ctx);
             emit_line($out, $indent, '}');
@@ -331,6 +347,17 @@ sub _compile_block_stage_assign_loops {
             compile_error("continue is only valid inside a loop")
               if ($ctx->{loop_depth} // 0) <= 0;
             emit_line($out, $indent, 'continue;');
+            return 1;
+        }
+
+        if ($stmt->{kind} eq 'rewind') {
+            compile_error("rewind is only valid inside a loop")
+              if ($ctx->{loop_depth} // 0) <= 0;
+            my $labels = $ctx->{rewind_labels} // [];
+            compile_error("rewind is unsupported in this loop context")
+              if !@$labels;
+            my $label = $labels->[-1];
+            emit_line($out, $indent, "goto $label;");
             return 1;
         }
 

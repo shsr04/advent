@@ -1,7 +1,7 @@
 SHELL := /bin/bash
 
 CC := clang
-CFLAGS ?= -std=c17 -O3 -Wall -Wextra -Wpedantic
+CFLAGS ?= -std=c23 -O3 -Wall -Wextra -Wpedantic
 
 METAC_SOURCES := $(sort $(wildcard day*/day*.metac))
 COMPILER_SOURCES := compiler/metac.pl $(sort $(wildcard compiler/lib/MetaC/*.pm))

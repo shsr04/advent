@@ -4,7 +4,7 @@ The ideal solution would be something like:
 
 ```
 function main() {
-  printf("Result: %d\n", countNumbers() or (e) => {
+  printf("Result: %d\n", countNumbers() or catch(e) {
     printf("Error! %s", e.message)
     return 1
   })

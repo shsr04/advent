@@ -38,7 +38,7 @@ Source reviewed: `day1b/day1b-spec.md`
 
 ## Already Supported
 
-- `function main() { ... }` with `or (e) => { ... }` for `number | error` call.
+- `function main() { ... }` with `or catch(e) { ... }` for `number | error` call.
 - `number | error` functions (no parameters).
 - `for const line in lines(STDIN)? { ... }`
 - destructuring from regex match:

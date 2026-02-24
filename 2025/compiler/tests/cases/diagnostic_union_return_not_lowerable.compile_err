@@ -1,1 +1,1 @@
-Unsupported const expression type for 'result'
+Unsupported interpolation expression type: bool | number

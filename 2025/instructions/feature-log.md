@@ -24,7 +24,7 @@ Track all language features here. Add items as we iterate.
 10. `F-010` Constraint chains (`range + wrap + positive/negative`) - `draft`
 11. `F-011` Producer initialization (`from () => { ... }`) - `draft`
 12. `F-012` Iterable model (`split`, `seq`, generic `for-in`) - `implemented`
-13. `F-013` Error-flow expressions (`?`, `or (e) => { ... }`) - `implemented`
+13. `F-013` Error-flow expressions (`?`, `or catch(e) { ... }`) - `implemented`
 14. `F-014` String templates + `error(...)` constructor - `implemented`
 15. `F-015` Bool-return user function support (no day-specific builtin) - `implemented`
 16. `F-016` Bool alias (`boolean`) type normalization - `implemented`
@@ -49,14 +49,15 @@ Track all language features here. Add items as we iterate.
 35. `F-035` Runtime helper dead-stripping in generated C - `implemented`
 36. `F-036` Generic program/entrypoint lowering (remove subset-locked `main` pattern) - `implemented`
 37. `F-037` Full boolean connective grammar (`&&`) and precedence parity - `implemented`
-38. `F-038` Generalized union type model (beyond hardcoded unions) - `review`
-39. `F-039` Generic fallibility handlers (`?`, `or`) over all fallible expressions - `review`
+38. `F-038` Generalized union type model (beyond hardcoded unions) - `implemented`
+39. `F-039` Generic fallibility handlers (`?`, `or`) over all fallible expressions - `implemented`
 40. `F-040` Constraint engine v2 (`size`, applicability matrix, matrix-size linkage) - `implemented`
-41. `F-041` Generic array type model (`T[]`) and operation typing - `review`
+41. `F-041` Generic array type model (`T[]`) and operation typing - `implemented`
 42. `F-042` Number semantics policy alignment (normative rational model vs backend modes) - `draft`
 43. `F-043` Return-lowering generalization for union return types - `implemented`
 44. `F-044` Normative conformance harness + implementation-percentage gate - `draft`
 45. `F-045` Optional extension: effect-system abstraction for fallibility - `draft`
+46. `F-046` Loop rewind statement (`rewind`) for iterable recomputation - `implemented`
 
 ## Feature Record Template
 
@@ -133,8 +134,8 @@ Use this block for each feature:
 - Spec file: `instructions/day2-feature-review.md`
 - Correctness classes: C1/C3
 - Key guarantees: explicit and implicit error propagation are statically structured
-- Blocking questions: parser precedence for `or (e) => { ... }` versus other expression forms
-- Notes/evidence: `split(...)?` and `split(...) or (e) => { ... }` lowered generically in compiler; regression coverage in `compiler/tests/cases/split_handler_error.metac`
+- Blocking questions: parser precedence for `or catch(e) { ... }` versus other expression forms
+- Notes/evidence: `split(...)?` and `split(...) or catch(e) { ... }` lowered generically in compiler; regression coverage in `compiler/tests/cases/split_handler_error.metac`
 
 ### F-014 `String Templates + Error Constructor`
 - Status: implemented
@@ -342,20 +343,20 @@ Use this block for each feature:
 - Notes/evidence: parser now tokenizes/parses `&&` between equality and `||` in `compiler/lib/MetaC/Parser/Expr.pm`; short-circuit codegen and RHS nullable narrowing support added in `compiler/lib/MetaC/Codegen/Expr.pm` and `compiler/lib/MetaC/Codegen/Facts.pm`. Coverage: `and_precedence_narrowing` and `diagnostic_and_requires_bool`.
 
 ### F-038 `Generalized Union Type Model`
-- Status: review
+- Status: implemented
 - Spec file: `instructions/normative-f038-union-types.md` (planned)
 - Correctness classes: C0/C1/C3/C4
 - Key guarantees: parse and normalize arbitrary type unions (not just specialized aliases like `number | null`); track union membership in type-checker; enable member-safe narrowing paths.
 - Blocking questions: whether unions require nominal tagging strategy in internal type representation immediately, or can start with canonical sorted member sets.
-- Notes/evidence: parser/type layer now normalizes unions canonically in `compiler/lib/MetaC/TypeSpec.pm` (ordering/duplicate collapse, parenthesized unions, alias normalization), and exposes union membership helpers used by codegen return/fallibility classification. Coverage includes `union_return_number_error_normalized` and `diagnostic_union_return_not_lowerable`. Remaining gap to acceptance: generalized runtime representation and narrowing for arbitrary union members.
+- Notes/evidence: parser/type layer now normalizes unions canonically in `compiler/lib/MetaC/TypeSpec.pm` (ordering/duplicate collapse, parenthesized unions, alias normalization), and exposes union membership helpers used by codegen return/fallibility classification. Union-typed variable declarations/assignments/params now lower via `MetaCValue` conversions in `compiler/lib/MetaC/CodegenType.pm`, `compiler/lib/MetaC/Codegen/BlockStageDecls.pm`, `compiler/lib/MetaC/Codegen/BlockStageAssignLoops.pm`, and `compiler/lib/MetaC/Codegen/CompileParams.pm`. Member-safe narrowing for `if`/`&&`/`||` checks against scalar members is implemented in `compiler/lib/MetaC/Codegen/Facts.pm`, `compiler/lib/MetaC/Codegen/Expr.pm`, and `compiler/lib/MetaC/Codegen/BlockStageControl.pm`. Coverage includes `union_return_number_error_normalized`, `union_var_and_narrowing`, and `diagnostic_union_var_requires_narrowing`; full suite green (`88 passed, 0 failed`).
 
 ### F-039 `Generic Fallibility Handling (`?` and `or`)`
-- Status: review
+- Status: implemented
 - Spec file: `instructions/normative-f039-fallibility.md` (planned)
 - Correctness classes: C1/C3/C4
-- Key guarantees: treat any expression containing `error` in its type union as fallible; allow `?` and `or <lambda>` handling uniformly in call and chain contexts; remove return-mode-specific try restrictions.
+- Key guarantees: treat any expression containing `error` in its type union as fallible; allow `?` and `or catch(...) { ... }` handling uniformly in call and chain contexts; remove return-mode-specific try restrictions.
 - Blocking questions: shape of handler lambda typing for non-`error` future effect members.
-- Notes/evidence: `?` handling is now generalized beyond `number | error` functions for supported fallible forms in const/statement try lowering (`compiler/lib/MetaC/Codegen/BlockStageDecls.pm`, `compiler/lib/MetaC/Codegen/BlockStageControl.pm`), with fail-fast process termination in non-error-return contexts and propagation in `number | error` contexts. Remaining gap for full acceptance: generic `or <lambda>` expression handling and fully type-driven fallibility across arbitrary unions.
+- Notes/evidence: `?` handling is generalized for function-call fallibility across supported `error`-containing return unions, including multi-member unions, in const and statement try lowering (`compiler/lib/MetaC/Codegen/BlockStageDeclsTry.pm`, `compiler/lib/MetaC/Codegen/BlockStageControl.pm`). `or catch(...) { ... }` handlers are now supported for split-destructure plus fallible user-function calls in const assignment and statement contexts, with handler blocks executed in the enclosing function scope (`compiler/lib/MetaC/Parser/BlockParse.pm`, `compiler/lib/MetaC/Codegen/BlockStageTry.pm`, `compiler/lib/MetaC/Codegen/BlockStageDeclsTry.pm`, `compiler/lib/MetaC/Codegen/BlockStageControl.pm`). Legacy `or (e) => { ... }` syntax is rejected via dedicated diagnostic coverage (`diagnostic_legacy_or_handler_syntax`). Additional coverage: `stmt_try_generic_user_call`, `try_union_multimember_narrowing`, `or_catch_const_call_success`, `or_catch_const_call_handler_return`, `or_catch_expr_stmt_handler_return`, `split_or_catch_destructure`; full suite green (`95 passed, 0 failed`).
 
 ### F-040 `Constraint Engine V2`
 - Status: implemented
@@ -366,12 +367,12 @@ Use this block for each feature:
 - Notes/evidence: spec and acceptance scope documented in `instructions/normative-f040-constraints.md`; constraint parser now uses typed nodes as the canonical representation (`constraints = { nodes => [...] }`) across scalar and matrix constraints, including wildcard args for `range`, `size`, `dim`, and `matrixSize`, duplicate-term rejection, and `wrap`/`range` boundedness+order validation in `compiler/lib/MetaC/Support.pm`; parser/type applicability checks run against typed nodes in `compiler/lib/MetaC/Parser/Functions.pm`; matrix constraints are lowered from the same node pipeline in `compiler/lib/MetaC/TypeSpec.pm`; codegen constraint checks (`range/wrap/size/sign`) consume node-query helpers in `compiler/lib/MetaC/Codegen/Facts.pm`, `compiler/lib/MetaC/Codegen/BlockStageDecls.pm`, `compiler/lib/MetaC/Codegen/BlockStageAssignLoops.pm`, and `compiler/lib/MetaC/Codegen/Compile.pm`; matrix runtime coordinate checks now honor wildcard matrix-size entries in `compiler/lib/MetaC/CodegenRuntime/Matrix.pm` and `compiler/lib/MetaC/CodegenRuntime/MatrixString.pm`. Coverage includes prior F-040 cases plus `constraint_matrix_size_wildcard_partial_ok`, `constraint_matrix_size_wildcard_oob_fail`, `constraint_matrix_dim_wildcard_default_ok`, and `constraint_matrix_size_wildcard_invalid_entry`; full suite green (`82 passed, 0 failed`).
 
 ### F-041 `Generic Array Type Model`
-- Status: review
+- Status: implemented
 - Spec file: `instructions/normative-f041-array-model.md` (planned)
 - Correctness classes: C0/C1/C2/C3
 - Key guarantees: represent arrays as generic `array<T>`/`T[]` rather than fixed `number[]`/`string[]` special cases; type-check indexing and list operations from element type.
 - Blocking questions: ownership/lifetime model for arrays of non-primitive element types in generated C.
-- Notes/evidence: implemented a third element-specialized array model (`bool[]` -> `bool_list`) to establish non-number/string generic-array path while preserving existing number/string fast paths. Parser/type normalization and applicability now accept `bool[]` in `compiler/lib/MetaC/TypeSpec.pm` and `compiler/lib/MetaC/Parser/Functions.pm`; runtime/container support added via `BoolList` + helpers in `compiler/lib/MetaC/CodegenRuntime/Prefix.pm`, `compiler/lib/MetaC/CodegenRuntime/Core.pm`, `compiler/lib/MetaC/CodegenRuntime/Lists.pm`, and `compiler/lib/MetaC/CodegenRuntime/Logging.pm`; element-aware indexing/size/destructure/for-each/push/log typing wired in `compiler/lib/MetaC/Codegen/Expr.pm`, `compiler/lib/MetaC/Codegen/ExprMethodCall.pm`, `compiler/lib/MetaC/Codegen/BlockStageTry.pm`, `compiler/lib/MetaC/Codegen/ProofIter.pm`, `compiler/lib/MetaC/Codegen/LoopSupport.pm`, `compiler/lib/MetaC/Codegen/BlockStageDecls.pm`, `compiler/lib/MetaC/Codegen/BlockStageAssignLoops.pm`, and `compiler/lib/MetaC/Codegen/CompileParams.pm`. Coverage added: `bool_array_size_destructure`, `bool_array_for_each_count`, `bool_array_push`, `diagnostic_bool_array_filter_unsupported`; full suite green (`86 passed, 0 failed`).
+- Notes/evidence: implemented a third element-specialized array model (`bool[]` -> `bool_list`) to establish non-number/string generic-array path while preserving existing number/string fast paths. Parser/type normalization and applicability accept `bool[]` in `compiler/lib/MetaC/TypeSpec.pm` and `compiler/lib/MetaC/Parser/Functions.pm`; runtime/container support is provided via `BoolList` + helpers in `compiler/lib/MetaC/CodegenRuntime/Prefix.pm`, `compiler/lib/MetaC/CodegenRuntime/Core.pm`, `compiler/lib/MetaC/CodegenRuntime/Lists.pm`, and `compiler/lib/MetaC/CodegenRuntime/Logging.pm`; element-aware indexing/size/destructure/for-each/push/log typing is wired in `compiler/lib/MetaC/Codegen/Expr.pm`, `compiler/lib/MetaC/Codegen/ExprMethodCall.pm`, `compiler/lib/MetaC/Codegen/BlockStageTry.pm`, `compiler/lib/MetaC/Codegen/ProofIter.pm`, `compiler/lib/MetaC/Codegen/LoopSupport.pm`, `compiler/lib/MetaC/Codegen/BlockStageDecls.pm`, `compiler/lib/MetaC/Codegen/BlockStageAssignLoops.pm`, and `compiler/lib/MetaC/Codegen/CompileParams.pm`. Coverage includes `bool_array_size_destructure`, `bool_array_for_each_count`, `bool_array_push`, and `diagnostic_bool_array_filter_unsupported`; suite remains green.
 
 ### F-042 `Number Semantics Policy Alignment`
 - Status: draft
@@ -404,3 +405,11 @@ Use this block for each feature:
 - Key guarantees: generalize fallibility from ad-hoc `error` union checks into effect annotations that can cover future non-error effects without grammar redesign.
 - Blocking questions: whether to prioritize this immediately after `F-039` or defer until baseline normative parity is reached.
 - Notes/evidence: Planned implementation: define minimal effect lattice (`pure`, `throws(error)`, extensible effect set); map current `?`/`or` behavior onto effect rules; keep source compatibility with existing syntax. Verification targets: effect inference/unit tests and backward-compatibility suite with current programs.
+
+### F-046 `Loop Rewind Statement`
+- Status: implemented
+- Spec file: `day4b/dayb-spec.md`
+- Correctness classes: C0/C1/C3
+- Key guarantees: `rewind` restarts the current loop statement from its beginning; for `for-in` loops this recomputes the iterable and loop variable sequence against current outer state.
+- Blocking questions: whether future normative scope should include/exclude `rewind` in all loop kinds or constrain it to `for-in` only.
+- Notes/evidence: parser support added for `rewind` statements in `compiler/lib/MetaC/Parser/BlockParse.pm`; loop restart lowering added via per-loop rewind labels in `compiler/lib/MetaC/Codegen/Compile.pm`, `compiler/lib/MetaC/Codegen/ProofIter.pm`, and `compiler/lib/MetaC/Codegen/BlockStageAssignLoops.pm`; misuse diagnostic covered by `compiler/tests/cases/diagnostic_rewind_outside_loop.metac`; iterable recomputation behavior covered by `compiler/tests/cases/rewind_recomputes_iterable.metac`; full suite green (`97 passed, 0 failed`).

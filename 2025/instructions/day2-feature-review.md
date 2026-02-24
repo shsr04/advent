@@ -11,10 +11,10 @@ Source reviewed: `2025/day2/day2-spec.md`
 2. Iterable sequences:
    - `for const range in ranges { ... }` where `ranges` is split result.
    - `seq(start, end)` numeric iterator for inclusive ranges.
-3. Nested destructuring from `split(... ) or (e) => { ... }`
-   - Example: `const [start, end] = split(range, "-") or (e) => { ... }`
+3. Nested destructuring from `split(... ) or catch(e) { ... }`
+   - Example: `const [start, end] = split(range, "-") or catch(e) { ... }`
 4. Expression-level explicit error handler:
-   - `expr or (e) => { ... }` (not only `?` propagation).
+   - `expr or catch(e) { ... }` (not only `?` propagation).
 5. Error constructor expression:
    - `error("...")` for explicit error return.
 6. String templates/interpolation:
@@ -37,7 +37,7 @@ Source reviewed: `2025/day2/day2-spec.md`
 - No generic `for const x in <iterable>` (only stdin-lines loop).
 - No `split` builtin with result/error model.
 - No `seq` iterable builtin.
-- No `or (e) => { ... }` operator outside main special case.
+- No `or catch(e) { ... }` operator outside main special case.
 - No `error(...)` expression.
 - No string interpolation.
 - No built-in or user-defined bool-return function calls (current call typing is number-only).
@@ -45,6 +45,6 @@ Source reviewed: `2025/day2/day2-spec.md`
 ## Recommended Implementation Order
 
 1. `F-012` Iterable model + generic `for-in` lowering (`split` arrays and `seq` ranges).
-2. `F-013` Error-flow expressions: `?` generalized + `or (e) => { ... }` expression handler.
+2. `F-013` Error-flow expressions: `?` generalized + `or catch(e) { ... }` expression handler.
 3. `F-014` String templates/interpolation + `error(...)` constructor.
 4. `F-015` Bool-return user function support in condition contexts.

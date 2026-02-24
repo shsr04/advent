@@ -1,0 +1,13 @@
+function main() {
+  const result = solve()?
+  log("Result: ${result}")
+}
+
+function solve(): number | error {
+  const [a, b] = split("7-4", "-") or catch(e) {
+    return error(e)
+  }
+  const n1 = parseNumber(a)?
+  const n2 = parseNumber(b)?
+  return n1 + n2
+}

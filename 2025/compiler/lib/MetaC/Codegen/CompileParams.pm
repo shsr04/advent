@@ -102,6 +102,20 @@ sub emit_param_bindings {
             next;
         }
 
+        if (is_supported_generic_union_return($param->{type})) {
+            emit_line($out, $indent, "const MetaCValue $name = $in_name;");
+            declare_var(
+                $ctx,
+                $name,
+                {
+                    type      => $param->{type},
+                    immutable => 1,
+                    c_name    => $name,
+                }
+            );
+            next;
+        }
+
         if (is_matrix_type($param->{type})) {
             my $meta = matrix_type_meta($param->{type});
             if ($meta->{elem} eq 'number') {

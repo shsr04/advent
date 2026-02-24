@@ -1,0 +1,12 @@
+function main() {
+  const v = tri()?
+  if v == 7 && v > 0 {
+    log("Result: 1")
+  } else {
+    log("Result: 0")
+  }
+}
+
+function tri(): number | bool | error {
+  return 7
+}

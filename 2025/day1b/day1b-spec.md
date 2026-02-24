@@ -2,7 +2,7 @@ Given this new info, the solution from day1 should now be augmented as follows:
 
 ```
 function main() {
-  printf("Result: %d\n", countNumbers() or (e) => {
+  printf("Result: %d\n", countNumbers() or catch(e) {
     printf("Error! %s\n", e.message)
     return 1
   })

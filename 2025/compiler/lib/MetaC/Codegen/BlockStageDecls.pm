@@ -68,6 +68,9 @@ sub _compile_block_stage_decls {
             } elsif ($decl_type eq 'number_or_null') {
                 my $init_expr = number_or_null_to_c_expr($expr_code, $expr_type, "let '$stmt->{name}'");
                 emit_line($out, $indent, "NullableNumber $stmt->{name} = $init_expr;");
+            } elsif (is_supported_generic_union_return($decl_type)) {
+                my $init_expr = generic_union_to_c_expr($expr_code, $expr_type, $decl_type, "let '$stmt->{name}'");
+                emit_line($out, $indent, "MetaCValue $stmt->{name} = $init_expr;");
             } elsif ($decl_type eq 'indexed_number') {
                 emit_line($out, $indent, "IndexedNumber $stmt->{name} = $expr_code;");
             } elsif ($decl_type eq 'string') {
@@ -207,6 +210,8 @@ sub _compile_block_stage_decls {
                 emit_line($out, $indent, "const int64_t $stmt->{name} = $expr_code;");
             } elsif ($expr_type eq 'number_or_null') {
                 emit_line($out, $indent, "const NullableNumber $stmt->{name} = $expr_code;");
+            } elsif (is_supported_generic_union_return($expr_type)) {
+                emit_line($out, $indent, "const MetaCValue $stmt->{name} = $expr_code;");
             } elsif ($expr_type eq 'indexed_number') {
                 emit_line($out, $indent, "const IndexedNumber $stmt->{name} = $expr_code;");
             } elsif ($expr_type eq 'bool') {
@@ -314,6 +319,9 @@ sub _compile_block_stage_decls {
             } elsif ($decl_type eq 'number_or_null') {
                 my $init_expr = number_or_null_to_c_expr($expr_code, $expr_type, "const '$stmt->{name}'");
                 emit_line($out, $indent, "const NullableNumber $stmt->{name} = $init_expr;");
+            } elsif (is_supported_generic_union_return($decl_type)) {
+                my $init_expr = generic_union_to_c_expr($expr_code, $expr_type, $decl_type, "const '$stmt->{name}'");
+                emit_line($out, $indent, "const MetaCValue $stmt->{name} = $init_expr;");
             } elsif ($decl_type eq 'indexed_number') {
                 emit_line($out, $indent, "const IndexedNumber $stmt->{name} = $expr_code;");
             } elsif ($decl_type eq 'string') {

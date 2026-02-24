@@ -1,0 +1,14 @@
+function main() {
+  let x: number | bool = false
+  x = pick()
+
+  if x == 4 && x > 3 {
+    log("Result: 1")
+  } else {
+    log("Result: 0")
+  }
+}
+
+function pick(): bool | number {
+  return 4
+}

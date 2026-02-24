@@ -1,0 +1,33 @@
+function main() {
+  const result = removeRolls() or catch(e) {
+    log("Error! ${e}")
+    return 1
+  }
+  log("Result: ${result}")
+}
+
+function removeRolls(): number|error {
+  const rows = split(STDIN, "\n")?
+  
+  let grid: matrix(string) with dim(2) = []
+    
+  for const row in rows {
+    for const cell in row.chars() {
+      grid.insert(cell, [row.index(), cell.index()])?
+    }
+  }
+  
+  let removed = 0
+  for const cell in grid.members().filter((x) => x == "@") {
+      const adj = cell.neighbours()
+        .filter((x) => x == "@")
+        .count()
+      if adj < 4 {
+        removed++
+        grid.insert("x", cell.index())?
+        rewind
+      }
+  }
+  
+  return removed
+}
