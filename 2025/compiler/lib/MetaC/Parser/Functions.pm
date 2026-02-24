@@ -2,6 +2,35 @@ package MetaC::Parser;
 use strict;
 use warnings;
 
+sub _constraint_applicable_to_type {
+    my ($constraint_name, $type) = @_;
+    return 1 if $constraint_name eq 'size' && ($type eq 'string' || $type eq 'number_list' || $type eq 'string_list' || $type eq 'bool_list');
+    return 1 if ($constraint_name eq 'range' || $constraint_name eq 'wrap' || $constraint_name eq 'positive' || $constraint_name eq 'negative') && $type eq 'number';
+    return 1 if ($constraint_name eq 'dim' || $constraint_name eq 'matrixSize') && is_matrix_type($type);
+    return 0;
+}
+
+sub _enforce_constraint_applicability {
+    my (%args) = @_;
+    my $type = $args{type};
+    my $constraints = $args{constraints};
+    my $where = $args{where};
+    my $constraint_raw = $args{constraint_raw};
+
+    if (is_union_type($type) && defined($constraint_raw) && trim($constraint_raw) ne '') {
+        compile_error("Constraints on union types are not supported in $where");
+    }
+
+    for my $node (@{ constraint_nodes($constraints) }) {
+        my $name = $node->{kind};
+        if (($name eq 'dim' || $name eq 'matrixSize') && !is_matrix_type($type)) {
+            compile_error("Matrix constraints require matrix type in $where");
+        }
+        next if _constraint_applicable_to_type($name, $type);
+        compile_error("Constraint '$name' cannot be applied to type '$type' in $where");
+    }
+}
+
 sub parse_declared_type_and_constraints {
     my (%args) = @_;
     my $raw = trim($args{raw} // '');
@@ -22,16 +51,22 @@ sub parse_declared_type_and_constraints {
         next if $m eq 'null';
         next if $m eq 'number_list';
         next if $m eq 'string_list';
+        next if $m eq 'bool_list';
         next if is_matrix_type($m);
         compile_error("Unsupported type annotation '$type_raw' in $where");
     }
 
-    if (is_matrix_type($type)) {
-        my $final = apply_matrix_constraints($type, $constraint_raw, $where);
-        return ($final, parse_constraints(undef));
-    }
-
     my $constraints = parse_constraints($constraint_raw);
+    _enforce_constraint_applicability(
+        type           => $type,
+        constraints    => $constraints,
+        where          => $where,
+        constraint_raw => $constraint_raw,
+    );
+    if (is_matrix_type($type)) {
+        my $final = apply_matrix_constraints($type, $constraints, $where);
+        return ($final, $constraints);
+    }
     return ($type, $constraints);
 }
 
@@ -177,10 +212,6 @@ sub parse_function_params {
         compile_error("Duplicate parameter '$name' in function '$fn->{name}'")
           if $seen{$name};
         $seen{$name} = 1;
-
-        if (($constraints->{positive} || $constraints->{negative} || defined $constraints->{range} || $constraints->{wrap}) && $type ne 'number') {
-            compile_error("Numeric constraints require number type for parameter '$name' in function '$fn->{name}'");
-        }
 
         push @params, {
             name        => $name,

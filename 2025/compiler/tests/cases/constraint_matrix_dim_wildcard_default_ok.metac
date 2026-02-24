@@ -1,0 +1,4 @@
+function main() {
+  let grid: matrix(number) with dim(*) + matrixSize([*, *]) = []
+  grid.insert(9, [123, 456])
+}

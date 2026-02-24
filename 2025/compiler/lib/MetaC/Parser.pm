@@ -10,10 +10,13 @@ use MetaC::Support qw(
     strip_comments
     trim
     split_top_level_commas
+    constraint_nodes
+    constraints_has_any_kind
     parse_constraints
 );
 use MetaC::TypeSpec qw(
     normalize_type_annotation
+    is_union_type
     union_member_types
     apply_matrix_constraints
     is_matrix_type
@@ -38,5 +41,6 @@ require MetaC::Parser::Functions;
 require MetaC::Parser::Regex;
 require MetaC::Parser::Expr;
 require MetaC::Parser::Block;
+require MetaC::Parser::BlockParse;
 
 1;

@@ -1,0 +1,5 @@
+function main() {
+  let s: string with size(3) = "abc"
+  s = "toolong"
+  log("unreachable")
+}

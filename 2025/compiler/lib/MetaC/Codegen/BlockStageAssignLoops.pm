@@ -49,23 +49,28 @@ sub _compile_block_stage_assign_loops {
               if !type_matches_expected($stmt->{type}, $expr_type);
 
             my $target = $info->{c_name};
+            my $constraints = $stmt->{constraints} // parse_constraints(undef);
             if ($stmt->{type} eq 'number') {
-                my $constraints = $stmt->{constraints} // parse_constraints(undef);
+                my ($range_min, $range_max) = constraint_range_bounds($constraints);
+                my $has_wrap = constraints_has_kind($constraints, 'wrap');
+                my $needs_positive = constraints_has_kind($constraints, 'positive');
+                my $needs_negative = constraints_has_kind($constraints, 'negative');
                 if ($stmt->{expr}{kind} eq 'num') {
                     my $v = int($stmt->{expr}{value});
-                    if (defined $constraints->{range} && !$constraints->{wrap}) {
-                        compile_error("typed assignment range($constraints->{range}{min},$constraints->{range}{max}) violation for '$stmt->{name}'")
-                          if $v < $constraints->{range}{min} || $v > $constraints->{range}{max};
+                    if ((defined($range_min) || defined($range_max)) && !$has_wrap) {
+                        my $range_text = "range(" . (defined($range_min) ? $range_min : '*') . "," . (defined($range_max) ? $range_max : '*') . ")";
+                        compile_error("typed assignment $range_text violation for '$stmt->{name}'")
+                          if (defined($range_min) && $v < $range_min) || (defined($range_max) && $v > $range_max);
                     }
                     compile_error("Typed assignment for '$stmt->{name}' requires positive value")
-                      if $constraints->{positive} && $v <= 0;
+                      if $needs_positive && $v <= 0;
                     compile_error("Typed assignment for '$stmt->{name}' requires negative value")
-                      if $constraints->{negative} && $v >= 0;
+                      if $needs_negative && $v >= 0;
                 }
 
                 my $rhs = number_like_to_c_expr($expr_code, $expr_type, "typed assignment for '$stmt->{name}'");
-                if (defined $constraints->{range} && $constraints->{wrap}) {
-                    $rhs = "metac_wrap_range($rhs, $constraints->{range}{min}, $constraints->{range}{max})";
+                if ($has_wrap) {
+                    $rhs = "metac_wrap_range($rhs, $range_min, $range_max)";
                 }
                 emit_line($out, $indent, "$target = $rhs;");
             } elsif ($stmt->{type} eq 'number_or_null') {
@@ -80,6 +85,14 @@ sub _compile_block_stage_assign_loops {
                 }
             } elsif ($stmt->{type} eq 'string') {
                 emit_line($out, $indent, "metac_copy_str($target, sizeof($target), $expr_code);");
+                emit_size_constraint_check(
+                    constraints => $constraints,
+                    target_expr => $target,
+                    target_type => 'string',
+                    out         => $out,
+                    indent      => $indent,
+                    where       => "typed assignment for '$stmt->{name}'",
+                );
             } elsif ($stmt->{type} eq 'bool') {
                 emit_line($out, $indent, "$target = $expr_code;");
             } elsif ($stmt->{type} eq 'number_list') {
@@ -89,6 +102,14 @@ sub _compile_block_stage_assign_loops {
                 } else {
                     emit_line($out, $indent, "$target = $expr_code;");
                 }
+                emit_size_constraint_check(
+                    constraints => $constraints,
+                    target_expr => $target,
+                    target_type => 'number_list',
+                    out         => $out,
+                    indent      => $indent,
+                    where       => "typed assignment for '$stmt->{name}'",
+                );
             } elsif ($stmt->{type} eq 'string_list') {
                 if ($expr_type eq 'empty_list') {
                     emit_line($out, $indent, "$target.count = 0;");
@@ -96,6 +117,29 @@ sub _compile_block_stage_assign_loops {
                 } else {
                     emit_line($out, $indent, "$target = $expr_code;");
                 }
+                emit_size_constraint_check(
+                    constraints => $constraints,
+                    target_expr => $target,
+                    target_type => 'string_list',
+                    out         => $out,
+                    indent      => $indent,
+                    where       => "typed assignment for '$stmt->{name}'",
+                );
+            } elsif ($stmt->{type} eq 'bool_list') {
+                if ($expr_type eq 'empty_list') {
+                    emit_line($out, $indent, "$target.count = 0;");
+                    emit_line($out, $indent, "$target.items = NULL;");
+                } else {
+                    emit_line($out, $indent, "$target = $expr_code;");
+                }
+                emit_size_constraint_check(
+                    constraints => $constraints,
+                    target_expr => $target,
+                    target_type => 'bool_list',
+                    out         => $out,
+                    indent      => $indent,
+                    where       => "typed assignment for '$stmt->{name}'",
+                );
             } elsif (is_matrix_type($stmt->{type}) || is_matrix_member_list_type($stmt->{type}) || is_matrix_member_type($stmt->{type})) {
                 if ($expr_type eq 'empty_list') {
                     compile_error("Matrix reassignment from [] is not supported; initialize matrix variables in their declaration");
@@ -119,10 +163,12 @@ sub _compile_block_stage_assign_loops {
 
             if ($info->{type} eq 'number') {
                 my $constraints = $info->{constraints} // parse_constraints(undef);
+                my ($range_min, $range_max) = constraint_range_bounds($constraints);
+                my $has_wrap = constraints_has_kind($constraints, 'wrap');
                 my $rhs = number_like_to_c_expr($expr_code, $expr_type, "assignment to '$stmt->{name}'");
-                if (defined $constraints->{range} && $constraints->{wrap}) {
+                if ($has_wrap) {
                     emit_line($out, $indent,
-                        "$target = metac_wrap_range($rhs, $constraints->{range}{min}, $constraints->{range}{max});");
+                        "$target = metac_wrap_range($rhs, $range_min, $range_max);");
                 } else {
                     emit_line($out, $indent, "$target = $rhs;");
                 }
@@ -142,13 +188,29 @@ sub _compile_block_stage_assign_loops {
                 emit_line($out, $indent, "$target = $expr_code;");
             } elsif ($info->{type} eq 'string') {
                 emit_line($out, $indent, "metac_copy_str($target, sizeof($target), $expr_code);");
-            } elsif ($info->{type} eq 'number_list' || $info->{type} eq 'string_list') {
+                emit_size_constraint_check(
+                    constraints => ($info->{constraints} // parse_constraints(undef)),
+                    target_expr => $target,
+                    target_type => 'string',
+                    out         => $out,
+                    indent      => $indent,
+                    where       => "assignment to '$stmt->{name}'",
+                );
+            } elsif ($info->{type} eq 'number_list' || $info->{type} eq 'string_list' || $info->{type} eq 'bool_list') {
                 if ($expr_type eq 'empty_list') {
                     emit_line($out, $indent, "$target.count = 0;");
                     emit_line($out, $indent, "$target.items = NULL;");
                 } else {
                     emit_line($out, $indent, "$target = $expr_code;");
                 }
+                emit_size_constraint_check(
+                    constraints => ($info->{constraints} // parse_constraints(undef)),
+                    target_expr => $target,
+                    target_type => $info->{type},
+                    out         => $out,
+                    indent      => $indent,
+                    where       => "assignment to '$stmt->{name}'",
+                );
             } elsif (is_matrix_type($info->{type}) || is_matrix_member_list_type($info->{type}) || is_matrix_member_type($info->{type})) {
                 if ($expr_type eq 'empty_list') {
                     compile_error("Matrix reassignment from [] is not supported; initialize matrix variables in their declaration");
@@ -174,9 +236,10 @@ sub _compile_block_stage_assign_loops {
 
                 my $combined = "($target + $rhs)";
                 my $constraints = $info->{constraints} // parse_constraints(undef);
-                if (defined $constraints->{range} && $constraints->{wrap}) {
+                my ($range_min, $range_max) = constraint_range_bounds($constraints);
+                if (constraints_has_kind($constraints, 'wrap')) {
                     emit_line($out, $indent,
-                        "$target = metac_wrap_range($combined, $constraints->{range}{min}, $constraints->{range}{max});");
+                        "$target = metac_wrap_range($combined, $range_min, $range_max);");
                 } else {
                     emit_line($out, $indent, "$target = $combined;");
                 }
@@ -197,9 +260,10 @@ sub _compile_block_stage_assign_loops {
             my $constraints = $info->{constraints} // parse_constraints(undef);
             my $delta = $stmt->{op} eq '++' ? '1' : '-1';
             my $combined = "($target + $delta)";
-            if (defined $constraints->{range} && $constraints->{wrap}) {
+            my ($range_min, $range_max) = constraint_range_bounds($constraints);
+            if (constraints_has_kind($constraints, 'wrap')) {
                 emit_line($out, $indent,
-                    "$target = metac_wrap_range($combined, $constraints->{range}{min}, $constraints->{range}{max});");
+                    "$target = metac_wrap_range($combined, $range_min, $range_max);");
             } else {
                 emit_line($out, $indent, "$target = $combined;");
             }

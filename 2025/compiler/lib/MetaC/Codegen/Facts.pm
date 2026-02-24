@@ -111,6 +111,37 @@ sub is_size_call_expr {
 }
 
 
+sub emit_size_constraint_check {
+    my (%args) = @_;
+    my $constraints = $args{constraints};
+    return if !defined $constraints;
+    return if constraint_size_is_wildcard($constraints);
+    my $size = constraint_size_exact($constraints);
+    return if !defined $size;
+
+    my $target_expr = $args{target_expr};
+    my $target_type = $args{target_type};
+    my $out = $args{out};
+    my $indent = $args{indent};
+    my $where = $args{where} // 'value';
+    $size = int($size);
+
+    my $actual_expr;
+    if ($target_type eq 'string') {
+        $actual_expr = "metac_strlen($target_expr)";
+    } elsif ($target_type eq 'number_list' || $target_type eq 'string_list' || $target_type eq 'bool_list' || $target_type eq 'indexed_number_list') {
+        $actual_expr = "((int64_t)$target_expr.count)";
+    } else {
+        compile_error("size(...) constraint is unsupported for runtime check on type '$target_type' in $where");
+    }
+
+    my $message = c_escape_string("size($size) constraint failed for $where");
+    emit_line($out, $indent, "if ($actual_expr != $size) {");
+    emit_line($out, $indent + 2, "fprintf(stderr, \"%s\\n\", $message);");
+    emit_line($out, $indent + 2, 'exit(2);');
+    emit_line($out, $indent, '}');
+}
+
 sub is_size_call_on_lambda_param {
     my ($expr, $param) = @_;
     return 0 if $expr->{kind} ne 'method_call';
@@ -159,7 +190,7 @@ sub size_check_from_condition {
     return undef if !expr_is_stable_for_facts($target_expr, $ctx);
 
     my (undef, $target_type) = compile_expr($target_expr, $ctx);
-    return undef if $target_type ne 'string_list' && $target_type ne 'number_list' && $target_type ne 'indexed_number_list';
+    return undef if $target_type ne 'string_list' && $target_type ne 'number_list' && $target_type ne 'bool_list' && $target_type ne 'indexed_number_list';
 
     return {
         key => expr_fact_key($target_expr, $ctx),
@@ -409,6 +440,15 @@ sub compile_list_literal_expr {
             }
             next;
         }
+        if ($type eq 'bool') {
+            push @item_code, $code;
+            if (!defined $kind) {
+                $kind = 'bool';
+            } elsif ($kind ne 'bool') {
+                compile_error("List literal items must share the same type category");
+            }
+            next;
+        }
         compile_error("Unsupported list literal item type: $type");
     }
 
@@ -417,6 +457,12 @@ sub compile_list_literal_expr {
         return (
             "metac_number_list_from_array((int64_t[]){ " . join(', ', @item_code) . " }, $count)",
             'number_list'
+        );
+    }
+    if ($kind eq 'bool') {
+        return (
+            "metac_bool_list_from_array((int[]){ " . join(', ', @item_code) . " }, $count)",
+            'bool_list'
         );
     }
     return (

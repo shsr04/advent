@@ -65,6 +65,11 @@ typedef struct {
 } NumberList;
 
 typedef struct {
+  size_t count;
+  int *items;
+} BoolList;
+
+typedef struct {
   int64_t value;
   int64_t index;
 } IndexedNumber;

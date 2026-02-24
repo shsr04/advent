@@ -1,0 +1,349 @@
+package MetaC::CodegenRuntime::MatrixString;
+use strict;
+use warnings;
+use Exporter 'import';
+
+our @EXPORT_OK = qw(runtime_fragment_matrix_string);
+
+sub runtime_fragment_matrix_string {
+    return <<'C_RUNTIME_MATRIX_STRING';
+static MatrixString metac_matrix_string_new(int64_t dimensions, NumberList size_spec) {
+  MatrixString out;
+  out.dimensions = dimensions < 2 ? 2 : dimensions;
+  out.has_size_spec = 0;
+  out.size_spec = NULL;
+  out.entry_count = 0;
+  out.entry_cap = 0;
+  out.coords = NULL;
+  out.values = NULL;
+
+  if (size_spec.count == 0) {
+    return out;
+  }
+
+  size_t dims = (size_t)out.dimensions;
+  if (size_spec.items == NULL || size_spec.count != dims) {
+    fprintf(stderr, "invalid matrix size spec\n");
+    exit(1);
+  }
+
+  int64_t *copy = (int64_t *)calloc(dims == 0 ? 1 : dims, sizeof(int64_t));
+  if (copy == NULL) {
+    fprintf(stderr, "out of memory in matrix size spec\n");
+    exit(1);
+  }
+  for (size_t i = 0; i < dims; i++) {
+    if (size_spec.items[i] <= 0 && size_spec.items[i] != -1) {
+      fprintf(stderr, "matrix size must be positive or '*' (-1)\n");
+      exit(1);
+    }
+    copy[i] = size_spec.items[i];
+  }
+
+  out.has_size_spec = 1;
+  out.size_spec = copy;
+  return out;
+}
+
+static int metac_matrix_string_coords_valid(const MatrixString *matrix, NumberList coords, char *err, size_t err_sz) {
+  if (matrix == NULL) {
+    snprintf(err, err_sz, "matrix is null");
+    return 0;
+  }
+  size_t dims = (size_t)matrix->dimensions;
+  if (coords.count != dims || coords.items == NULL) {
+    snprintf(err, err_sz, "matrix coordinate arity mismatch");
+    return 0;
+  }
+
+  for (size_t d = 0; d < dims; d++) {
+    int64_t coord = coords.items[d];
+    if (coord < 0) {
+      snprintf(err, err_sz, "matrix coordinate is negative");
+      return 0;
+    }
+    if (matrix->has_size_spec && matrix->size_spec != NULL && matrix->size_spec[d] > 0 && coord >= matrix->size_spec[d]) {
+      snprintf(err, err_sz, "matrix coordinate out of bounds");
+      return 0;
+    }
+  }
+  return 1;
+}
+
+static int metac_matrix_string_coords_equal(const MatrixString *matrix, size_t entry_idx, NumberList coords) {
+  size_t dims = (size_t)matrix->dimensions;
+  size_t offset = entry_idx * dims;
+  for (size_t d = 0; d < dims; d++) {
+    if (matrix->coords[offset + d] != coords.items[d]) {
+      return 0;
+    }
+  }
+  return 1;
+}
+
+static size_t metac_matrix_string_find_entry(const MatrixString *matrix, NumberList coords) {
+  for (size_t i = 0; i < matrix->entry_count; i++) {
+    if (metac_matrix_string_coords_equal(matrix, i, coords)) {
+      return i;
+    }
+  }
+  return SIZE_MAX;
+}
+
+static int metac_matrix_string_ensure_capacity(MatrixString *matrix, size_t needed) {
+  if (needed <= matrix->entry_cap) {
+    return 1;
+  }
+
+  size_t dims = (size_t)matrix->dimensions;
+  size_t cap = matrix->entry_cap == 0 ? 8 : matrix->entry_cap;
+  while (cap < needed) {
+    if (cap > SIZE_MAX / 2) {
+      return 0;
+    }
+    cap *= 2;
+  }
+  if (dims != 0 && cap > SIZE_MAX / dims) {
+    return 0;
+  }
+
+  size_t coord_slots = cap * dims;
+  int64_t *next_coords = (int64_t *)realloc(matrix->coords, (coord_slots == 0 ? 1 : coord_slots) * sizeof(int64_t));
+  char **next_values = (char **)realloc(matrix->values, (cap == 0 ? 1 : cap) * sizeof(char *));
+  if (next_coords == NULL || next_values == NULL) {
+    return 0;
+  }
+  matrix->coords = next_coords;
+  matrix->values = next_values;
+  matrix->entry_cap = cap;
+  return 1;
+}
+
+static ResultMatrixString metac_matrix_string_insert_try(MatrixString matrix, const char *value, NumberList coords) {
+  ResultMatrixString out;
+  out.is_error = 0;
+  out.value = matrix;
+  out.message[0] = '\0';
+
+  char err[160];
+  if (!metac_matrix_string_coords_valid(&out.value, coords, err, sizeof(err))) {
+    out.is_error = 1;
+    snprintf(out.message, sizeof(out.message), "%s", err);
+    return out;
+  }
+
+  const char *safe_value = value == NULL ? "" : value;
+  size_t found = metac_matrix_string_find_entry(&out.value, coords);
+  if (found != SIZE_MAX) {
+    char *copy = metac_strdup_local(safe_value);
+    if (copy == NULL) {
+      out.is_error = 1;
+      snprintf(out.message, sizeof(out.message), "out of memory in matrix insert");
+      return out;
+    }
+    free(out.value.values[found]);
+    out.value.values[found] = copy;
+    return out;
+  }
+
+  size_t next_count = out.value.entry_count + 1;
+  if (!metac_matrix_string_ensure_capacity(&out.value, next_count)) {
+    out.is_error = 1;
+    snprintf(out.message, sizeof(out.message), "out of memory in matrix insert");
+    return out;
+  }
+
+  size_t dims = (size_t)out.value.dimensions;
+  size_t dst = out.value.entry_count * dims;
+  for (size_t d = 0; d < dims; d++) {
+    out.value.coords[dst + d] = coords.items[d];
+  }
+
+  char *copy = metac_strdup_local(safe_value);
+  if (copy == NULL) {
+    out.is_error = 1;
+    snprintf(out.message, sizeof(out.message), "out of memory in matrix insert");
+    return out;
+  }
+  out.value.values[out.value.entry_count] = copy;
+  out.value.entry_count = next_count;
+  return out;
+}
+
+static MatrixString metac_matrix_string_insert_or_die(MatrixString matrix, const char *value, NumberList coords) {
+  ResultMatrixString res = metac_matrix_string_insert_try(matrix, value, coords);
+  if (res.is_error) {
+    fprintf(stderr, "%s\n", res.message);
+    exit(1);
+  }
+  return res.value;
+}
+
+static MatrixStringMemberList metac_matrix_string_members(MatrixString matrix) {
+  MatrixStringMemberList out;
+  out.count = 0;
+  out.items = NULL;
+  if (matrix.entry_count == 0 || matrix.coords == NULL || matrix.values == NULL) {
+    return out;
+  }
+
+  size_t dims = (size_t)matrix.dimensions;
+  size_t count = matrix.entry_count;
+  size_t *order = (size_t *)calloc(count == 0 ? 1 : count, sizeof(size_t));
+  if (order == NULL) {
+    return out;
+  }
+  for (size_t i = 0; i < count; i++) {
+    order[i] = i;
+  }
+
+  for (size_t i = 1; i < count; i++) {
+    size_t j = i;
+    while (j > 0) {
+      const int64_t *lhs = &matrix.coords[order[j - 1] * dims];
+      const int64_t *rhs = &matrix.coords[order[j] * dims];
+      if (metac_matrix_number_coord_cmp(lhs, rhs, dims) <= 0) {
+        break;
+      }
+      size_t tmp = order[j - 1];
+      order[j - 1] = order[j];
+      order[j] = tmp;
+      j--;
+    }
+  }
+
+  MatrixStringMember *items = (MatrixStringMember *)calloc(count == 0 ? 1 : count, sizeof(MatrixStringMember));
+  if (items == NULL) {
+    return out;
+  }
+
+  for (size_t i = 0; i < count; i++) {
+    size_t src = order[i];
+    int64_t *coords = (int64_t *)calloc(dims == 0 ? 1 : dims, sizeof(int64_t));
+    if (coords == NULL) {
+      return out;
+    }
+    for (size_t d = 0; d < dims; d++) {
+      coords[d] = matrix.coords[src * dims + d];
+    }
+    items[i].matrix = matrix;
+    items[i].value = matrix.values[src] == NULL ? "" : matrix.values[src];
+    items[i].index.count = dims;
+    items[i].index.items = coords;
+  }
+
+  out.count = count;
+  out.items = items;
+  return out;
+}
+
+static StringList metac_matrix_string_neighbours(MatrixString matrix, NumberList coords) {
+  StringList out;
+  out.count = 0;
+  out.items = NULL;
+
+  char err[160];
+  if (!metac_matrix_string_coords_valid(&matrix, coords, err, sizeof(err))) {
+    fprintf(stderr, "%s\n", err);
+    exit(1);
+  }
+  if (matrix.entry_count == 0 || matrix.coords == NULL || matrix.values == NULL) {
+    return out;
+  }
+
+  char **items = (char **)calloc(matrix.entry_count == 0 ? 1 : matrix.entry_count, sizeof(char *));
+  if (items == NULL) {
+    return out;
+  }
+
+  size_t dims = (size_t)matrix.dimensions;
+  size_t out_count = 0;
+  for (size_t i = 0; i < matrix.entry_count; i++) {
+    int within = 1;
+    int all_same = 1;
+    for (size_t d = 0; d < dims; d++) {
+      int64_t cell = matrix.coords[i * dims + d];
+      int64_t diff = cell - coords.items[d];
+      if (diff < -1 || diff > 1) {
+        within = 0;
+        break;
+      }
+      if (diff != 0) {
+        all_same = 0;
+      }
+    }
+    if (within && !all_same) {
+      items[out_count++] = matrix.values[i] == NULL ? "" : matrix.values[i];
+    }
+  }
+
+  out.count = out_count;
+  out.items = items;
+  return out;
+}
+
+static MatrixString metac_log_matrix_string(MatrixString value) {
+  printf("matrix(dim=%lld", (long long)value.dimensions);
+  if (value.has_size_spec && value.size_spec != NULL) {
+    printf(", size=[");
+    for (size_t i = 0; i < (size_t)value.dimensions; i++) {
+      printf("%lld", (long long)value.size_spec[i]);
+      if (i + 1 < (size_t)value.dimensions) {
+        printf(", ");
+      }
+    }
+    printf("]");
+  } else {
+    printf(", size=*");
+  }
+
+  size_t dims = (size_t)value.dimensions;
+  size_t count = value.entry_count;
+  size_t *order = (size_t *)calloc(count == 0 ? 1 : count, sizeof(size_t));
+  if (order == NULL && count != 0) {
+    printf(", entries=[<oom>])\n");
+    return value;
+  }
+  for (size_t i = 0; i < count; i++) {
+    order[i] = i;
+  }
+
+  for (size_t i = 1; i < count; i++) {
+    size_t j = i;
+    while (j > 0) {
+      const int64_t *lhs = &value.coords[order[j - 1] * dims];
+      const int64_t *rhs = &value.coords[order[j] * dims];
+      if (metac_matrix_number_coord_cmp(lhs, rhs, dims) <= 0) {
+        break;
+      }
+      size_t tmp = order[j - 1];
+      order[j - 1] = order[j];
+      order[j] = tmp;
+      j--;
+    }
+  }
+
+  printf(", entries=[");
+  for (size_t i = 0; i < count; i++) {
+    size_t src = order[i];
+    printf("{index:[");
+    for (size_t d = 0; d < dims; d++) {
+      printf("%lld", (long long)value.coords[src * dims + d]);
+      if (d + 1 < dims) {
+        printf(", ");
+      }
+    }
+    const char *cell = (value.values == NULL || value.values[src] == NULL) ? "" : value.values[src];
+    printf("], value:\"%s\"}", cell);
+    if (i + 1 < count) {
+      printf(", ");
+    }
+  }
+  printf("])\n");
+  free(order);
+  return value;
+}
+C_RUNTIME_MATRIX_STRING
+}
+
+1;

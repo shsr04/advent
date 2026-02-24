@@ -104,7 +104,7 @@ sub prove_non_negative_expr {
         && scalar(@{ $expr->{args} }) == 0)
     {
         my (undef, $recv_type) = compile_expr($expr->{recv}, $ctx);
-        return 1 if $recv_type eq 'string' || $recv_type eq 'string_list' || $recv_type eq 'number_list' || $recv_type eq 'indexed_number_list';
+        return 1 if $recv_type eq 'string' || $recv_type eq 'string_list' || $recv_type eq 'number_list' || $recv_type eq 'bool_list' || $recv_type eq 'indexed_number_list';
         return 0;
     }
     if ($expr->{kind} eq 'binop' && $expr->{op} eq '+') {
@@ -178,6 +178,7 @@ sub decompose_iterable_expression {
     compile_error("Iterable expression must be seq(...) or list-valued, got $base_type")
       if $base_type ne 'string_list'
       && $base_type ne 'number_list'
+      && $base_type ne 'bool_list'
       && $base_type ne 'indexed_number_list'
       && !is_matrix_member_list_type($base_type);
 
@@ -270,6 +271,8 @@ sub emit_for_each_from_iterable_expr {
     my $container = '__metac_iter_list' . $ctx->{tmp_counter}++;
     if ($iter->{base_type} eq 'string_list') {
         emit_line($out, $indent, "StringList $container = $iter->{base_code};");
+    } elsif ($iter->{base_type} eq 'bool_list') {
+        emit_line($out, $indent, "BoolList $container = $iter->{base_code};");
     } elsif ($iter->{base_type} eq 'indexed_number_list') {
         emit_line($out, $indent, "IndexedNumberList $container = $iter->{base_code};");
     } elsif (is_matrix_member_list_type($iter->{base_type})) {
@@ -289,6 +292,8 @@ sub emit_for_each_from_iterable_expr {
     my $elem_type = 'number';
     if ($iter->{base_type} eq 'string_list') {
         $elem_type = 'string';
+    } elsif ($iter->{base_type} eq 'bool_list') {
+        $elem_type = 'bool';
     } elsif ($iter->{base_type} eq 'indexed_number_list') {
         $elem_type = 'indexed_number';
     } elsif (is_matrix_member_list_type($iter->{base_type})) {

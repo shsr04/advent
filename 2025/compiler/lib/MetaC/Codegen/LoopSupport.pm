@@ -201,6 +201,8 @@ sub emit_loop_body_with_binding {
         emit_line($out, $indent, "const char *$var_name = $var_c_expr;");
     } elsif ($var_type eq 'number') {
         emit_line($out, $indent, "const int64_t $var_name = $var_c_expr;");
+    } elsif ($var_type eq 'bool') {
+        emit_line($out, $indent, "const int $var_name = $var_c_expr;");
     } elsif ($var_type eq 'indexed_number') {
         emit_line($out, $indent, "const IndexedNumber $var_name = $var_c_expr;");
     } elsif (is_matrix_member_type($var_type)) {

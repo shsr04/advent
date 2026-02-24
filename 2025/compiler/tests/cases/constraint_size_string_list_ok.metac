@@ -1,0 +1,6 @@
+function main() {
+  const s: string with size(3) = "hey"
+  const xs: number[] with size(2) = [1, 2]
+  const ys: string[] with size(1) = ["z"]
+  log("${s.size()}-${xs.size()}-${ys.size()}")
+}

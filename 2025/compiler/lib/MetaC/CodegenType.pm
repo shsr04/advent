@@ -29,6 +29,7 @@ sub param_c_type {
     return 'NullableNumber' if $param->{type} eq 'number_or_null';
     return 'int' if $param->{type} eq 'bool';
     return 'const char *' if $param->{type} eq 'string';
+    return 'BoolList' if $param->{type} eq 'bool_list';
     if (is_matrix_type($param->{type})) {
         my $meta = matrix_type_meta($param->{type});
         return 'MatrixNumber' if $meta->{elem} eq 'number';
@@ -82,7 +83,7 @@ sub type_matches_expected {
         return 1 if $meta->{elem} eq 'number';
     }
     return 1 if type_is_number_or_null($expected) && ($actual eq 'number' || $actual eq 'indexed_number' || $actual eq 'null');
-    return 1 if ($expected eq 'number_list' || $expected eq 'string_list') && $actual eq 'empty_list';
+    return 1 if ($expected eq 'number_list' || $expected eq 'string_list' || $expected eq 'bool_list') && $actual eq 'empty_list';
     return 1 if is_matrix_type($expected) && $actual eq 'empty_list';
     return 1 if is_matrix_type($expected) && is_matrix_type($actual) && $expected eq $actual;
     return 0;

@@ -9,6 +9,11 @@ use MetaC::Support qw(
     clear_error_line
     c_escape_string
     parse_constraints
+    constraints_has_kind
+    constraints_has_any_kind
+    constraint_range_bounds
+    constraint_size_exact
+    constraint_size_is_wildcard
     emit_line
     trim
 );
@@ -64,11 +69,14 @@ require MetaC::Codegen::MethodMetadata;
 require MetaC::Codegen::MethodChainSupport;
 require MetaC::Codegen::LoopSupport;
 require MetaC::Codegen::ProofIter;
+require MetaC::Codegen::ExprMethodCall;
 require MetaC::Codegen::Expr;
 require MetaC::Codegen::BlockStageDecls;
+require MetaC::Codegen::BlockStageDeclsTry;
 require MetaC::Codegen::BlockStageTry;
 require MetaC::Codegen::BlockStageAssignLoops;
 require MetaC::Codegen::BlockStageControl;
+require MetaC::Codegen::CompileParams;
 require MetaC::Codegen::Compile;
 
 1;

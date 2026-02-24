@@ -51,8 +51,8 @@ Track all language features here. Add items as we iterate.
 37. `F-037` Full boolean connective grammar (`&&`) and precedence parity - `implemented`
 38. `F-038` Generalized union type model (beyond hardcoded unions) - `review`
 39. `F-039` Generic fallibility handlers (`?`, `or`) over all fallible expressions - `review`
-40. `F-040` Constraint engine v2 (`size`, applicability matrix, matrix-size linkage) - `draft`
-41. `F-041` Generic array type model (`T[]`) and operation typing - `draft`
+40. `F-040` Constraint engine v2 (`size`, applicability matrix, matrix-size linkage) - `implemented`
+41. `F-041` Generic array type model (`T[]`) and operation typing - `review`
 42. `F-042` Number semantics policy alignment (normative rational model vs backend modes) - `draft`
 43. `F-043` Return-lowering generalization for union return types - `implemented`
 44. `F-044` Normative conformance harness + implementation-percentage gate - `draft`
@@ -358,20 +358,20 @@ Use this block for each feature:
 - Notes/evidence: `?` handling is now generalized beyond `number | error` functions for supported fallible forms in const/statement try lowering (`compiler/lib/MetaC/Codegen/BlockStageDecls.pm`, `compiler/lib/MetaC/Codegen/BlockStageControl.pm`), with fail-fast process termination in non-error-return contexts and propagation in `number | error` contexts. Remaining gap for full acceptance: generic `or <lambda>` expression handling and fully type-driven fallibility across arbitrary unions.
 
 ### F-040 `Constraint Engine V2`
-- Status: draft
-- Spec file: `instructions/normative-f040-constraints.md` (planned)
+- Status: implemented
+- Spec file: `instructions/normative-f040-constraints.md`
 - Correctness classes: C0/C1/C3/C4
 - Key guarantees: support normative `size(n)` constraint and explicit per-type constraint applicability checks; keep `range`, `wrap`, `dim`, `matrixSize` consistent and composable.
 - Blocking questions: whether non-literal constraint arguments are accepted in this stage or deferred behind proof obligations.
-- Notes/evidence: Planned implementation: refactor constraint parser into typed constraint AST; add applicability matrix (`size` on string/array, `range/wrap` on number, `dim/matrixSize` on matrix); integrate matrix dimension-size relation checks. Verification targets: compile-pass/compile-fail diagnostics for each constraint/type pair and mixed constraint chains.
+- Notes/evidence: spec and acceptance scope documented in `instructions/normative-f040-constraints.md`; constraint parser now uses typed nodes as the canonical representation (`constraints = { nodes => [...] }`) across scalar and matrix constraints, including wildcard args for `range`, `size`, `dim`, and `matrixSize`, duplicate-term rejection, and `wrap`/`range` boundedness+order validation in `compiler/lib/MetaC/Support.pm`; parser/type applicability checks run against typed nodes in `compiler/lib/MetaC/Parser/Functions.pm`; matrix constraints are lowered from the same node pipeline in `compiler/lib/MetaC/TypeSpec.pm`; codegen constraint checks (`range/wrap/size/sign`) consume node-query helpers in `compiler/lib/MetaC/Codegen/Facts.pm`, `compiler/lib/MetaC/Codegen/BlockStageDecls.pm`, `compiler/lib/MetaC/Codegen/BlockStageAssignLoops.pm`, and `compiler/lib/MetaC/Codegen/Compile.pm`; matrix runtime coordinate checks now honor wildcard matrix-size entries in `compiler/lib/MetaC/CodegenRuntime/Matrix.pm` and `compiler/lib/MetaC/CodegenRuntime/MatrixString.pm`. Coverage includes prior F-040 cases plus `constraint_matrix_size_wildcard_partial_ok`, `constraint_matrix_size_wildcard_oob_fail`, `constraint_matrix_dim_wildcard_default_ok`, and `constraint_matrix_size_wildcard_invalid_entry`; full suite green (`82 passed, 0 failed`).
 
 ### F-041 `Generic Array Type Model`
-- Status: draft
+- Status: review
 - Spec file: `instructions/normative-f041-array-model.md` (planned)
 - Correctness classes: C0/C1/C2/C3
 - Key guarantees: represent arrays as generic `array<T>`/`T[]` rather than fixed `number[]`/`string[]` special cases; type-check indexing and list operations from element type.
 - Blocking questions: ownership/lifetime model for arrays of non-primitive element types in generated C.
-- Notes/evidence: Planned implementation: migrate list typing to parameterized container type; generalize operations (`size`, `slice`, `filter`, destructuring) over element constraints; preserve current fast paths for number/string as backend specializations, not language restrictions. Verification targets: generic array typing tests, migration tests for existing `number[]`/`string[]` programs, UB-safety review for generated container code.
+- Notes/evidence: implemented a third element-specialized array model (`bool[]` -> `bool_list`) to establish non-number/string generic-array path while preserving existing number/string fast paths. Parser/type normalization and applicability now accept `bool[]` in `compiler/lib/MetaC/TypeSpec.pm` and `compiler/lib/MetaC/Parser/Functions.pm`; runtime/container support added via `BoolList` + helpers in `compiler/lib/MetaC/CodegenRuntime/Prefix.pm`, `compiler/lib/MetaC/CodegenRuntime/Core.pm`, `compiler/lib/MetaC/CodegenRuntime/Lists.pm`, and `compiler/lib/MetaC/CodegenRuntime/Logging.pm`; element-aware indexing/size/destructure/for-each/push/log typing wired in `compiler/lib/MetaC/Codegen/Expr.pm`, `compiler/lib/MetaC/Codegen/ExprMethodCall.pm`, `compiler/lib/MetaC/Codegen/BlockStageTry.pm`, `compiler/lib/MetaC/Codegen/ProofIter.pm`, `compiler/lib/MetaC/Codegen/LoopSupport.pm`, `compiler/lib/MetaC/Codegen/BlockStageDecls.pm`, `compiler/lib/MetaC/Codegen/BlockStageAssignLoops.pm`, and `compiler/lib/MetaC/Codegen/CompileParams.pm`. Coverage added: `bool_array_size_destructure`, `bool_array_for_each_count`, `bool_array_push`, `diagnostic_bool_array_filter_unsupported`; full suite green (`86 passed, 0 failed`).
 
 ### F-042 `Number Semantics Policy Alignment`
 - Status: draft

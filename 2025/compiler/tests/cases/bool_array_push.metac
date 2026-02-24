@@ -1,0 +1,11 @@
+function main() {
+  let xs: bool[] = []
+  xs.push(true)
+  xs.push(false)
+
+  const ys = xs
+  if ys.size() == 2 {
+    const [a, b] = ys
+    log("${a}-${b}")
+  }
+}

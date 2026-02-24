@@ -1,0 +1,4 @@
+function main() {
+  const n: number with range(0,*) = 5
+  log("${n}")
+}

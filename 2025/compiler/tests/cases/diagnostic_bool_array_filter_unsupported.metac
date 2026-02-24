@@ -1,0 +1,5 @@
+function main() {
+  const xs: bool[] = [true, false]
+  const ys = xs.filter(x => x)
+  log("${ys.size()}")
+}

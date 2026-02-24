@@ -53,6 +53,18 @@ static NumberList metac_log_number_list(NumberList value) {
   return value;
 }
 
+static BoolList metac_log_bool_list(BoolList value) {
+  printf("[");
+  for (size_t i = 0; i < value.count; i++) {
+    printf("%d", value.items[i] ? 1 : 0);
+    if (i + 1 < value.count) {
+      printf(", ");
+    }
+  }
+  printf("]\n");
+  return value;
+}
+
 static IndexedNumberList metac_log_indexed_number_list(IndexedNumberList value) {
   printf("[");
   for (size_t i = 0; i < value.count; i++) {

@@ -1,0 +1,4 @@
+function main() {
+  const s: string with size(*) = "hello"
+  log("${s.size()}")
+}

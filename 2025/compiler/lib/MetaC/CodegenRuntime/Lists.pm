@@ -313,6 +313,21 @@ static int64_t metac_string_list_push(StringList *list, const char *value) {
   return (int64_t)next_count;
 }
 
+static int64_t metac_bool_list_push(BoolList *list, int value) {
+  if (list == NULL) {
+    return 0;
+  }
+  size_t next = list->count + 1;
+  int *grown = (int *)realloc(list->items, next * sizeof(int));
+  if (grown == NULL) {
+    return (int64_t)list->count;
+  }
+  grown[list->count] = value ? 1 : 0;
+  list->items = grown;
+  list->count = next;
+  return (int64_t)next;
+}
+
 static IndexedNumber metac_list_max_number(NumberList list) {
   IndexedNumber out;
   out.value = 0;

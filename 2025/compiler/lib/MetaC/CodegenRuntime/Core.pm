@@ -188,6 +188,26 @@ static NumberList metac_number_list_from_array(const int64_t *items, size_t coun
   return out;
 }
 
+static BoolList metac_bool_list_from_array(const int *items, size_t count) {
+  BoolList out;
+  out.count = 0;
+  out.items = NULL;
+  if (count == 0) {
+    return out;
+  }
+
+  int *copy = (int *)calloc(count, sizeof(int));
+  if (copy == NULL) {
+    return out;
+  }
+  for (size_t i = 0; i < count; i++) {
+    copy[i] = items[i] ? 1 : 0;
+  }
+  out.count = count;
+  out.items = copy;
+  return out;
+}
+
 static StringList metac_string_list_from_array(const char **items, size_t count) {
   StringList out;
   out.count = 0;

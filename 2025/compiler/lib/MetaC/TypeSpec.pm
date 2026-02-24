@@ -3,7 +3,12 @@ use strict;
 use warnings;
 use Exporter 'import';
 
-use MetaC::Support qw(compile_error trim);
+use MetaC::Support qw(
+    compile_error
+    trim
+    parse_constraint_nodes
+    constraint_nodes
+);
 
 our @EXPORT_OK = qw(
     normalize_type_annotation
@@ -28,75 +33,6 @@ our @EXPORT_OK = qw(
     matrix_member_list_meta
     matrix_neighbor_list_type
 );
-
-sub _split_top_level_commas {
-    my ($text) = @_;
-    my @parts;
-    my $current = '';
-    my $paren_depth = 0;
-    my $bracket_depth = 0;
-    my $in_string = 0;
-    my $escape = 0;
-    my @chars = split //, ($text // '');
-
-    for my $ch (@chars) {
-        if ($in_string) {
-            $current .= $ch;
-            if ($escape) {
-                $escape = 0;
-                next;
-            }
-            if ($ch eq '\\') {
-                $escape = 1;
-                next;
-            }
-            if ($ch eq '"') {
-                $in_string = 0;
-            }
-            next;
-        }
-
-        if ($ch eq '"') {
-            $in_string = 1;
-            $current .= $ch;
-            next;
-        }
-        if ($ch eq '(') {
-            $paren_depth++;
-            $current .= $ch;
-            next;
-        }
-        if ($ch eq ')') {
-            $paren_depth--;
-            compile_error("Unbalanced ')' in matrix constraints") if $paren_depth < 0;
-            $current .= $ch;
-            next;
-        }
-        if ($ch eq '[') {
-            $bracket_depth++;
-            $current .= $ch;
-            next;
-        }
-        if ($ch eq ']') {
-            $bracket_depth--;
-            compile_error("Unbalanced ']' in matrix constraints") if $bracket_depth < 0;
-            $current .= $ch;
-            next;
-        }
-        if ($ch eq ',' && $paren_depth == 0 && $bracket_depth == 0) {
-            push @parts, trim($current);
-            $current = '';
-            next;
-        }
-        $current .= $ch;
-    }
-
-    compile_error("Unbalanced delimiters in matrix constraints")
-      if $paren_depth != 0 || $bracket_depth != 0;
-    my $tail = trim($current);
-    push @parts, $tail if $tail ne '';
-    return \@parts;
-}
 
 sub _build_matrix_type {
     my (%args) = @_;
@@ -216,6 +152,7 @@ sub _normalize_single_type {
     $t =~ s/\s+//g;
 
     return 'bool' if $t eq 'boolean';
+    return 'bool_list' if $t eq 'bool[]' || $t eq 'boolean[]';
     return 'number_list' if $t eq 'number[]';
     return 'string_list' if $t eq 'string[]';
     if ($t =~ /^matrix\((number|string)\)$/) {
@@ -369,39 +306,37 @@ sub matrix_type_meta {
 }
 
 sub apply_matrix_constraints {
-    my ($matrix_type, $constraint_raw, $where) = @_;
+    my ($matrix_type, $constraint_spec, $where) = @_;
     $where = defined($where) ? $where : 'matrix declaration';
     my $meta = matrix_type_meta($matrix_type);
     compile_error("Internal: apply_matrix_constraints expects matrix type")
       if !defined $meta;
 
-    return $matrix_type if !defined($constraint_raw) || trim($constraint_raw) eq '';
+    my $nodes;
+    if (ref($constraint_spec) eq 'HASH') {
+        $nodes = constraint_nodes($constraint_spec);
+    } else {
+        my $raw = $constraint_spec;
+        return $matrix_type if !defined($raw) || trim($raw) eq '';
+        $nodes = parse_constraint_nodes($raw);
+    }
+    return $matrix_type if !@$nodes;
 
     my $dim = $meta->{dim};
     my @sizes;
     my $has_size = 0;
-    my $terms = _split_top_level_commas($constraint_raw);
-
-    for my $term (@$terms) {
-        next if $term eq '';
-        if ($term =~ /^dim\s*\(\s*(-?\d+)\s*\)$/) {
-            $dim = int($1);
+    for my $node (@$nodes) {
+        if ($node->{kind} eq 'dim') {
+            my ($arg) = @{ $node->{args} };
+            next if $arg->{kind} eq 'wildcard';
+            $dim = int($arg->{value});
             next;
         }
-        if ($term =~ /^matrixSize\s*\(\s*\[(.*)\]\s*\)$/) {
-            my $inside = trim($1);
-            my @parts = $inside eq '' ? () : map { trim($_) } split /\s*,\s*/, $inside;
-            compile_error("matrixSize(...) requires at least one size value in $where")
-              if !@parts;
-            @sizes = map {
-                compile_error("matrixSize(...) entries must be integer literals in $where")
-                  if $_ !~ /^-?\d+$/;
-                int($_);
-            } @parts;
+        if ($node->{kind} eq 'matrixSize') {
+            @sizes = map { $_->{kind} eq 'number' ? int($_->{value}) : -1 } @{ $node->{args} };
             $has_size = 1;
             next;
         }
-        compile_error("Unsupported matrix constraint term '$term' in $where");
     }
 
     compile_error("matrix dim(...) must be at least 2 in $where")
@@ -411,8 +346,8 @@ sub apply_matrix_constraints {
         compile_error("matrixSize(...) length must match dim($dim) in $where")
           if scalar(@sizes) != $dim;
         for my $size (@sizes) {
-            compile_error("matrixSize entries must be positive in $where")
-              if $size <= 0;
+            compile_error("matrixSize entries must be positive or '*' in $where")
+              if $size <= 0 && $size != -1;
         }
     }
 

@@ -70,7 +70,7 @@ sub _compile_block_stage_try {
         if ($stmt->{kind} eq 'destructure_list') {
             my ($expr_code, $expr_type) = compile_expr($stmt->{expr}, $ctx);
             compile_error("Destructuring assignment requires list expression, got $expr_type")
-              if $expr_type ne 'string_list' && $expr_type ne 'number_list';
+              if $expr_type ne 'string_list' && $expr_type ne 'number_list' && $expr_type ne 'bool_list';
 
             my $expected = scalar @{ $stmt->{vars} };
             compile_error("Cannot prove destructuring arity of $expected for a non-stable expression")
@@ -90,12 +90,19 @@ sub _compile_block_stage_try {
                     emit_line($out, $indent, "const char *$name = $tmp.items[$i];");
                     declare_var($ctx, $name, { type => 'string', immutable => 1, c_name => $name });
                 }
-            } else {
+            } elsif ($expr_type eq 'number_list') {
                 emit_line($out, $indent, "NumberList $tmp = $expr_code;");
                 for (my $i = 0; $i < @{ $stmt->{vars} }; $i++) {
                     my $name = $stmt->{vars}[$i];
                     emit_line($out, $indent, "const int64_t $name = $tmp.items[$i];");
                     declare_var($ctx, $name, { type => 'number', immutable => 1, c_name => $name });
+                }
+            } else {
+                emit_line($out, $indent, "BoolList $tmp = $expr_code;");
+                for (my $i = 0; $i < @{ $stmt->{vars} }; $i++) {
+                    my $name = $stmt->{vars}[$i];
+                    emit_line($out, $indent, "const int $name = $tmp.items[$i];");
+                    declare_var($ctx, $name, { type => 'bool', immutable => 1, c_name => $name });
                 }
             }
             return 1;

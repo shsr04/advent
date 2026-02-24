@@ -1,0 +1,7 @@
+function main() {
+  const flags: bool[] with size(3) = [true, false, true]
+  if flags.size() == 3 {
+    const [a, b, c] = flags
+    log("${a}-${b}-${c}")
+  }
+}

@@ -1,0 +1,3 @@
+function main() {
+  let n: number with range(0,*) + wrap = 1
+}
