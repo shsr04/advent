@@ -57,6 +57,106 @@ sub _return_c_type_from_fn_return {
     compile_error("Unsupported function return mode for return emission: $current_fn_return");
 }
 
+sub _expr_contains_try {
+    my ($expr) = @_;
+    return 0 if !defined $expr || ref($expr) ne 'HASH';
+    return 1 if ($expr->{kind} // '') eq 'try';
+
+    if (($expr->{kind} // '') eq 'unary') {
+        return _expr_contains_try($expr->{expr});
+    }
+    if (($expr->{kind} // '') eq 'binop') {
+        return _expr_contains_try($expr->{left}) || _expr_contains_try($expr->{right});
+    }
+    if (($expr->{kind} // '') eq 'index') {
+        return _expr_contains_try($expr->{recv}) || _expr_contains_try($expr->{index});
+    }
+    if (($expr->{kind} // '') eq 'method_call') {
+        return 1 if _expr_contains_try($expr->{recv});
+        for my $arg (@{ $expr->{args} // [] }) {
+            return 1 if _expr_contains_try($arg);
+        }
+        return 0;
+    }
+    if (($expr->{kind} // '') eq 'call' || ($expr->{kind} // '') eq 'list_literal') {
+        for my $arg (@{ $expr->{args} // $expr->{items} // [] }) {
+            return 1 if _expr_contains_try($arg);
+        }
+        return 0;
+    }
+    if (($expr->{kind} // '') eq 'lambda1') {
+        return _expr_contains_try($expr->{body});
+    }
+    if (($expr->{kind} // '') eq 'lambda2') {
+        return _expr_contains_try($expr->{body});
+    }
+    return 0;
+}
+
+sub _rewrite_expr_hoist_try {
+    my (%args) = @_;
+    my $expr = $args{expr};
+    my $ctx = $args{ctx};
+    my $out = $args{out};
+    my $indent = $args{indent};
+    my $current_fn_return = $args{current_fn_return};
+
+    return $expr if !defined $expr || ref($expr) ne 'HASH';
+    my $rewrite = sub {
+        return _rewrite_expr_hoist_try(
+            expr              => $_[0],
+            ctx               => $ctx,
+            out               => $out,
+            indent            => $indent,
+            current_fn_return => $current_fn_return,
+        );
+    };
+
+    if (($expr->{kind} // '') eq 'try') {
+        my $tmp_name = '__metac_inline_try' . $ctx->{tmp_counter}++;
+        my $tmp_stmt = {
+            kind => 'const_try_expr',
+            name => $tmp_name,
+            expr => $expr->{expr},
+        };
+        compile_block([ $tmp_stmt ], $ctx, $out, $indent, $current_fn_return);
+        return { kind => 'ident', name => $tmp_name };
+    }
+
+    if (($expr->{kind} // '') eq 'unary') {
+        return { %$expr, expr => $rewrite->($expr->{expr}) };
+    }
+    if (($expr->{kind} // '') eq 'binop') {
+        return { %$expr, left => $rewrite->($expr->{left}), right => $rewrite->($expr->{right}) };
+    }
+    if (($expr->{kind} // '') eq 'index') {
+        return { %$expr, recv => $rewrite->($expr->{recv}), index => $rewrite->($expr->{index}) };
+    }
+    if (($expr->{kind} // '') eq 'method_call') {
+        my @args;
+        for my $arg (@{ $expr->{args} // [] }) {
+            push @args, $rewrite->($arg);
+        }
+        return { %$expr, recv => $rewrite->($expr->{recv}), args => \@args };
+    }
+    if (($expr->{kind} // '') eq 'call') {
+        my @args;
+        for my $arg (@{ $expr->{args} // [] }) {
+            push @args, $rewrite->($arg);
+        }
+        return { %$expr, args => \@args };
+    }
+    if (($expr->{kind} // '') eq 'list_literal') {
+        my @items;
+        for my $item (@{ $expr->{items} // [] }) {
+            push @items, $rewrite->($item);
+        }
+        return { %$expr, items => \@items };
+    }
+
+    return $expr;
+}
+
 sub _compile_block_stage_control {
     my ($stmt, $ctx, $out, $indent, $current_fn_return) = @_;
         if ($stmt->{kind} eq 'if') {
@@ -274,6 +374,16 @@ sub _compile_block_stage_control {
 
         if ($stmt->{kind} eq 'expr_stmt') {
             my $expr = $stmt->{expr};
+            if (_expr_contains_try($expr)) {
+                $expr = _rewrite_expr_hoist_try(
+                    expr              => $expr,
+                    ctx               => $ctx,
+                    out               => $out,
+                    indent            => $indent,
+                    current_fn_return => $current_fn_return,
+                );
+                $stmt->{expr} = $expr;
+            }
             if ($expr->{kind} eq 'method_call' && $expr->{method} eq 'insert' && $expr->{recv}{kind} eq 'ident') {
                 my $recv_name = $expr->{recv}{name};
                 my $recv_info = lookup_var($ctx, $recv_name);

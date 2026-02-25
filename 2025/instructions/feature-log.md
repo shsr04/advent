@@ -417,37 +417,40 @@ Use this block for each feature:
 
 ### F-047 `Compiler Architecture Split: Parser -> IR -> Correctness Gates -> Codegen`
 - Status: draft
-- Spec file: `instructions/normative-f047-compiler-architecture-split.md` (planned)
+- Spec file: `instructions/ir-spec-f047.md`
 - Correctness classes: C0/C1/C2/C3/C4
 - Key guarantees:
-  - introduce a typed, explicit IR as the only input to backend code generation; parser/AST nodes must not be lowered directly to C.
-  - make control flow explicit in IR (`block`, `branch`, `loop`, `break`, `continue`, `rewind`, `return`, error-propagation edges), so every edge is machine-checkable before emission.
-  - model ownership/resources in IR (owned values, borrows, move/copy rules, cleanup ops) and require proof that every allocation has a matching cleanup across all exits and back-edges.
+  - implement the single Verified Normal-Form HIR (VNF-HIR) described in `instructions/ir-spec-f047.md` as the only accepted codegen input; parser/AST nodes must not be lowered directly to C.
+  - preserve high-level constructs in HIR while making control-flow explicit via region exits (`Goto`, `IfExit`, `TryExit`, `ForInExit`, `WhileExit`, `Return`, `PropagateError`) and explicit region edges.
+  - implement flowing fact state in HIR (`entryFacts`, `factsIn`, `factsOutByExit`) with deterministic transfer, merge, and loop-fixpoint behavior.
+  - implement ownership semantics via explicit `Move`/`Copy`/`Borrow`/`EndBorrow`/`Drop`, including implicit temporaries from normalized exits (for example `ForInExit` iterable epochs) and guaranteed cleanup proofs on all reachable paths.
   - enforce correctness gates as hard blockers before C emission:
-    - `Gate-CFG`: structurally valid CFG with resolved targets and dominance/post-dominance invariants.
-    - `Gate-Type`: IR-level type/effect consistency, including union narrowing and fallibility flow.
+    - `Gate-CFG`: structurally valid region/edge graph with resolved targets.
+    - `Gate-Type`: HIR type consistency and narrowing validity.
+    - `Gate-Effect`: fallibility/effect flow consistency (`?`, `or catch`, fail-fast paths).
     - `Gate-Ownership`: no use-after-free, no double-free, and no leak on any reachable path.
-    - `Gate-Lowering`: deterministic IR->C mapping with reproducible output for identical IR.
+    - `Gate-Lowering`: deterministic HIR->C mapping with reproducible output for identical normalized HIR.
     - `Gate-Traceability`: every accepted guarantee maps to check IDs + tests.
   - standardize compiler phase contracts:
     - parser outputs canonical AST with source spans.
-    - AST->IR lowering carries provenance metadata (`source span`, `type facts`, `constraint facts`, `effect facts`).
-    - codegen accepts only verified IR; unverified IR must be rejected.
+    - AST->HIR lowering carries provenance metadata (`source span`, `type facts`, `constraint facts`, `effect facts`).
+    - codegen accepts only verified HIR; unverified HIR must be rejected.
   - provide explainable failure output: diagnostics must cite failing gate/check and the originating source span.
 - Blocking questions:
-  - IR shape strategy: single SSA-like IR vs staged HIR/MIR split.
-  - ownership representation granularity: explicit `retain/release` ops vs inferred cleanup regions with proof annotations.
+  - merge policy per fact kind at joins (for example type/effect/ownership meet strategy) should be fixed in spec text vs left to implementation notes.
+  - whether to add optional `retain/release`-style nodes now or defer until a backend requires ref-count-specific lowering.
   - migration policy: feature-freeze during migration vs compatibility shim that allows old lowering for a bounded transition window.
   - proof tooling depth for first release: custom dataflow checks only vs SMT-backed obligations for selected gates.
 - Notes/evidence:
-  - Motivation: direct AST->C lowering has exposed correctness-risk regressions in control-flow/ownership interactions; this feature institutionalizes gate-based prevention.
+  - Motivation: direct AST->C lowering has exposed correctness-risk regressions in control-flow/ownership interactions; this feature institutionalizes fact-checked, gate-validated lowering.
   - Initial implementation plan:
-    - Phase 1: introduce minimal IR for statements/control flow and function signatures; keep existing expression lowering as wrapped intrinsics.
-    - Phase 2: move ownership semantics and fallibility flow into IR + add gate checks.
-    - Phase 3: require verified IR before codegen; retire direct-lowering paths.
-    - Phase 4: enable conformance reporting (gate pass/fail matrix + requirement trace links).
+    - Phase 1: introduce VNF-HIR data structures (`Program`, `Function`, `Region`, `Edge`) and deterministic ID/order normalization.
+    - Phase 2: lower AST statements/control-flow into VNF-HIR exits (`IfExit`/`TryExit`/`ForInExit`/`WhileExit`) with provenance + initial fact annotations.
+    - Phase 3: implement fact transfer/merge/fixpoint engine and gate checks (`CFG`, `Type`, `Effect`, `Ownership`, `Lowering`, `Traceability`).
+    - Phase 4: require verified HIR before codegen; retire direct AST->C lowering paths.
+    - Phase 5: add conformance reporting (gate pass/fail matrix + requirement trace links).
   - Required verification artifacts:
-    - adversarial CFG tests (loop back-edges, rewind, nested handlers, early returns).
-    - ownership stress tests proving alloc/free pairing on all paths.
-    - deterministic-codegen snapshots from normalized IR inputs.
+    - adversarial CFG tests (loop back-edges, rewind, nested handlers, early returns, error edges).
+    - ownership stress tests proving cleanup pairing for explicit and implicit owned values (including `ForInExit` iterable epochs).
+    - deterministic-codegen snapshots from normalized VNF-HIR inputs.
     - migration parity suite: old vs new pipeline output/behavior equivalence where guarantees overlap.

@@ -99,8 +99,17 @@ sub compile_expr {
         compile_error("Unsupported index receiver type: $recv_type")
           if $recv_type ne 'string' && $recv_type ne 'string_list' && $recv_type ne 'number_list' && $recv_type ne 'bool_list' && $recv_type ne 'indexed_number_list';
 
+        my $in_bounds = prove_container_index_in_bounds($recv_code, $recv_type, $expr->{index}, $ctx);
+        if (!$in_bounds && $expr->{recv}{kind} eq 'ident' && $expr->{index}{kind} eq 'num') {
+            my $idx_const = int($expr->{index}{value});
+            if ($idx_const >= 0) {
+                my $recv_key = expr_fact_key($expr->{recv}, $ctx);
+                my $known_len = lookup_list_len_fact($ctx, $recv_key);
+                $in_bounds = 1 if defined($known_len) && $idx_const < $known_len;
+            }
+        }
         compile_error("Index on '$recv_type' requires compile-time in-bounds proof")
-          if !prove_container_index_in_bounds($recv_code, $recv_type, $expr->{index}, $ctx);
+          if !$in_bounds;
 
         if ($recv_type eq 'string') {
             return ("metac_char_at($recv_code, $idx_num)", 'number');
@@ -115,6 +124,9 @@ sub compile_expr {
             return ("$recv_code.items[$idx_num]", 'bool');
         }
         return ("$recv_code.items[$idx_num]", 'number');
+    }
+    if ($expr->{kind} eq 'try') {
+        compile_error("Postfix '?' is only supported after hoisting in statement lowering");
     }
     if ($expr->{kind} eq 'method_call') {
         my ($recv_code, $recv_type) = compile_expr($expr->{recv}, $ctx);

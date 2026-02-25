@@ -100,6 +100,16 @@ sub compile_expr_method_call {
         return ("metac_chars_string($recv_code)", 'string_list');
     }
 
+    if ($recv_type eq 'string' && $method eq 'isBlank') {
+        compile_error("Method 'isBlank()' expects 0 args, got $actual")
+          if $actual != 0;
+        return ("metac_is_blank($recv_code)", 'bool');
+    }
+
+    if ($recv_type eq 'string' && $method eq 'split') {
+        compile_error("Method 'split(...)' is fallible; handle it with '?'");
+    }
+
     if (($recv_type eq 'string_list' || $recv_type eq 'number_list' || $recv_type eq 'number_list_list' || $recv_type eq 'bool_list' || $recv_type eq 'indexed_number_list')
         && ($method eq 'size' || $method eq 'count'))
     {
@@ -141,6 +151,75 @@ sub compile_expr_method_call {
             return ("metac_filter_matrix_string_member_list($recv_code, $helper_name)", $recv_type);
         }
         compile_error("Method 'filter(...)' is unsupported for matrix member element type '$member_meta->{elem}'");
+    }
+
+    if (($recv_type eq 'string_list' || $recv_type eq 'number_list' || $recv_type eq 'number_list_list' || $recv_type eq 'bool_list')
+        && $method eq 'any')
+    {
+        compile_error("Method 'any(...)' expects 1 arg, got $actual")
+          if $actual != 1;
+        my $predicate = $expr->{args}[0];
+        compile_error("any(...) predicate must be a single-parameter lambda, e.g. x => x > 0")
+          if $predicate->{kind} ne 'lambda1';
+        compile_error("Method 'any(...)' currently requires statement-backed expression context")
+          if !expr_temp_scope_active($ctx);
+
+        my ($recv_c_type, $item_type, $item_decl_template);
+        if ($recv_type eq 'number_list') {
+            $recv_c_type = 'NumberList';
+            $item_type = 'number';
+            $item_decl_template = 'const int64_t %ITEM% = %RECV%.items[%IDX%];';
+        } elsif ($recv_type eq 'string_list') {
+            $recv_c_type = 'StringList';
+            $item_type = 'string';
+            $item_decl_template = 'const char *%ITEM% = %RECV%.items[%IDX%];';
+        } elsif ($recv_type eq 'bool_list') {
+            $recv_c_type = 'BoolList';
+            $item_type = 'bool';
+            $item_decl_template = 'const int %ITEM% = %RECV%.items[%IDX%];';
+        } else {
+            $recv_c_type = 'NumberListList';
+            $item_type = 'number_list';
+            $item_decl_template = 'const NumberList %ITEM% = %RECV%.items[%IDX%];';
+        }
+
+        my $scope = $ctx->{expr_temp_scopes}[-1];
+        my $recv_tmp = '__metac_any_recv' . $ctx->{tmp_counter}++;
+        my $idx = '__metac_any_i' . $ctx->{tmp_counter}++;
+        my $item = '__metac_any_item' . $ctx->{tmp_counter}++;
+        my $result = '__metac_any_res' . $ctx->{tmp_counter}++;
+        my $item_decl = $item_decl_template;
+        $item_decl =~ s/%ITEM%/$item/g;
+        $item_decl =~ s/%RECV%/$recv_tmp/g;
+        $item_decl =~ s/%IDX%/$idx/g;
+
+        new_scope($ctx);
+        my %param_info = (
+            type      => $item_type,
+            immutable => 1,
+            c_name    => $item,
+        );
+        declare_var($ctx, $predicate->{param}, \%param_info);
+        if ($recv_type eq 'number_list_list' && $expr->{recv}{kind} eq 'ident') {
+            my $recv_info = lookup_var($ctx, $expr->{recv}{name});
+            if (defined($recv_info) && defined($recv_info->{item_len_proof})) {
+                my $param_key = expr_fact_key({ kind => 'ident', name => $predicate->{param} }, $ctx);
+                set_list_len_fact($ctx, $param_key, $recv_info->{item_len_proof});
+            }
+        }
+        my ($pred_code, $pred_type) = compile_expr($predicate->{body}, $ctx);
+        pop_scope($ctx);
+        compile_error("any(...) predicate must evaluate to bool")
+          if $pred_type ne 'bool';
+
+        push @{ $scope->{prelude} }, "int $result = 0;";
+        push @{ $scope->{prelude} }, "$recv_c_type $recv_tmp = $recv_code;";
+        push @{ $scope->{prelude} }, "for (size_t $idx = 0; $idx < $recv_tmp.count; $idx++) {";
+        push @{ $scope->{prelude} }, "  $item_decl";
+        push @{ $scope->{prelude} }, "  if ($pred_code) { $result = 1; break; }";
+        push @{ $scope->{prelude} }, "}";
+
+        return ($result, 'bool');
     }
 
     if (($recv_type eq 'string_list' || $recv_type eq 'number_list') && $method eq 'slice') {
@@ -253,6 +332,34 @@ sub compile_expr_method_call {
             my ($arg_code, $arg_type) = compile_expr($expr->{args}[0], $ctx);
             compile_error("Method 'push(...)' on number-list-list expects number[] arg, got $arg_type")
               if $arg_type ne 'number_list';
+            my $required_size =
+              (defined($recv_info->{constraints}) && defined($recv_info->{constraints}{nested_number_list_size}))
+              ? int($recv_info->{constraints}{nested_number_list_size})
+              : undef;
+            my $known_len;
+            if (expr_is_stable_for_facts($expr->{args}[0], $ctx)) {
+                my $arg_key = expr_fact_key($expr->{args}[0], $ctx);
+                $known_len = lookup_list_len_fact($ctx, $arg_key);
+                if (defined $known_len) {
+                    if (!defined $recv_info->{item_len_proof}) {
+                        $recv_info->{item_len_proof} = $known_len;
+                    } elsif ($recv_info->{item_len_proof} != $known_len) {
+                        delete $recv_info->{item_len_proof};
+                    }
+                } else {
+                    delete $recv_info->{item_len_proof} if defined $recv_info->{item_len_proof};
+                }
+            } else {
+                delete $recv_info->{item_len_proof} if defined $recv_info->{item_len_proof};
+            }
+            if (!defined $known_len && $expr->{args}[0]{kind} eq 'list_literal') {
+                $known_len = scalar @{ $expr->{args}[0]{items} // [] };
+            }
+            if (defined $required_size) {
+                compile_error("Method 'push(...)' on '$expr->{recv}{name}' requires pushed number[] with proven size($required_size)")
+                  if !defined($known_len) || int($known_len) != $required_size;
+                $recv_info->{item_len_proof} = $required_size;
+            }
             return ("metac_number_list_list_push(&$recv_info->{c_name}, $arg_code)", 'number');
         }
 

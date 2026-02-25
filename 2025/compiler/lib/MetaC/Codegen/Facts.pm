@@ -29,7 +29,11 @@ sub producer_definitely_assigns {
 sub block_definitely_returns {
     my ($stmts) = @_;
     for my $stmt (@$stmts) {
-        return 1 if $stmt->{kind} eq 'return';
+        return 1
+          if $stmt->{kind} eq 'return'
+          || $stmt->{kind} eq 'continue'
+          || $stmt->{kind} eq 'break'
+          || $stmt->{kind} eq 'rewind';
         if ($stmt->{kind} eq 'if' && defined $stmt->{else_body}) {
             my $then_returns = block_definitely_returns($stmt->{then_body});
             my $else_returns = block_definitely_returns($stmt->{else_body});
@@ -552,6 +556,9 @@ sub build_template_format_expr {
         } elsif ($expr_type eq 'bool') {
             $fmt .= '%d';
             push @args, $expr_code;
+        } elsif ($expr_type eq 'number_list') {
+            $fmt .= '%s';
+            push @args, "metac_fmt_number_list($expr_code)";
         } else {
             compile_error("Unsupported interpolation expression type: $expr_type");
         }

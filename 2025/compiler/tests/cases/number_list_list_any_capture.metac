@@ -1,0 +1,12 @@
+function main(): number {
+  const range = [3, 5]
+  if range.size() != 2 { return 1 }
+
+  let fresh: number[][] = []
+  fresh.push(range)
+
+  const avail = 4
+  const isFresh = fresh.any(x => x[0] <= avail && avail <= x[1])
+  log(isFresh)
+  return 0
+}

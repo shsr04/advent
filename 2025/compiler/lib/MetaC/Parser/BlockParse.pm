@@ -65,6 +65,21 @@ sub parse_block {
             next;
         }
 
+        if ($line =~ /^for\s+(?:const\s+)?([A-Za-z_][A-Za-z0-9_]*)\s+in\s+(.+)\?\s*\{$/) {
+            my ($var, $iter_raw) = ($1, trim($2));
+            $$idx_ref++;
+            my ($body, $end_reason) = parse_block($lines, $idx_ref, $base_line);
+            compile_error("for-loop missing closing brace") if $end_reason ne 'close';
+            push @stmts, {
+                kind     => 'for_each_try',
+                var      => $var,
+                iterable => parse_iterable_expression($iter_raw),
+                body     => $body,
+                line     => $line_no,
+            };
+            next;
+        }
+
         if ($line =~ /^for\s+(?:const\s+)?([A-Za-z_][A-Za-z0-9_]*)\s+in\s+(.+)\s*\{$/) {
             my ($var, $iter_raw) = ($1, trim($2));
             $$idx_ref++;

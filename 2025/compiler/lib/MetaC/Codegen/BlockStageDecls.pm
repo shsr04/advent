@@ -99,6 +99,9 @@ sub _compile_block_stage_decls {
                     emit_line($out, $indent, "NumberList $stmt->{name} = $expr_code;");
                 }
             } elsif ($decl_type eq 'number_list_list') {
+                if (defined $constraints->{nested_number_list_size} && $expr_type ne 'empty_list') {
+                    compile_error("variable '$stmt->{name}' cannot prove nested element size($constraints->{nested_number_list_size}) from initializer; initialize with [] and push proven elements");
+                }
                 if ($expr_type eq 'empty_list') {
                     emit_line($out, $indent, "NumberListList $stmt->{name};");
                     emit_line($out, $indent, "$stmt->{name}.count = 0;");
@@ -171,15 +174,15 @@ sub _compile_block_stage_decls {
                 compile_error("Unsupported let type: $decl_type");
             }
 
-            declare_var(
-                $ctx,
-                $stmt->{name},
-                {
-                    type        => $decl_type,
-                    constraints => $constraints,
-                    immutable   => 0,
-                }
+            my %decl_info = (
+                type        => $decl_type,
+                constraints => $constraints,
+                immutable   => 0,
             );
+            if ($decl_type eq 'number_list_list' && defined $constraints->{nested_number_list_size}) {
+                $decl_info{item_len_proof} = int($constraints->{nested_number_list_size});
+            }
+            declare_var($ctx, $stmt->{name}, \%decl_info);
             maybe_register_owned_cleanup_for_decl(
                 ctx       => $ctx,
                 var_name  => $stmt->{name},
@@ -393,6 +396,9 @@ sub _compile_block_stage_decls {
                     emit_line($out, $indent, "NumberList $stmt->{name} = $expr_code;");
                 }
             } elsif ($decl_type eq 'number_list_list') {
+                if (defined $constraints->{nested_number_list_size} && $expr_type ne 'empty_list') {
+                    compile_error("constant '$stmt->{name}' cannot prove nested element size($constraints->{nested_number_list_size}) from initializer");
+                }
                 if ($expr_type eq 'empty_list') {
                     emit_line($out, $indent, "NumberListList $stmt->{name};");
                     emit_line($out, $indent, "$stmt->{name}.count = 0;");
@@ -463,15 +469,15 @@ sub _compile_block_stage_decls {
                 compile_error("Unsupported const type: $decl_type");
             }
 
-            declare_var(
-                $ctx,
-                $stmt->{name},
-                {
-                    type        => $decl_type,
-                    constraints => $constraints,
-                    immutable   => 1,
-                }
+            my %decl_info = (
+                type        => $decl_type,
+                constraints => $constraints,
+                immutable   => 1,
             );
+            if ($decl_type eq 'number_list_list' && defined $constraints->{nested_number_list_size}) {
+                $decl_info{item_len_proof} = int($constraints->{nested_number_list_size});
+            }
+            declare_var($ctx, $stmt->{name}, \%decl_info);
             maybe_register_owned_cleanup_for_decl(
                 ctx       => $ctx,
                 var_name  => $stmt->{name},

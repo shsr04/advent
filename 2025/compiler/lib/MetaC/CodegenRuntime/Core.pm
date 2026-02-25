@@ -396,6 +396,67 @@ static void metac_copy_str(char *dst, size_t dst_sz, const char *src) {
 static int metac_streq(const char *a, const char *b) {
   return strcmp(a, b) == 0;
 }
+
+static const char *metac_fmt_number_list(NumberList value) {
+  static char out[1024];
+  size_t pos = 0;
+  out[0] = '\0';
+
+  int n = snprintf(out, sizeof(out), "[");
+  if (n < 0) {
+    out[0] = '[';
+    out[1] = ']';
+    out[2] = '\0';
+    return out;
+  }
+  pos = (size_t)n;
+  if (pos >= sizeof(out)) {
+    out[sizeof(out) - 1] = '\0';
+    return out;
+  }
+
+  for (size_t i = 0; i < value.count; i++) {
+    if (pos >= sizeof(out) - 1) {
+      break;
+    }
+    n = snprintf(
+        out + pos,
+        sizeof(out) - pos,
+        "%s%lld",
+        (i == 0) ? "" : ", ",
+        (long long)value.items[i]);
+    if (n < 0) {
+      break;
+    }
+    size_t wrote = (size_t)n;
+    if (wrote >= sizeof(out) - pos) {
+      pos = sizeof(out) - 1;
+      break;
+    }
+    pos += wrote;
+  }
+
+  if (pos < sizeof(out) - 1) {
+    snprintf(out + pos, sizeof(out) - pos, "]");
+  } else {
+    out[sizeof(out) - 2] = ']';
+    out[sizeof(out) - 1] = '\0';
+  }
+  return out;
+}
+
+static int metac_is_blank(const char *s) {
+  if (s == NULL) {
+    return 1;
+  }
+  while (*s != '\0') {
+    if (!isspace((unsigned char)*s)) {
+      return 0;
+    }
+    s++;
+  }
+  return 1;
+}
 C_RUNTIME_CORE
 }
 

@@ -31,14 +31,93 @@ sub _enforce_constraint_applicability {
     }
 }
 
+sub _split_type_and_constraints_top_level {
+    my ($raw) = @_;
+    my @chars = split //, ($raw // '');
+    my $paren_depth = 0;
+    my $bracket_depth = 0;
+    my $in_string = 0;
+    my $escape = 0;
+
+    for (my $i = 0; $i < @chars; $i++) {
+        my $ch = $chars[$i];
+        if ($in_string) {
+            if ($escape) {
+                $escape = 0;
+                next;
+            }
+            if ($ch eq '\\') {
+                $escape = 1;
+                next;
+            }
+            if ($ch eq '"') {
+                $in_string = 0;
+            }
+            next;
+        }
+        if ($ch eq '"') {
+            $in_string = 1;
+            next;
+        }
+        if ($ch eq '(') {
+            $paren_depth++;
+            next;
+        }
+        if ($ch eq ')') {
+            $paren_depth--;
+            compile_error("Unbalanced ')' in type annotation")
+              if $paren_depth < 0;
+            next;
+        }
+        if ($ch eq '[') {
+            $bracket_depth++;
+            next;
+        }
+        if ($ch eq ']') {
+            $bracket_depth--;
+            compile_error("Unbalanced ']' in type annotation")
+              if $bracket_depth < 0;
+            next;
+        }
+
+        next if $paren_depth != 0 || $bracket_depth != 0;
+        next if substr($raw, $i, 6) ne ' with ';
+        my $type_raw = trim(substr($raw, 0, $i));
+        my $constraint_raw = trim(substr($raw, $i + 6));
+        return ($type_raw, $constraint_raw);
+    }
+
+    compile_error("Unbalanced delimiters in type annotation")
+      if $paren_depth != 0 || $bracket_depth != 0;
+    return (trim($raw), undef);
+}
+
 sub parse_declared_type_and_constraints {
     my (%args) = @_;
     my $raw = trim($args{raw} // '');
     my $where = $args{where} // 'declaration';
-    my ($type_raw, $constraint_raw) = ($raw, undef);
-    if ($raw =~ /^(.*?)\s+with\s+(.+)$/) {
-        $type_raw = trim($1);
-        $constraint_raw = trim($2);
+    my ($type_raw, $constraint_raw) = _split_type_and_constraints_top_level($raw);
+    my $nested_number_list_size;
+
+    if ($type_raw =~ /^\((.+)\)\[\]$/) {
+        my $inner_raw = trim($1);
+        my ($inner_type, $inner_constraints) = parse_declared_type_and_constraints(
+            raw   => $inner_raw,
+            where => "nested list element type in $where",
+        );
+        compile_error("Unsupported nested list element type '$inner_raw' in $where")
+          if $inner_type ne 'number_list';
+        my $inner_nodes = constraint_nodes($inner_constraints);
+        my @unsupported = grep { $_->{kind} ne 'size' } @$inner_nodes;
+        compile_error("Only size(...) constraint is supported on nested list element type in $where")
+          if @unsupported;
+        my $inner_size = constraint_size_exact($inner_constraints);
+        compile_error("Nested element size(*) is unsupported in $where; use explicit size(N)")
+          if !defined $inner_size;
+        compile_error("Nested element size(...) must be >= 0 in $where")
+          if $inner_size < 0;
+        $nested_number_list_size = $inner_size;
+        $type_raw = 'number[][]';
     }
 
     my $type = normalize_type_annotation($type_raw);
@@ -58,6 +137,8 @@ sub parse_declared_type_and_constraints {
     }
 
     my $constraints = parse_constraints($constraint_raw);
+    $constraints->{nested_number_list_size} = $nested_number_list_size
+      if defined $nested_number_list_size;
     _enforce_constraint_applicability(
         type           => $type,
         constraints    => $constraints,

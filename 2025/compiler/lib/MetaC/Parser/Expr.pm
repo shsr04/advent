@@ -39,7 +39,7 @@ sub expr_tokens {
             push @tokens, { type => 'op', value => '&&' };
             next;
         }
-        if ($expr =~ /\G[<>,\+\-\*\/%\.\(\)\[\]]/gc) {
+        if ($expr =~ /\G[<>,\+\-\*\/%\.\(\)\[\]\?]/gc) {
             push @tokens, { type => 'op', value => $& };
             next;
         }
@@ -207,6 +207,14 @@ sub parse_expr {
                     kind  => 'index',
                     recv  => $node,
                     index => $index_expr,
+                };
+                next;
+            }
+
+            if ($accept_op->('?')) {
+                $node = {
+                    kind => 'try',
+                    expr => $node,
                 };
                 next;
             }

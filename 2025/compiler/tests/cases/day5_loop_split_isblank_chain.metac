@@ -1,0 +1,22 @@
+function main(): number {
+  const result = run() or catch(e) {
+    return 1
+  }
+  log(result)
+  return 0
+}
+
+function run(): number|error {
+  let total: number = 0
+
+  for const row in split("a-b\n\nx-y-z", "\n")? {
+    if row.isBlank() {
+      continue
+    }
+
+    const parts = row.split("-")?
+    total += parts.size()
+  }
+
+  return total
+}

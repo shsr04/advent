@@ -1,0 +1,42 @@
+function main() {
+  const result = checkRanges() or catch(e) {
+    log("Error! ${e}")
+    return 1
+  }
+  log("Result: ${result}")
+}
+
+function checkRanges(): number|error {
+  let fresh: int[][] = []
+  let available: int[] = []
+  let mode: string = "fresh"
+
+  for const row in split(STDIN, "\n")? {
+    if row.isBlank() {
+      mode = "avail"
+      continue
+    }
+
+    if mode=="fresh" {
+      const range = row.split("-")?.map(parseNumber)?
+      if range.size() != 2 { 
+        log("Invalid range: ${range}")
+        continue
+      }
+      fresh.push(range)
+    } else {
+      available.push(parseNumber(row)?)
+    }
+  }
+  
+  let count = 0
+  
+  for const avail in available {
+    const isFresh = fresh.any((x) => x[0] < avail && avail <= x[1])
+    if isFresh {
+      count++
+    }
+  }
+
+  return count
+}

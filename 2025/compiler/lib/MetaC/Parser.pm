@@ -11,6 +11,7 @@ use MetaC::Support qw(
     trim
     split_top_level_commas
     constraint_nodes
+    constraint_size_exact
     constraints_has_any_kind
     parse_constraints
 );

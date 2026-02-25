@@ -45,7 +45,7 @@ This section *specifies* the syntactic structure of a parseable MetaC program.
 - Scope := `{` StatementSeq `}`
 - StatementSeq := nil | Statement StatementSeqRest
 - StatementSeqRest := nil | whitespace Statement StatementSeqRest
-- Statement := Definition | Assignment | Conditional | Loop | LoopControl | Return
+- Statement := Definition | Assignment | Conditional | Loop | LoopControl | Expr | Return
 - Definition := (`let` | `const`) Name TypeSpecOpt `=` Expr
 - Assignment := Name TypeSpecOpt (`=` Expr | `from` Scope)
 - Conditional := `if` Expr Scope CondElse?
@@ -65,10 +65,11 @@ This section *specifies* the syntactic structure of a parseable MetaC program.
 - MulExpr := UnaryExpr ((`*` | `/` | `~/` | `%`) UnaryExpr)*
 - UnaryExpr := `-` UnaryExpr | PrimaryExpr
 - PrimaryExpr := AtomExpr ChainSeqOpt
-- ChainSeqOpt := nil | ChainPart ErrorHandler? ChainSeqOpt
-- ChainPart := `.` Name ArgList | `[` Expr `]`
-- AtomExpr := literal | `[` ArgSeq? `]` | Name CallOpt | `(` Expr `)`
-- CallOpt := nil | ArgList ErrorHandler?
+- ChainSeqOpt := nil | ChainPart ChainSeqOpt
+- ChainPart := `.` FunctionCall | IndexExpr
+- IndexExpr := `[` Expr `]` ErrorHandler?
+- AtomExpr := literal | `[` ArgSeq? `]` | FunctionCall | `(` Expr `)`
+- FunctionCall := Name ArgList ErrorHandler?
 - ErrorHandler := `?` | `or` (Expr | ErrorHandlerBlock)
 - ErrorHandlerBlock := `catch` `(` LambdaArgSeq? `)` Scope
 - Lambda := `(` LambdaArgSeq? `)` `=>` (Scope | Expr)
@@ -206,11 +207,13 @@ A mutable variable *can* be reassigned and modified.
 
 An expression *is* fallible if its type contains the error type. Otherwise, it *is* infallible.
 
-There are two available error-handling constructs:
+There are two ways to handle fallible expressions:
 - Error propagation (using `?` keyword): This *is* equivalent to returning the error from the enclosing function.
-- Error handler function (using `or` expression): This handles the error, using the supplied handler, *in the scope of the enclosing function*.
+- Error catch handler (using `or` expression): This handles the error, using the supplied handler, *in the scope of the enclosing function*.
 
-An error-handling construct *cannot* be applied to an infallible expression.
+Error handling *cannot* be applied to an infallible expression.
+
+The program must handle *all* fallible expressions.
 
 The program must not use error propagation if the enclosing function has a non-`error` return type, except in the `main` function. In the `main` function, error propagation causes a non-zero exit code of the program.
 

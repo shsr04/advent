@@ -122,6 +122,9 @@ sub _compile_block_stage_assign_loops {
                     where       => "typed assignment for '$stmt->{name}'",
                 );
             } elsif ($stmt->{type} eq 'number_list_list') {
+                if (defined $constraints->{nested_number_list_size} && $expr_type ne 'empty_list') {
+                    compile_error("typed assignment for '$stmt->{name}' cannot prove nested element size($constraints->{nested_number_list_size}); assign [] then push proven elements");
+                }
                 if ($expr_type eq 'empty_list') {
                     emit_line($out, $indent, "metac_free_number_list_list($target);");
                     emit_line($out, $indent, "$target.count = 0;");
@@ -239,6 +242,13 @@ sub _compile_block_stage_assign_loops {
                     where       => "assignment to '$stmt->{name}'",
                 );
             } elsif ($info->{type} eq 'number_list' || $info->{type} eq 'number_list_list' || $info->{type} eq 'string_list' || $info->{type} eq 'bool_list') {
+                if ($info->{type} eq 'number_list_list'
+                    && defined($info->{constraints})
+                    && defined($info->{constraints}{nested_number_list_size})
+                    && $expr_type ne 'empty_list')
+                {
+                    compile_error("assignment to '$stmt->{name}' cannot prove nested element size($info->{constraints}{nested_number_list_size}); assign [] then push proven elements");
+                }
                 if ($expr_type eq 'empty_list') {
                     if ($info->{type} eq 'number_list_list') {
                         emit_line($out, $indent, "metac_free_number_list_list($target);");
@@ -359,6 +369,32 @@ sub _compile_block_stage_assign_loops {
                 out                => $out,
                 indent             => $indent,
                 current_fn_return  => $current_fn_return,
+            );
+            return 1;
+        }
+
+        if ($stmt->{kind} eq 'for_each_try') {
+            my $iter_name = '__metac_iter_try' . $ctx->{tmp_counter}++;
+            compile_block(
+                [
+                    {
+                        kind => 'const_try_expr',
+                        name => $iter_name,
+                        expr => $stmt->{iterable},
+                    }
+                ],
+                $ctx,
+                $out,
+                $indent,
+                $current_fn_return,
+            );
+            emit_for_each_from_iterable_expr(
+                iter_expr         => { kind => 'ident', name => $iter_name },
+                stmt              => $stmt,
+                ctx               => $ctx,
+                out               => $out,
+                indent            => $indent,
+                current_fn_return => $current_fn_return,
             );
             return 1;
         }

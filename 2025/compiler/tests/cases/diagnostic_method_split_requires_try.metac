@@ -1,0 +1,4 @@
+function main(): number {
+  const parts = "1-2".split("-")
+  return parts.size()
+}

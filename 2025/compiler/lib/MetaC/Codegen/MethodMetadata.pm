@@ -22,6 +22,18 @@ sub method_specs {
             expr_callable => 1,
             fallibility   => 'never',
         },
+        isBlank => {
+            receivers     => { string => 1 },
+            arity         => 0,
+            expr_callable => 1,
+            fallibility   => 'never',
+        },
+        split => {
+            receivers     => { string => 1 },
+            arity         => 1,
+            expr_callable => 0,
+            fallibility   => 'always',
+        },
         slice => {
             receivers     => { string_list => 1, number_list => 1 },
             arity         => 1,
@@ -71,6 +83,12 @@ sub method_specs {
             receivers     => { string_list => 1, number_list => 1 },
             arity         => 1,
             expr_callable => 0,
+            fallibility   => 'never',
+        },
+        any => {
+            receivers     => { string_list => 1, number_list => 1, number_list_list => 1, bool_list => 1 },
+            arity         => 1,
+            expr_callable => 1,
             fallibility   => 'never',
         },
         reduce => {

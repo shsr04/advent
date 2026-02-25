@@ -276,6 +276,48 @@ sub _compile_block_stage_decls_try_ops {
             return 1;
         }
 
+        if ($expr->{kind} eq 'method_call' && $expr->{method} eq 'split') {
+            my $actual = scalar @{ $expr->{args} };
+            compile_error("split(...) with '?' expects exactly 1 delimiter arg")
+              if $actual != 1;
+
+            my ($src_code, $src_type, $src_prelude, $src_cleanups) = compile_expr_with_temp_scope(
+                ctx  => $ctx,
+                expr => $expr->{recv},
+            );
+            emit_expr_temp_prelude($out, $indent, $src_prelude);
+            my ($delim_code, $delim_type, $delim_prelude, $delim_cleanups) = compile_expr_with_temp_scope(
+                ctx  => $ctx,
+                expr => $expr->{args}[0],
+            );
+            emit_expr_temp_prelude($out, $indent, $delim_prelude);
+            my @split_cleanups = (@$delim_cleanups, @$src_cleanups);
+            my $split_cleanup_count = push_active_temp_cleanups($ctx, \@split_cleanups);
+            compile_error("split source must be string") if $src_type ne 'string';
+            compile_error("split delimiter must be string") if $delim_type ne 'string';
+
+            my $tmp = '__metac_split' . $ctx->{tmp_counter}++;
+            emit_line($out, $indent, "ResultStringList $tmp = metac_split_string($src_code, $delim_code);");
+            emit_line($out, $indent, "if ($tmp.is_error) {");
+            _emit_try_failure($ctx, $out, $indent + 2, $current_fn_return, "$tmp.message");
+            emit_line($out, $indent, "}");
+            emit_line($out, $indent, "StringList $stmt->{name} = $tmp.value;");
+
+            declare_var(
+                $ctx,
+                $stmt->{name},
+                {
+                    type      => 'string_list',
+                    immutable => 1,
+                    c_name    => $stmt->{name},
+                }
+            );
+            register_owned_cleanup_for_var($ctx, $stmt->{name}, "metac_free_string_list($stmt->{name}, 1)");
+            emit_expr_temp_cleanups($out, $indent, \@split_cleanups);
+            pop_active_temp_cleanups($ctx, $split_cleanup_count);
+            return 1;
+        }
+
         if ($expr->{kind} eq 'method_call' && $expr->{method} eq 'map') {
             emit_map_assignment(
                 name             => $stmt->{name},

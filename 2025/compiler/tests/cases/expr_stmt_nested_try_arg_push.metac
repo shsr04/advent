@@ -1,0 +1,13 @@
+function main(): number {
+  const value = run() or catch(e) {
+    return 1
+  }
+  log(value)
+  return 0
+}
+
+function run(): number|error {
+  let values: number[] = []
+  values.push(parseNumber("42")?)
+  return values.size()
+}

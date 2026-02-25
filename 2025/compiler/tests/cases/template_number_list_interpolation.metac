@@ -1,0 +1,5 @@
+function main(): number {
+  const xs: number[] = [1, 2, 3]
+  log("xs=${xs}")
+  return 0
+}
