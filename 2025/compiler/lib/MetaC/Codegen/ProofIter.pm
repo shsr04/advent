@@ -311,6 +311,13 @@ sub emit_for_each_from_iterable_expr {
         $elem_type = "matrix_member<$member_meta->{elem};d=$member_meta->{dim}>";
     }
     my $elem_expr = "$container.items[$idx_name]";
+    my $elem_len_proof;
+    if ($iter->{base_type} eq 'number_list_list' && $iter->{base_expr}{kind} eq 'ident') {
+        my $base_info = lookup_var($ctx, $iter->{base_expr}{name});
+        if (defined($base_info) && defined($base_info->{item_len_proof})) {
+            $elem_len_proof = int($base_info->{item_len_proof});
+        }
+    }
     my ($member_matrix_code, $member_matrix_type);
     if (is_matrix_member_list_type($iter->{base_type})
         && $iter->{base_expr}{kind} eq 'method_call'
@@ -357,6 +364,7 @@ sub emit_for_each_from_iterable_expr {
         var_type          => $elem_type,
         var_c_expr        => $elem_expr,
         var_index_c_expr  => "((int64_t)$idx_name)",
+        list_len_proof    => $elem_len_proof,
         member_matrix_code => $member_matrix_code,
         member_matrix_type => $member_matrix_type,
     );

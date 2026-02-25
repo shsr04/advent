@@ -1,0 +1,44 @@
+function main() {
+  const result = checkRanges() or catch(e) {
+    log("Error! ${e}")
+    return 1
+  }
+  log("Result: ${result}")
+}
+
+function checkRanges(): number|error {
+  let fresh: int[][] = []
+
+  for const row in split(STDIN, "\n")? {
+    if row.isBlank() {
+      break
+    }
+
+    const range = row.split("-")?.map(parseNumber)?
+    if range.size() != 2 { 
+      log("Invalid range: ${range}")
+      continue
+    }
+    fresh.push(range)
+  }
+  
+  const sorted = fresh.sortBy((x, y) => x[0].compareTo(y[0]).andThen(x[1].compareTo(y[1])))
+  
+  let count = 0
+  let lastAdded: number|null = null
+  
+  for const range in sorted {
+    const [start,end] = range
+    if lastAdded == null || lastAdded < start {
+      count += end-start+1
+      lastAdded = end
+      continue
+    }
+    if start <= lastAdded && lastAdded < end {
+      count += end-lastAdded
+      lastAdded = end
+    }
+  }
+
+  return count
+}

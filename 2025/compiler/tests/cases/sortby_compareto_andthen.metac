@@ -1,0 +1,20 @@
+function main() {
+  let pairs: int[][] = []
+  pairs.push([2, 3])
+  pairs.push([1, 5])
+  pairs.push([1, 2])
+
+  const sorted = pairs.sortBy((x, y) => x[0].compareTo(y[0]).andThen(x[1].compareTo(y[1])))
+  let result = 0
+  let i = 0
+  for const pair in sorted {
+    if i == 0 {
+      result = pair[0] + pair[1] * 10
+    }
+    if i == 1 {
+      result += pair[1] * 100
+    }
+    i += 1
+  }
+  log("Result: ${result}")
+}

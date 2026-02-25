@@ -30,7 +30,7 @@ sub _cleanup_call_for_expr_type_and_source {
     }
     if ($decl_type eq 'number_list_list') {
         return "metac_free_number_list_list($var_name)"
-          if $expr_code =~ /\bmetac_number_list_list_from_array\s*\(/;
+          if $expr_code =~ /\bmetac_(?:number_list_list_from_array|sort_number_list_list_by)\s*\(/;
         return undef;
     }
     if ($decl_type eq 'bool_list') {

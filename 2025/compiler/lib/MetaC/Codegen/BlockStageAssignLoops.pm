@@ -123,7 +123,15 @@ sub _compile_block_stage_assign_loops {
                 );
             } elsif ($stmt->{type} eq 'number_list_list') {
                 if (defined $constraints->{nested_number_list_size} && $expr_type ne 'empty_list') {
-                    compile_error("typed assignment for '$stmt->{name}' cannot prove nested element size($constraints->{nested_number_list_size}); assign [] then push proven elements");
+                    my $required = int($constraints->{nested_number_list_size});
+                    my $allow_from_ident = 0;
+                    if ($stmt->{expr}{kind} eq 'ident') {
+                        my $src = lookup_var($ctx, $stmt->{expr}{name});
+                        $allow_from_ident = 1
+                          if defined($src) && defined($src->{item_len_proof}) && int($src->{item_len_proof}) == $required;
+                    }
+                    compile_error("typed assignment for '$stmt->{name}' cannot prove nested element size($required); assign [] then push proven elements")
+                      if !$allow_from_ident;
                 }
                 if ($expr_type eq 'empty_list') {
                     emit_line($out, $indent, "metac_free_number_list_list($target);");
@@ -247,7 +255,15 @@ sub _compile_block_stage_assign_loops {
                     && defined($info->{constraints}{nested_number_list_size})
                     && $expr_type ne 'empty_list')
                 {
-                    compile_error("assignment to '$stmt->{name}' cannot prove nested element size($info->{constraints}{nested_number_list_size}); assign [] then push proven elements");
+                    my $required = int($info->{constraints}{nested_number_list_size});
+                    my $allow_from_ident = 0;
+                    if ($stmt->{expr}{kind} eq 'ident') {
+                        my $src = lookup_var($ctx, $stmt->{expr}{name});
+                        $allow_from_ident = 1
+                          if defined($src) && defined($src->{item_len_proof}) && int($src->{item_len_proof}) == $required;
+                    }
+                    compile_error("assignment to '$stmt->{name}' cannot prove nested element size($required); assign [] then push proven elements")
+                      if !$allow_from_ident;
                 }
                 if ($expr_type eq 'empty_list') {
                     if ($info->{type} eq 'number_list_list') {

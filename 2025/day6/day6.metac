@@ -1,0 +1,28 @@
+function main() {
+  const result = sumProblems() or catch(e) {
+    log("Error! ${e}")
+    return 1
+  }
+  log("Result: ${result}")
+}
+
+function sumProblems(): number|error {
+  let grid: matrix(string) with dim(2) = []
+  let sum = 0
+  
+  for const row in split(STDIN, "\n")? {
+    for const c in row.chars() { 
+      grid.insert(c, [row.index(), c.index()])?
+    }
+  }
+  
+  for const cell in grid.members() {
+    cell.index().log()
+  }
+  
+  return sum
+}
+
+function extractColumn(grid: matrix(string) with dim(2), column: number): string[] {
+  // ...
+}

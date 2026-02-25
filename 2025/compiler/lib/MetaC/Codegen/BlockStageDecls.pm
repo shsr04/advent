@@ -30,6 +30,21 @@ sub _emit_try_failure {
     emit_line($out, $indent, "exit(2);");
 }
 
+sub _infer_number_list_list_item_len_proof_from_expr {
+    my ($expr, $ctx) = @_;
+    return undef if !defined $expr;
+
+    if (($expr->{kind} // '') eq 'ident') {
+        my $src = lookup_var($ctx, $expr->{name});
+        return undef if !defined($src) || !defined($src->{item_len_proof});
+        return int($src->{item_len_proof});
+    }
+    if (($expr->{kind} // '') eq 'method_call' && ($expr->{method} // '') eq 'sortBy') {
+        return _infer_number_list_list_item_len_proof_from_expr($expr->{recv}, $ctx);
+    }
+    return undef;
+}
+
 sub _compile_block_stage_decls {
     my ($stmt, $ctx, $out, $indent, $current_fn_return) = @_;
         if ($stmt->{kind} eq 'let') {
@@ -181,6 +196,9 @@ sub _compile_block_stage_decls {
             );
             if ($decl_type eq 'number_list_list' && defined $constraints->{nested_number_list_size}) {
                 $decl_info{item_len_proof} = int($constraints->{nested_number_list_size});
+            } elsif ($decl_type eq 'number_list_list') {
+                my $proof = _infer_number_list_list_item_len_proof_from_expr($stmt->{expr}, $ctx);
+                $decl_info{item_len_proof} = $proof if defined $proof;
             }
             declare_var($ctx, $stmt->{name}, \%decl_info);
             maybe_register_owned_cleanup_for_decl(
@@ -316,6 +334,10 @@ sub _compile_block_stage_decls {
                     $const_info{size_of_recv_code} = $size_recv_code;
                     $const_info{size_of_recv_type} = $size_recv_type;
                 }
+            }
+            if ($expr_type eq 'number_list_list') {
+                my $proof = _infer_number_list_list_item_len_proof_from_expr($stmt->{expr}, $ctx);
+                $const_info{item_len_proof} = $proof if defined $proof;
             }
 
             declare_var(
@@ -476,6 +498,9 @@ sub _compile_block_stage_decls {
             );
             if ($decl_type eq 'number_list_list' && defined $constraints->{nested_number_list_size}) {
                 $decl_info{item_len_proof} = int($constraints->{nested_number_list_size});
+            } elsif ($decl_type eq 'number_list_list') {
+                my $proof = _infer_number_list_list_item_len_proof_from_expr($stmt->{expr}, $ctx);
+                $decl_info{item_len_proof} = $proof if defined $proof;
             }
             declare_var($ctx, $stmt->{name}, \%decl_info);
             maybe_register_owned_cleanup_for_decl(

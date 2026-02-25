@@ -64,6 +64,77 @@ sub compile_reduce_lambda_helper {
     return $helper_name;
 }
 
+sub compile_sortby_number_list_list_lambda_helper {
+    my (%args) = @_;
+    my $lambda = $args{lambda};
+    my $recv_expr = $args{recv_expr};
+    my $ctx = $args{ctx};
+
+    compile_error("sortBy(...) argument must be a two-parameter lambda, e.g. (a, b) => ...")
+      if $lambda->{kind} ne 'lambda2';
+
+    my $param1 = $lambda->{param1};
+    my $param2 = $lambda->{param2};
+
+    my $lambda_ctx = {
+        scopes      => [ {} ],
+        fact_scopes => [ {} ],
+        nonnull_scopes => [ {} ],
+        tmp_counter => $ctx->{tmp_counter},
+        functions   => $ctx->{functions},
+        loop_depth  => 0,
+        helper_defs => $ctx->{helper_defs},
+        helper_counter => $ctx->{helper_counter},
+        current_function => $ctx->{current_function},
+    };
+
+    declare_var(
+        $lambda_ctx,
+        $param1,
+        {
+            type      => 'number_list',
+            immutable => 1,
+            c_name    => $param1,
+        }
+    );
+    declare_var(
+        $lambda_ctx,
+        $param2,
+        {
+            type      => 'number_list',
+            immutable => 1,
+            c_name    => $param2,
+        }
+    );
+
+    if (defined($recv_expr) && ($recv_expr->{kind} // '') eq 'ident') {
+        my $recv_info = lookup_var($ctx, $recv_expr->{name});
+        if (defined($recv_info) && defined($recv_info->{item_len_proof})) {
+            my $len = int($recv_info->{item_len_proof});
+            my $key1 = expr_fact_key({ kind => 'ident', name => $param1 }, $lambda_ctx);
+            my $key2 = expr_fact_key({ kind => 'ident', name => $param2 }, $lambda_ctx);
+            set_list_len_fact($lambda_ctx, $key1, $len);
+            set_list_len_fact($lambda_ctx, $key2, $len);
+        }
+    }
+
+    my ($body_code, $body_type) = compile_expr($lambda->{body}, $lambda_ctx);
+    $ctx->{helper_counter} = $lambda_ctx->{helper_counter};
+    my $body_num = number_like_to_c_expr($body_code, $body_type, "sortBy(...) comparator lambda");
+
+    my $helper_counter = $ctx->{helper_counter} // 0;
+    my $helper_name = '__metac_sortby_' . ($ctx->{current_function} // 'fn') . '_' . $helper_counter;
+    $ctx->{helper_counter} = $helper_counter + 1;
+
+    my @helper_lines;
+    push @helper_lines, "static int64_t $helper_name(NumberList $param1, NumberList $param2) {";
+    push @helper_lines, "  return $body_num;";
+    push @helper_lines, '}';
+    push @{ $ctx->{helper_defs} }, join("\n", @helper_lines);
+
+    return $helper_name;
+}
+
 sub compile_filter_lambda_helper {
     my (%args) = @_;
     my $lambda = $args{lambda};
@@ -179,6 +250,7 @@ sub emit_loop_body_with_binding {
     my $range_max_expr = $args{range_max_expr};
     my $member_matrix_code = $args{member_matrix_code};
     my $member_matrix_type = $args{member_matrix_type};
+    my $list_len_proof = $args{list_len_proof};
 
     new_scope($ctx);
     my %var_info = (
@@ -220,6 +292,10 @@ sub emit_loop_body_with_binding {
         compile_error("Unsupported loop element type '$var_type'");
     }
     declare_var($ctx, $var_name, \%var_info);
+    if (defined $list_len_proof && $var_type eq 'number_list') {
+        my $key = expr_fact_key({ kind => 'ident', name => $var_name }, $ctx);
+        set_list_len_fact($ctx, $key, int($list_len_proof));
+    }
 
     my $prev_loop_depth = $ctx->{loop_depth} // 0;
     $ctx->{loop_depth} = $prev_loop_depth + 1;

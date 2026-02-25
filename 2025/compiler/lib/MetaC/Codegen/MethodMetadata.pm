@@ -52,6 +52,24 @@ sub method_specs {
             expr_callable => 1,
             fallibility   => 'never',
         },
+        sortBy => {
+            receivers     => { number_list_list => 1 },
+            arity         => 1,
+            expr_callable => 1,
+            fallibility   => 'never',
+        },
+        compareTo => {
+            receivers     => { number => 1, indexed_number => 1 },
+            arity         => 1,
+            expr_callable => 1,
+            fallibility   => 'never',
+        },
+        andThen => {
+            receivers     => { number => 1, indexed_number => 1 },
+            arity         => 1,
+            expr_callable => 1,
+            fallibility   => 'never',
+        },
         index => {
             receivers     => { indexed_number => 1 },
             arity         => 0,

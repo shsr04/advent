@@ -29,6 +29,7 @@ sub _runtime_memory_policies {
         metac_filter_matrix_string_member_list => { mode => 'owned_return', cleanup => 'metac_free_matrix_string_member_list' },
         metac_number_list_push                => { mode => 'mutates_owner' },
         metac_number_list_list_push           => { mode => 'mutates_owner' },
+        metac_sort_number_list_list_by        => { mode => 'owned_return', cleanup => 'metac_free_number_list_list' },
         metac_string_list_push                => { mode => 'mutates_owner' },
         metac_bool_list_push                  => { mode => 'mutates_owner' },
         metac_sort_number_list                => { mode => 'owned_return', cleanup => 'metac_free_indexed_number_list' },

@@ -251,6 +251,36 @@ sub compile_expr_method_call {
         return ("metac_sort_number_list($recv_code)", 'indexed_number_list');
     }
 
+    if ($recv_type eq 'number_list_list' && $method eq 'sortBy') {
+        compile_error("Method 'sortBy(...)' expects 1 arg, got $actual")
+          if $actual != 1;
+        my $lambda = $expr->{args}[0];
+        my $helper_name = compile_sortby_number_list_list_lambda_helper(
+            lambda   => $lambda,
+            recv_expr => $expr->{recv},
+            ctx      => $ctx,
+        );
+        return ("metac_sort_number_list_list_by($recv_code, $helper_name)", 'number_list_list');
+    }
+
+    if (($recv_type eq 'number' || $recv_type eq 'indexed_number') && $method eq 'compareTo') {
+        compile_error("Method 'compareTo(...)' expects 1 arg, got $actual")
+          if $actual != 1;
+        my ($arg_code, $arg_type) = compile_expr($expr->{args}[0], $ctx);
+        my $left = number_like_to_c_expr($recv_code, $recv_type, "Method 'compareTo(...)'");
+        my $right = number_like_to_c_expr($arg_code, $arg_type, "Method 'compareTo(...)'");
+        return ("(($left < $right) ? -1 : (($left > $right) ? 1 : 0))", 'number');
+    }
+
+    if (($recv_type eq 'number' || $recv_type eq 'indexed_number') && $method eq 'andThen') {
+        compile_error("Method 'andThen(...)' expects 1 arg, got $actual")
+          if $actual != 1;
+        my ($arg_code, $arg_type) = compile_expr($expr->{args}[0], $ctx);
+        my $left = number_like_to_c_expr($recv_code, $recv_type, "Method 'andThen(...)'");
+        my $right = number_like_to_c_expr($arg_code, $arg_type, "Method 'andThen(...)'");
+        return ("(($left != 0) ? $left : $right)", 'number');
+    }
+
     if ($recv_type eq 'indexed_number' && $method eq 'index') {
         compile_error("Method 'index()' expects 0 args, got $actual")
           if $actual != 0;
@@ -354,6 +384,13 @@ sub compile_expr_method_call {
             }
             if (!defined $known_len && $expr->{args}[0]{kind} eq 'list_literal') {
                 $known_len = scalar @{ $expr->{args}[0]{items} // [] };
+            }
+            if (defined $known_len && !defined $required_size) {
+                if (!defined $recv_info->{item_len_proof}) {
+                    $recv_info->{item_len_proof} = $known_len;
+                } elsif ($recv_info->{item_len_proof} != $known_len) {
+                    delete $recv_info->{item_len_proof};
+                }
             }
             if (defined $required_size) {
                 compile_error("Method 'push(...)' on '$expr->{recv}{name}' requires pushed number[] with proven size($required_size)")

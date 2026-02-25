@@ -478,6 +478,49 @@ static IndexedNumberList metac_sort_number_list(NumberList list) {
   return out;
 }
 
+static NumberListList metac_sort_number_list_list_by(
+    NumberListList list,
+    int64_t (*cmp)(NumberList, NumberList)
+) {
+  NumberListList out;
+  out.count = 0;
+  out.items = NULL;
+  if (list.count == 0 || list.items == NULL) {
+    return out;
+  }
+
+  size_t *order = (size_t *)calloc(list.count == 0 ? 1 : list.count, sizeof(size_t));
+  if (order == NULL) {
+    return out;
+  }
+  for (size_t i = 0; i < list.count; i++) {
+    order[i] = i;
+  }
+
+  for (size_t i = 1; i < list.count; i++) {
+    size_t key = order[i];
+    size_t j = i;
+    while (j > 0) {
+      int64_t c = 0;
+      if (cmp != NULL) {
+        c = cmp(list.items[order[j - 1]], list.items[key]);
+      }
+      if (c <= 0) {
+        break;
+      }
+      order[j] = order[j - 1];
+      j--;
+    }
+    order[j] = key;
+  }
+
+  for (size_t i = 0; i < list.count; i++) {
+    metac_number_list_list_push(&out, list.items[order[i]]);
+  }
+  free(order);
+  return out;
+}
+
 static int64_t metac_last_index_string_list(StringList list) {
   return metac_last_index_from_count(list.count);
 }

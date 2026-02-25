@@ -97,7 +97,7 @@ sub compile_expr {
         my ($idx_code, $idx_type) = compile_expr($expr->{index}, $ctx);
         my $idx_num = number_like_to_c_expr($idx_code, $idx_type, "Index operator");
         compile_error("Unsupported index receiver type: $recv_type")
-          if $recv_type ne 'string' && $recv_type ne 'string_list' && $recv_type ne 'number_list' && $recv_type ne 'bool_list' && $recv_type ne 'indexed_number_list';
+          if $recv_type ne 'string' && $recv_type ne 'string_list' && $recv_type ne 'number_list' && $recv_type ne 'number_list_list' && $recv_type ne 'bool_list' && $recv_type ne 'indexed_number_list';
 
         my $in_bounds = prove_container_index_in_bounds($recv_code, $recv_type, $expr->{index}, $ctx);
         if (!$in_bounds && $expr->{recv}{kind} eq 'ident' && $expr->{index}{kind} eq 'num') {
@@ -116,6 +116,9 @@ sub compile_expr {
         }
         if ($recv_type eq 'string_list') {
             return ("$recv_code.items[$idx_num]", 'string');
+        }
+        if ($recv_type eq 'number_list_list') {
+            return ("$recv_code.items[$idx_num]", 'number_list');
         }
         if ($recv_type eq 'indexed_number_list') {
             return ("$recv_code.items[$idx_num]", 'indexed_number');
@@ -268,11 +271,17 @@ sub compile_expr {
               if $l_type ne 'bool';
 
             my ($r_code, $r_type);
-            my $narrow_name = nullable_number_non_null_on_true_expr($expr->{left}, $ctx);
+            my $narrow_names = nullable_number_names_non_null_on_true_expr($expr->{left}, $ctx);
             my $union_bindings = union_member_bindings_on_true_expr($expr->{left}, $ctx);
-            if (defined $narrow_name || (defined $union_bindings && @$union_bindings)) {
+            if ((defined $narrow_names && @$narrow_names) || (defined $union_bindings && @$union_bindings)) {
                 new_scope($ctx);
-                declare_not_null_number_shadow($ctx, $narrow_name) if defined $narrow_name;
+                if (defined $narrow_names && @$narrow_names) {
+                    my %seen;
+                    for my $name (@$narrow_names) {
+                        next if !defined($name) || $seen{$name}++;
+                        declare_not_null_number_shadow($ctx, $name);
+                    }
+                }
                 _declare_union_member_bindings($ctx, $union_bindings);
                 ($r_code, $r_type) = compile_expr($expr->{right}, $ctx);
                 pop_scope($ctx);
@@ -290,11 +299,17 @@ sub compile_expr {
               if $l_type ne 'bool';
 
             my ($r_code, $r_type);
-            my $narrow_name = nullable_number_non_null_on_false_expr($expr->{left}, $ctx);
+            my $narrow_names = nullable_number_names_non_null_on_false_expr($expr->{left}, $ctx);
             my $union_bindings = union_member_bindings_on_false_expr($expr->{left}, $ctx);
-            if (defined $narrow_name || (defined $union_bindings && @$union_bindings)) {
+            if ((defined $narrow_names && @$narrow_names) || (defined $union_bindings && @$union_bindings)) {
                 new_scope($ctx);
-                declare_not_null_number_shadow($ctx, $narrow_name) if defined $narrow_name;
+                if (defined $narrow_names && @$narrow_names) {
+                    my %seen;
+                    for my $name (@$narrow_names) {
+                        next if !defined($name) || $seen{$name}++;
+                        declare_not_null_number_shadow($ctx, $name);
+                    }
+                }
                 _declare_union_member_bindings($ctx, $union_bindings);
                 ($r_code, $r_type) = compile_expr($expr->{right}, $ctx);
                 pop_scope($ctx);
