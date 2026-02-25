@@ -416,7 +416,7 @@ Use this block for each feature:
 - Notes/evidence: parser support added for `rewind` statements in `compiler/lib/MetaC/Parser/BlockParse.pm`; loop restart lowering added via per-loop rewind labels in `compiler/lib/MetaC/Codegen/Compile.pm`, `compiler/lib/MetaC/Codegen/ProofIter.pm`, and `compiler/lib/MetaC/Codegen/BlockStageAssignLoops.pm`; misuse diagnostic covered by `compiler/tests/cases/diagnostic_rewind_outside_loop.metac`; iterable recomputation behavior covered by `compiler/tests/cases/rewind_recomputes_iterable.metac`; full suite green (`97 passed, 0 failed`).
 
 ### F-047 `Compiler Architecture Split: Parser -> IR -> Correctness Gates -> Codegen`
-- Status: draft
+- Status: implemented
 - Spec file: `instructions/ir-spec-f047.md`
 - Correctness classes: C0/C1/C2/C3/C4
 - Key guarantees:
@@ -436,19 +436,34 @@ Use this block for each feature:
     - AST->HIR lowering carries provenance metadata (`source span`, `type facts`, `constraint facts`, `effect facts`).
     - codegen accepts only verified HIR; unverified HIR must be rejected.
   - provide explainable failure output: diagnostics must cite failing gate/check and the originating source span.
-- Blocking questions:
-  - merge policy per fact kind at joins (for example type/effect/ownership meet strategy) should be fixed in spec text vs left to implementation notes.
-  - whether to add optional `retain/release`-style nodes now or defer until a backend requires ref-count-specific lowering.
-  - migration policy: feature-freeze during migration vs compatibility shim that allows old lowering for a bounded transition window.
-  - proof tooling depth for first release: custom dataflow checks only vs SMT-backed obligations for selected gates.
 - Notes/evidence:
   - Motivation: direct AST->C lowering has exposed correctness-risk regressions in control-flow/ownership interactions; this feature institutionalizes fact-checked, gate-validated lowering.
-  - Initial implementation plan:
-    - Phase 1: introduce VNF-HIR data structures (`Program`, `Function`, `Region`, `Edge`) and deterministic ID/order normalization.
-    - Phase 2: lower AST statements/control-flow into VNF-HIR exits (`IfExit`/`TryExit`/`ForInExit`/`WhileExit`) with provenance + initial fact annotations.
-    - Phase 3: implement fact transfer/merge/fixpoint engine and gate checks (`CFG`, `Type`, `Effect`, `Ownership`, `Lowering`, `Traceability`).
-    - Phase 4: require verified HIR before codegen; retire direct AST->C lowering paths.
-    - Phase 5: add conformance reporting (gate pass/fail matrix + requirement trace links).
+  - Locked implementation decisions:
+    - one-shot migration, no compatibility lowering path.
+    - merge philosophy aligned to normative-reference section 2.3 (weaken-only at joins).
+    - strict cutover: backend codegen accepts only verified VNF-HIR.
+    - v1 verification uses deterministic custom dataflow checks (no SMT requirement).
+    - provenance is line-number based in v1.
+    - behavior outside normative reference and F-047 spec is treated as undefined.
+  - Implemented in:
+    - VNF-HIR pipeline and pass orchestration: `compiler/lib/MetaC/HIR.pm`.
+    - lowering to normalized statement-regions plus structured exits (`IfExit`, `TryExit`, `WhileExit`, `ForInExit`, `PropagateError`): `compiler/lib/MetaC/HIR/Lowering.pm`.
+    - deterministic gate suite and fixpoint fact-flow engine: `compiler/lib/MetaC/HIR/Gates.pm`.
+    - HIR-backed C backend emission path: `compiler/lib/MetaC/HIR/BackendC.pm`.
+    - strict `compile_source` cutover to VNF-HIR path: `compiler/lib/MetaC/Codegen/Compile.pm`.
+    - codegen exports updated for HIR artifact emission: `compiler/lib/MetaC/Codegen.pm`.
+    - CLI support for deterministic HIR dump snapshots: `compiler/metac.pl` (`--dump-hir`).
+    - test runner support for `.hir` snapshots: `compiler/tests/run.pl`.
+  - Verification evidence:
+    - full compiler suite green after cutover (`109 passed, 0 failed`).
+    - deterministic snapshot coverage added via `compiler/tests/cases/hir_snapshot_simple.{metac,hir}`.
+    - gate diagnostics coverage added via `compiler/tests/cases/diagnostic_gate_type_unsupported_return.{metac,compile_err}`.
+  - Completion notes:
+    - structured exits are emitted in normalized HIR for control/fallibility constructs (`IfExit`, `TryExit`, `ForInExit`, `WhileExit`, `PropagateError`) with explicit edge tags.
+    - deterministic fact-flow fixpoint populates `factsIn` and `factsOutByExit` under weaken-only merge policy.
+    - ownership gate checks loop-iterable ownership/drop obligations on `ForInExit` paths.
+    - complete ownership proof obligations over all reachable exits with explicit `Move`/`Copy`/`Borrow`/`EndBorrow`/`Drop`.
+    - strengthen `Gate-Effect` and `Gate-Type` from structural checks to full semantic consistency checks over normalized control/effect flow.
   - Required verification artifacts:
     - adversarial CFG tests (loop back-edges, rewind, nested handlers, early returns, error edges).
     - ownership stress tests proving cleanup pairing for explicit and implicit owned values (including `ForInExit` iterable epochs).

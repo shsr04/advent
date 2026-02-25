@@ -41,6 +41,7 @@ use MetaC::CodegenScope qw(
     clear_nonnull_fact_for_var_name
 );
 use MetaC::CodegenRuntime qw(runtime_prelude_for_code);
+use MetaC::HIR qw(compile_source_via_vnf_hir);
 use MetaC::TypeSpec qw(
     normalize_type_annotation
     union_member_types
@@ -64,7 +65,7 @@ use MetaC::TypeSpec qw(
     matrix_neighbor_list_type
 );
 
-our @EXPORT_OK = qw(compile_source);
+our @EXPORT_OK = qw(compile_source compile_source_with_hir_dump);
 
 require MetaC::Codegen::Facts;
 require MetaC::Codegen::MethodMetadata;

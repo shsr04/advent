@@ -1,0 +1,47 @@
+version:f047-vnf-hir-v2
+fact_lattice.merge_policy:weaken_only
+function:f0:main:number
+  entry_region:r0
+  region:r0
+    step:s0:Declare:let:line=2
+    exit.kind:Goto
+    exit.target_region:r1
+    facts.goto:type:x:number
+  region:r1
+    step:s1:Control:if:line=3
+    exit.cond_value:
+    exit.  kind:binop
+    exit.  left:
+    exit.    kind:ident
+    exit.    name:x
+    exit.  op:==
+    exit.  right:
+    exit.    kind:num
+    exit.    value:1
+    exit.else_region:r5
+    exit.join_region:r2
+    exit.kind:IfExit
+    exit.then_region:r4
+    facts.else:type:x:number
+    facts.join:type:x:number
+    facts.then:type:x:number
+  region:r2
+    step:s2:Control:return:line=6
+    exit.kind:Return
+    exit.value:
+    exit.  kind:num
+    exit.  value:0
+    facts.return:cfg:return
+  region:r3
+    exit.kind:Return
+    exit.value:
+    facts.return:cfg:return
+  region:r4
+    step:s3:Assign:assign:line=4
+    exit.kind:Goto
+    exit.target_region:r2
+    facts.goto:
+  region:r5
+    exit.kind:Goto
+    exit.target_region:r2
+    facts.goto:type:x:number

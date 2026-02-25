@@ -99,11 +99,13 @@ for my $case_file (@cases) {
     my $prefix = "$cases_dir/$name";
     my $source = "$prefix.metac";
     my $expect_compile_err = read_optional("$prefix.compile_err");
+    my $expect_hir = read_optional("$prefix.hir");
 
     my $c_out = "$build_dir/$name.c";
     my $bin_out = "$build_dir/$name";
+    my $hir_out = "$build_dir/$name.hir";
 
-    my $compile = run_cmd(cmd => ['perl', $metac, $source, '-o', $c_out]);
+    my $compile = run_cmd(cmd => ['perl', $metac, $source, '-o', $c_out, '--dump-hir', $hir_out]);
 
     if (defined $expect_compile_err) {
         my $needle = $expect_compile_err;
@@ -131,6 +133,20 @@ for my $case_file (@cases) {
         $failed += 1;
         fail_case($name, "compile failed:\n$compile->{stderr}");
         next;
+    }
+
+    if (defined $expect_hir) {
+        my $actual_hir = read_optional($hir_out);
+        if (!defined $actual_hir) {
+            $failed += 1;
+            fail_case($name, 'missing generated HIR dump');
+            next;
+        }
+        if ($actual_hir ne $expect_hir) {
+            $failed += 1;
+            fail_case($name, "HIR dump mismatch\nexpected:\n$expect_hir\nactual:\n$actual_hir");
+            next;
+        }
     }
 
     my $cc_result = run_cmd(cmd => [$cc, @cflags, $c_out, '-o', $bin_out]);

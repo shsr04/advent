@@ -320,131 +320,13 @@ sub emit_function_prototypes {
 
 sub compile_source {
     my ($source) = @_;
-    my $functions = collect_functions($source);
+    my ($c_code, undef) = compile_source_via_vnf_hir($source);
+    return $c_code;
+}
 
-    compile_error("Missing required function: main") if !exists $functions->{main};
-
-    my $main = $functions->{main};
-    compile_error("main must not declare arguments") if $main->{args} ne '';
-    if (defined $main->{return_type}) {
-        $main->{return_type} = normalize_type_annotation($main->{return_type});
-        compile_error("main return type must be number")
-          if $main->{return_type} ne 'number';
-    }
-
-    my %number_error_functions;
-    my %bool_error_functions;
-    my %string_error_functions;
-    my %generic_union_functions;
-    my %number_functions;
-    my %bool_functions;
-    my %function_sigs;
-    my @ordered_names = sort grep { $_ ne 'main' } keys %$functions;
-    for my $name (@ordered_names) {
-        my $fn = $functions->{$name};
-        if (defined $fn->{return_type}) {
-            $fn->{return_type} = normalize_type_annotation($fn->{return_type});
-        }
-        $fn->{parsed_params} = parse_function_params($fn);
-        $function_sigs{$name} = {
-            return_type => $fn->{return_type},
-            params      => $fn->{parsed_params},
-        };
-
-        if (defined $fn->{return_type} && type_is_number_or_error($fn->{return_type})) {
-            $number_error_functions{$name} = 1;
-            next;
-        }
-        if (defined $fn->{return_type} && type_is_bool_or_error($fn->{return_type})) {
-            $bool_error_functions{$name} = 1;
-            next;
-        }
-        if (defined $fn->{return_type} && type_is_string_or_error($fn->{return_type})) {
-            $string_error_functions{$name} = 1;
-            next;
-        }
-        if (defined $fn->{return_type} && is_supported_generic_union_return($fn->{return_type})) {
-            $generic_union_functions{$name} = 1;
-            next;
-        }
-        if (defined $fn->{return_type} && $fn->{return_type} eq 'number') {
-            $number_functions{$name} = 1;
-            next;
-        }
-        if (defined $fn->{return_type} && $fn->{return_type} eq 'bool') {
-            $bool_functions{$name} = 1;
-            next;
-        }
-        compile_error("Unsupported function return type for '$name'; supported: number | error, bool | error, string | error, generic unions over number/bool/string/error/null, number, bool");
-    }
-
-    my $non_runtime = '';
-    $non_runtime .= emit_function_prototypes(\@ordered_names, $functions);
-    $non_runtime .= "\n\n";
-    for my $name (@ordered_names) {
-        if ($number_error_functions{$name}) {
-            $non_runtime .= compile_number_or_error_function(
-                $functions->{$name},
-                $functions->{$name}{parsed_params},
-                \%function_sigs
-            );
-            $non_runtime .= "\n";
-            next;
-        }
-        if ($bool_error_functions{$name}) {
-            $non_runtime .= compile_bool_or_error_function(
-                $functions->{$name},
-                $functions->{$name}{parsed_params},
-                \%function_sigs
-            );
-            $non_runtime .= "\n";
-            next;
-        }
-        if ($string_error_functions{$name}) {
-            $non_runtime .= compile_string_or_error_function(
-                $functions->{$name},
-                $functions->{$name}{parsed_params},
-                \%function_sigs
-            );
-            $non_runtime .= "\n";
-            next;
-        }
-        if ($generic_union_functions{$name}) {
-            $non_runtime .= compile_generic_union_function(
-                $functions->{$name},
-                $functions->{$name}{parsed_params},
-                \%function_sigs
-            );
-            $non_runtime .= "\n";
-            next;
-        }
-        if ($number_functions{$name}) {
-            $non_runtime .= compile_number_function(
-                $functions->{$name},
-                $functions->{$name}{parsed_params},
-                \%function_sigs
-            );
-            $non_runtime .= "\n";
-            next;
-        }
-        if ($bool_functions{$name}) {
-            $non_runtime .= compile_bool_function(
-                $functions->{$name},
-                $functions->{$name}{parsed_params},
-                \%function_sigs
-            );
-            $non_runtime .= "\n";
-            next;
-        }
-        compile_error("Internal: unclassified function '$name'");
-    }
-    my $main_code = compile_main_body_generic_number($main, \%function_sigs);
-    $non_runtime .= $main_code;
-
-    my $c = runtime_prelude_for_code($non_runtime);
-    $c .= "\n";
-    $c .= $non_runtime;
-    return $c;
+sub compile_source_with_hir_dump {
+    my ($source) = @_;
+    return compile_source_via_vnf_hir($source);
 }
 
 
