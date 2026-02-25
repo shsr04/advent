@@ -2,6 +2,26 @@ package MetaC::Codegen;
 use strict;
 use warnings;
 
+sub _emit_map_error_return {
+    my (%args) = @_;
+    my $ctx = $args{ctx};
+    my $out = $args{out};
+    my $indent = $args{indent};
+    my $message_expr = $args{message_expr};
+    my $source_cleanup = $args{source_cleanup};
+    my $free_expr = $args{free_expr};
+
+    emit_line($out, $indent, "$free_expr;") if defined $free_expr && $free_expr ne '';
+    emit_line($out, $indent, "$source_cleanup;") if defined $source_cleanup && $source_cleanup ne '';
+    if (defined $ctx->{active_temp_cleanups}) {
+        for (my $i = $#{ $ctx->{active_temp_cleanups} }; $i >= 0; $i--) {
+            emit_line($out, $indent, $ctx->{active_temp_cleanups}[$i] . ';');
+        }
+    }
+    emit_all_owned_cleanups($ctx, $out, $indent);
+    emit_line($out, $indent, "return err_number($message_expr, __metac_line_no, \"\");");
+}
+
 sub propagate_list_len_fact_from_recv {
     my ($recv_expr, $target_name, $ctx) = @_;
     return if !expr_is_stable_for_facts($recv_expr, $ctx);
@@ -36,14 +56,32 @@ sub emit_map_assignment {
     my $out_items = '__metac_map_items' . $ctx->{tmp_counter}++;
     my $tmp_num = '__metac_map_num' . $ctx->{tmp_counter}++;
     my $tmp_res = '__metac_map_res' . $ctx->{tmp_counter}++;
+    my $source_cleanup = cleanup_call_for_temp_expr(
+        var_name  => $source,
+        decl_type => 'string_list',
+        expr_code => $recv_code,
+    );
 
     emit_line($out, $indent, "StringList $source = $recv_code;");
     emit_line($out, $indent, "size_t $count = $source.count;");
     emit_line($out, $indent, "int64_t *$out_items = (int64_t *)calloc($count == 0 ? 1 : $count, sizeof(int64_t));");
     emit_line($out, $indent, "if ($out_items == NULL) {");
     if ($propagate_errors) {
-        emit_line($out, $indent + 2, "return err_number(\"out of memory in map\", __metac_line_no, \"\");");
+        _emit_map_error_return(
+            ctx            => $ctx,
+            out            => $out,
+            indent         => $indent + 2,
+            message_expr   => '"out of memory in map"',
+            source_cleanup => $source_cleanup,
+        );
     } else {
+        emit_line($out, $indent + 2, "$source_cleanup;") if defined $source_cleanup;
+        if (defined $ctx->{active_temp_cleanups}) {
+            for (my $i = $#{ $ctx->{active_temp_cleanups} }; $i >= 0; $i--) {
+                emit_line($out, $indent + 2, $ctx->{active_temp_cleanups}[$i] . ';');
+            }
+        }
+        emit_all_owned_cleanups($ctx, $out, $indent + 2);
         emit_line($out, $indent + 2, "fprintf(stderr, \"out of memory in map\\n\");");
         emit_line($out, $indent + 2, "exit(1);");
     }
@@ -54,8 +92,23 @@ sub emit_map_assignment {
         emit_line($out, $indent + 2, "int64_t $tmp_num = 0;");
         emit_line($out, $indent + 2, "if (!metac_parse_int($source.items[$idx], &$tmp_num)) {");
         if ($propagate_errors) {
-            emit_line($out, $indent + 4, "return err_number(\"Invalid number\", __metac_line_no, $source.items[$idx]);");
+            _emit_map_error_return(
+                ctx            => $ctx,
+                out            => $out,
+                indent         => $indent + 4,
+                message_expr   => '"Invalid number"',
+                source_cleanup => $source_cleanup,
+                free_expr      => "free($out_items)",
+            );
         } else {
+            emit_line($out, $indent + 4, "free($out_items);");
+            emit_line($out, $indent + 4, "$source_cleanup;") if defined $source_cleanup;
+            if (defined $ctx->{active_temp_cleanups}) {
+                for (my $i = $#{ $ctx->{active_temp_cleanups} }; $i >= 0; $i--) {
+                    emit_line($out, $indent + 4, $ctx->{active_temp_cleanups}[$i] . ';');
+                }
+            }
+            emit_all_owned_cleanups($ctx, $out, $indent + 4);
             emit_line($out, $indent + 4, "fprintf(stderr, \"Invalid number: %s\\n\", $source.items[$idx]);");
             emit_line($out, $indent + 4, "exit(1);");
         }
@@ -67,8 +120,23 @@ sub emit_map_assignment {
         emit_line($out, $indent + 2, "ResultNumber $tmp_res = $mapper->{name}($source.items[$idx]);");
         emit_line($out, $indent + 2, "if ($tmp_res.is_error) {");
         if ($propagate_errors) {
-            emit_line($out, $indent + 4, "return err_number($tmp_res.message, __metac_line_no, $source.items[$idx]);");
+            _emit_map_error_return(
+                ctx            => $ctx,
+                out            => $out,
+                indent         => $indent + 4,
+                message_expr   => $tmp_res . ".message",
+                source_cleanup => $source_cleanup,
+                free_expr      => "free($out_items)",
+            );
         } else {
+            emit_line($out, $indent + 4, "free($out_items);");
+            emit_line($out, $indent + 4, "$source_cleanup;") if defined $source_cleanup;
+            if (defined $ctx->{active_temp_cleanups}) {
+                for (my $i = $#{ $ctx->{active_temp_cleanups} }; $i >= 0; $i--) {
+                    emit_line($out, $indent + 4, $ctx->{active_temp_cleanups}[$i] . ';');
+                }
+            }
+            emit_all_owned_cleanups($ctx, $out, $indent + 4);
             emit_line($out, $indent + 4, "fprintf(stderr, \"%s\\n\", $tmp_res.message);");
             emit_line($out, $indent + 4, "exit(1);");
         }
@@ -80,6 +148,7 @@ sub emit_map_assignment {
     emit_line($out, $indent, "NumberList $name;");
     emit_line($out, $indent, "$name.count = $count;");
     emit_line($out, $indent, "$name.items = $out_items;");
+    emit_line($out, $indent, "$source_cleanup;") if defined $source_cleanup;
 
     declare_var(
         $ctx,
@@ -90,6 +159,7 @@ sub emit_map_assignment {
             c_name    => $name,
         }
     );
+    register_owned_cleanup_for_var($ctx, $name, "metac_free_number_list($name)");
     propagate_list_len_fact_from_recv($expr->{recv}, $name, $ctx);
 }
 
@@ -143,6 +213,18 @@ sub emit_filter_assignment {
             c_name    => $name,
         }
     );
+    if ($recv_type eq 'string_list') {
+        register_owned_cleanup_for_var($ctx, $name, "metac_free_string_list($name, 0)");
+    } elsif ($recv_type eq 'number_list') {
+        register_owned_cleanup_for_var($ctx, $name, "metac_free_number_list($name)");
+    } else {
+        my $member_meta = matrix_member_list_meta($recv_type);
+        if ($member_meta->{elem} eq 'number') {
+            register_owned_cleanup_for_var($ctx, $name, "metac_free_matrix_number_member_list($name)");
+        } elsif ($member_meta->{elem} eq 'string') {
+            register_owned_cleanup_for_var($ctx, $name, "metac_free_matrix_string_member_list($name)");
+        }
+    }
 }
 
 1;

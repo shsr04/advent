@@ -12,21 +12,33 @@ function removeRolls(): number|error {
   let grid: matrix(string) with dim(2) = []
     
   for const row in rows {
-    for const cell in row.chars() {
-      grid.insert(cell, [row.index(), cell.index()])?
+    for const col in row.chars() {
+      grid.insert(col, [row.index(), col.index()])?
     }
   }
   
   let removed = 0
-  for const cell in grid.members().filter((x) => x == "@") {
-      const adj = cell.neighbours()
-        .filter((x) => x == "@")
-        .count()
-      if adj < 4 {
+  
+  let candidates: int[][] = []
+  
+  while true {
+    for const cell in grid.members().filter((x) => x == "@") {
+        const adj = cell.neighbours()
+            .filter((x) => x == "@")
+            .count()
+        if adj < 4 {
+            candidates.push(cell.index())
+        }
+    }
+    
+    if candidates == [] { break }
+    
+    for cell in candidates {
+        grid.insert("x", cell)?
         removed++
-        grid.insert("x", cell.index())?
-        rewind
-      }
+    }
+    
+    candidates = []
   }
   
   return removed

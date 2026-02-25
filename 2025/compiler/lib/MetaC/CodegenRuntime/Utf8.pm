@@ -151,6 +151,10 @@ static StringList metac_chunk_string(const char *input, int64_t chunk_size) {
     size_t seg_len = pos - start;
     char *tok = (char *)malloc(seg_len + 1);
     if (tok == NULL) {
+      for (size_t j = 0; j < count; j++) {
+        free(items[j]);
+      }
+      free(items);
       return out;
     }
     memcpy(tok, input + start, seg_len);
@@ -192,6 +196,10 @@ static StringList metac_chars_string(const char *input) {
 
     char *tok = (char *)malloc(char_len + 1);
     if (tok == NULL) {
+      for (size_t j = 0; j < count; j++) {
+        free(items[j]);
+      }
+      free(items);
       return out;
     }
     memcpy(tok, input + i, char_len);

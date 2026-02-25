@@ -104,7 +104,7 @@ sub prove_non_negative_expr {
         && scalar(@{ $expr->{args} }) == 0)
     {
         my (undef, $recv_type) = compile_expr($expr->{recv}, $ctx);
-        return 1 if $recv_type eq 'string' || $recv_type eq 'string_list' || $recv_type eq 'number_list' || $recv_type eq 'bool_list' || $recv_type eq 'indexed_number_list';
+        return 1 if $recv_type eq 'string' || $recv_type eq 'string_list' || $recv_type eq 'number_list' || $recv_type eq 'number_list_list' || $recv_type eq 'bool_list' || $recv_type eq 'indexed_number_list';
         return 0;
     }
     if ($expr->{kind} eq 'binop' && $expr->{op} eq '+') {
@@ -178,6 +178,7 @@ sub decompose_iterable_expression {
     compile_error("Iterable expression must be seq(...) or list-valued, got $base_type")
       if $base_type ne 'string_list'
       && $base_type ne 'number_list'
+      && $base_type ne 'number_list_list'
       && $base_type ne 'bool_list'
       && $base_type ne 'indexed_number_list'
       && !is_matrix_member_list_type($base_type);
@@ -205,7 +206,7 @@ sub emit_for_each_from_iterable_expr {
     my $iter = decompose_iterable_expression($iter_expr, $ctx);
     my $rewind_label = $has_rewind ? ('__metac_rewind_loop' . $ctx->{tmp_counter}++) : undef;
     emit_line($out, $indent, "$rewind_label: ;") if $has_rewind;
-    push @{ $ctx->{rewind_labels} }, $rewind_label if $has_rewind;
+    push @{ $ctx->{rewind_labels} }, { restart => $rewind_label } if $has_rewind;
 
     if ($iter->{kind} eq 'seq') {
         my ($start_code, $start_type) = compile_expr($iter->{start_expr}, $ctx);
@@ -276,6 +277,8 @@ sub emit_for_each_from_iterable_expr {
     my $container = '__metac_iter_list' . $ctx->{tmp_counter}++;
     if ($iter->{base_type} eq 'string_list') {
         emit_line($out, $indent, "StringList $container = $iter->{base_code};");
+    } elsif ($iter->{base_type} eq 'number_list_list') {
+        emit_line($out, $indent, "NumberListList $container = $iter->{base_code};");
     } elsif ($iter->{base_type} eq 'bool_list') {
         emit_line($out, $indent, "BoolList $container = $iter->{base_code};");
     } elsif ($iter->{base_type} eq 'indexed_number_list') {
@@ -297,6 +300,8 @@ sub emit_for_each_from_iterable_expr {
     my $elem_type = 'number';
     if ($iter->{base_type} eq 'string_list') {
         $elem_type = 'string';
+    } elsif ($iter->{base_type} eq 'number_list_list') {
+        $elem_type = 'number_list';
     } elsif ($iter->{base_type} eq 'bool_list') {
         $elem_type = 'bool';
     } elsif ($iter->{base_type} eq 'indexed_number_list') {
@@ -325,6 +330,19 @@ sub emit_for_each_from_iterable_expr {
         label       => 'filter(...)',
     );
 
+    my $cleanup_expr = cleanup_call_for_temp_expr(
+        var_name  => $container,
+        decl_type => $iter->{base_type},
+        expr_code => $iter->{base_code},
+    );
+    my $cleanup_label;
+    my $done_label;
+    if (defined $cleanup_expr && $has_rewind) {
+        $cleanup_label = '__metac_rewind_cleanup' . $ctx->{tmp_counter}++;
+        $done_label = '__metac_rewind_done' . $ctx->{tmp_counter}++;
+        $ctx->{rewind_labels}->[-1]{cleanup} = $cleanup_label;
+    }
+    push @{ $ctx->{active_temp_cleanups} }, $cleanup_expr if defined $cleanup_expr;
     emit_line($out, $indent, "for (size_t $idx_name = 0; $idx_name < $container.count; $idx_name++) {");
     for my $pred_code (@$pred_codes) {
         emit_line($out, $indent + 2, "if (!($pred_code)) { continue; }");
@@ -343,6 +361,17 @@ sub emit_for_each_from_iterable_expr {
         member_matrix_type => $member_matrix_type,
     );
     emit_line($out, $indent, "}");
+    if (defined $cleanup_expr) {
+        if ($has_rewind) {
+            emit_line($out, $indent, "goto $done_label;");
+            emit_line($out, $indent, "$cleanup_label: ;");
+            emit_line($out, $indent, "$cleanup_expr;");
+            emit_line($out, $indent, "goto $rewind_label;");
+            emit_line($out, $indent, "$done_label: ;");
+        }
+        emit_line($out, $indent, "$cleanup_expr;");
+    }
+    pop @{ $ctx->{active_temp_cleanups} } if defined $cleanup_expr;
     pop @{ $ctx->{rewind_labels} } if $has_rewind;
 }
 

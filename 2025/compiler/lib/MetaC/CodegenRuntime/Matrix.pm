@@ -213,6 +213,7 @@ static MatrixNumberMemberList metac_matrix_number_members(MatrixNumber matrix) {
 
   MatrixNumberMember *items = (MatrixNumberMember *)calloc(count == 0 ? 1 : count, sizeof(MatrixNumberMember));
   if (items == NULL) {
+    free(order);
     return out;
   }
 
@@ -220,6 +221,11 @@ static MatrixNumberMemberList metac_matrix_number_members(MatrixNumber matrix) {
     size_t src = order[i];
     int64_t *coords = (int64_t *)calloc(dims == 0 ? 1 : dims, sizeof(int64_t));
     if (coords == NULL) {
+      for (size_t j = 0; j < i; j++) {
+        free(items[j].index.items);
+      }
+      free(items);
+      free(order);
       return out;
     }
     for (size_t d = 0; d < dims; d++) {
@@ -233,6 +239,7 @@ static MatrixNumberMemberList metac_matrix_number_members(MatrixNumber matrix) {
 
   out.count = count;
   out.items = items;
+  free(order);
   return out;
 }
 
@@ -312,6 +319,7 @@ static MatrixNumber metac_log_matrix_number(MatrixNumber value) {
     }
   }
   printf("])\n");
+  metac_free_matrix_number_member_list(members);
   return value;
 }
 

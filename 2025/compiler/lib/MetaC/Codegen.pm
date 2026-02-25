@@ -68,6 +68,7 @@ our @EXPORT_OK = qw(compile_source);
 
 require MetaC::Codegen::Facts;
 require MetaC::Codegen::MethodMetadata;
+require MetaC::Codegen::Ownership;
 require MetaC::Codegen::MethodChainSupport;
 require MetaC::Codegen::LoopSupport;
 require MetaC::Codegen::ProofIter;

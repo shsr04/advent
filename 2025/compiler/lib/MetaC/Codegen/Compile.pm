@@ -10,6 +10,7 @@ sub _new_codegen_ctx {
             scopes           => [ {} ],
             fact_scopes      => [ {} ],
             nonnull_scopes   => [ {} ],
+            ownership_scopes => [ [] ],
             tmp_counter      => 0,
             functions        => $function_sigs,
             loop_depth       => 0,
@@ -17,6 +18,7 @@ sub _new_codegen_ctx {
             helper_defs      => \@helper_defs,
             helper_counter   => 0,
             current_function => $current_function,
+            active_temp_cleanups => [],
         },
         \@helper_defs,
     );
@@ -117,6 +119,7 @@ sub compile_main_body_generic_number {
 
     push @out, 'int main(void) {';
     compile_block($stmts, $ctx, \@out, 2, 'number');
+    emit_scope_owned_cleanups($ctx, \@out, 2);
     push @out, '  return 0;';
     push @out, '}';
 
@@ -140,6 +143,7 @@ sub compile_number_or_error_function {
 
     emit_param_bindings($params, $ctx, \@out, 2, $fn->{return_type});
     compile_block($stmts, $ctx, \@out, 2, $fn->{return_type});
+    emit_scope_owned_cleanups($ctx, \@out, 2);
     my $missing_return_msg = c_escape_string("Missing return in function $fn->{name}");
     push @out, "  return err_number($missing_return_msg, __metac_line_no, \"\");";
     push @out, '}';
@@ -161,6 +165,7 @@ sub compile_bool_or_error_function {
 
     emit_param_bindings($params, $ctx, \@out, 2, $fn->{return_type});
     compile_block($stmts, $ctx, \@out, 2, $fn->{return_type});
+    emit_scope_owned_cleanups($ctx, \@out, 2);
     my $missing_return_msg = c_escape_string("Missing return in function $fn->{name}");
     push @out, "  return err_bool($missing_return_msg, __metac_line_no, \"\");";
     push @out, '}';
@@ -182,6 +187,7 @@ sub compile_string_or_error_function {
 
     emit_param_bindings($params, $ctx, \@out, 2, $fn->{return_type});
     compile_block($stmts, $ctx, \@out, 2, $fn->{return_type});
+    emit_scope_owned_cleanups($ctx, \@out, 2);
     my $missing_return_msg = c_escape_string("Missing return in function $fn->{name}");
     push @out, "  return err_string_value($missing_return_msg, __metac_line_no, \"\");";
     push @out, '}';
@@ -215,6 +221,7 @@ sub compile_generic_union_function {
 
     emit_param_bindings($params, $ctx, \@out, 2, $fn->{return_type});
     compile_block($stmts, $ctx, \@out, 2, $fn->{return_type});
+    emit_scope_owned_cleanups($ctx, \@out, 2);
     my $fallback = _default_generic_union_return_expr($fn->{return_type});
     push @out, "  return $fallback;";
     push @out, '}';
@@ -237,6 +244,7 @@ sub compile_number_function {
 
     emit_param_bindings($params, $ctx, \@out, 2, 'number');
     compile_block($stmts, $ctx, \@out, 2, 'number');
+    emit_scope_owned_cleanups($ctx, \@out, 2);
     push @out, '  return 0;';
     push @out, '}';
     my $fn_code = _function_code_with_usage_tracked_locals(\@out);
@@ -258,6 +266,7 @@ sub compile_bool_function {
 
     emit_param_bindings($params, $ctx, \@out, 2, 'bool');
     compile_block($stmts, $ctx, \@out, 2, 'bool');
+    emit_scope_owned_cleanups($ctx, \@out, 2);
     push @out, '  return 0;';
     push @out, '}';
     my $fn_code = _function_code_with_usage_tracked_locals(\@out);

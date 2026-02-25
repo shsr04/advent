@@ -4,7 +4,7 @@ use warnings;
 
 sub _constraint_applicable_to_type {
     my ($constraint_name, $type) = @_;
-    return 1 if $constraint_name eq 'size' && ($type eq 'string' || $type eq 'number_list' || $type eq 'string_list' || $type eq 'bool_list');
+    return 1 if $constraint_name eq 'size' && ($type eq 'string' || $type eq 'number_list' || $type eq 'number_list_list' || $type eq 'string_list' || $type eq 'bool_list');
     return 1 if ($constraint_name eq 'range' || $constraint_name eq 'wrap' || $constraint_name eq 'positive' || $constraint_name eq 'negative') && $type eq 'number';
     return 1 if ($constraint_name eq 'dim' || $constraint_name eq 'matrixSize') && is_matrix_type($type);
     return 0;
@@ -50,6 +50,7 @@ sub parse_declared_type_and_constraints {
         next if $m eq 'error';
         next if $m eq 'null';
         next if $m eq 'number_list';
+        next if $m eq 'number_list_list';
         next if $m eq 'string_list';
         next if $m eq 'bool_list';
         next if is_matrix_type($m);

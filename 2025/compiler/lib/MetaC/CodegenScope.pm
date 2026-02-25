@@ -24,6 +24,8 @@ sub new_scope {
     push @{ $ctx->{scopes} }, {};
     push @{ $ctx->{fact_scopes} }, {};
     push @{ $ctx->{nonnull_scopes} }, {};
+    $ctx->{ownership_scopes} = [ [] ] if !defined $ctx->{ownership_scopes};
+    push @{ $ctx->{ownership_scopes} }, [];
 }
 
 sub pop_scope {
@@ -31,6 +33,7 @@ sub pop_scope {
     pop @{ $ctx->{scopes} };
     pop @{ $ctx->{fact_scopes} };
     pop @{ $ctx->{nonnull_scopes} };
+    pop @{ $ctx->{ownership_scopes} } if defined $ctx->{ownership_scopes};
 }
 
 sub lookup_var {

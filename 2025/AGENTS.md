@@ -13,3 +13,4 @@ You can refactor and streamline the compiler code as necessary.
 - Max file length: 500 lines
 - Max function length: 100 lines
 - Max nesting depth: 3
+- Whenever the compiler emits a memory allocation statement, it must also emit a memory free statement at the end of the logical lifetime of the allocated memory.

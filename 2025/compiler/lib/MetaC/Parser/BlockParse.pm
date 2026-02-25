@@ -56,7 +56,7 @@ sub parse_block {
             next;
         }
 
-        if ($line =~ /^for\s+const\s+([A-Za-z_][A-Za-z0-9_]*)\s+in\s+lines\s*\(\s*STDIN\s*\)\?\s*\{$/) {
+        if ($line =~ /^for\s+(?:const\s+)?([A-Za-z_][A-Za-z0-9_]*)\s+in\s+lines\s*\(\s*STDIN\s*\)\?\s*\{$/) {
             my $var = $1;
             $$idx_ref++;
             my ($body, $end_reason) = parse_block($lines, $idx_ref, $base_line);
@@ -65,7 +65,7 @@ sub parse_block {
             next;
         }
 
-        if ($line =~ /^for\s+const\s+([A-Za-z_][A-Za-z0-9_]*)\s+in\s+(.+)\s*\{$/) {
+        if ($line =~ /^for\s+(?:const\s+)?([A-Za-z_][A-Za-z0-9_]*)\s+in\s+(.+)\s*\{$/) {
             my ($var, $iter_raw) = ($1, trim($2));
             $$idx_ref++;
             my ($body, $end_reason) = parse_block($lines, $idx_ref, $base_line);

@@ -40,8 +40,18 @@ sub _compile_block_stage_try {
             compile_error("split ... or handler is currently only supported in number | error functions")
               if !type_is_number_or_error($current_fn_return);
 
-            my ($src_code, $src_type) = compile_expr($stmt->{source_expr}, $ctx);
-            my ($delim_code, $delim_type) = compile_expr($stmt->{delim_expr}, $ctx);
+            my ($src_code, $src_type, $src_prelude, $src_cleanups) = compile_expr_with_temp_scope(
+                ctx  => $ctx,
+                expr => $stmt->{source_expr},
+            );
+            emit_expr_temp_prelude($out, $indent, $src_prelude);
+            my ($delim_code, $delim_type, $delim_prelude, $delim_cleanups) = compile_expr_with_temp_scope(
+                ctx  => $ctx,
+                expr => $stmt->{delim_expr},
+            );
+            emit_expr_temp_prelude($out, $indent, $delim_prelude);
+            my @split_cleanups = (@$src_cleanups, @$delim_cleanups);
+            my $split_cleanup_count = push_active_temp_cleanups($ctx, \@split_cleanups);
             compile_error("split source must be string") if $src_type ne 'string';
             compile_error("split delimiter must be string") if $delim_type ne 'string';
 
@@ -50,6 +60,7 @@ sub _compile_block_stage_try {
             my $handler_err = '__metac_handler_err' . $ctx->{tmp_counter}++;
 
             emit_line($out, $indent, "ResultStringList $tmp = metac_split_string($src_code, $delim_code);");
+            register_owned_cleanup_for_var($ctx, $tmp, "metac_free_result_string_list($tmp)");
             emit_line($out, $indent, "if ($tmp.is_error || $tmp.value.count != (size_t)$expected) {");
             emit_line($out, $indent + 2, "const char *$handler_err = $tmp.is_error ? $tmp.message : \"Split arity mismatch\";");
             new_scope($ctx);
@@ -57,7 +68,7 @@ sub _compile_block_stage_try {
                 declare_var($ctx, $stmt->{err_name}, { type => 'string', immutable => 1, c_name => $handler_err });
             }
             compile_block($stmt->{handler}, $ctx, $out, $indent + 2, $current_fn_return);
-            pop_scope($ctx);
+            close_codegen_scope($ctx, $out, $indent + 2);
             emit_line($out, $indent + 2, "return err_number($handler_err, __metac_line_no, \"\");");
             emit_line($out, $indent, "}");
 
@@ -66,11 +77,19 @@ sub _compile_block_stage_try {
                 emit_line($out, $indent, "const char *$name = $tmp.value.items[$i];");
                 declare_var($ctx, $name, { type => 'string', immutable => 1, c_name => $name });
             }
+            emit_expr_temp_cleanups($out, $indent, \@split_cleanups);
+            pop_active_temp_cleanups($ctx, $split_cleanup_count);
             return 1;
         }
 
         if ($stmt->{kind} eq 'destructure_list') {
-            my ($expr_code, $expr_type) = compile_expr($stmt->{expr}, $ctx);
+            my ($expr_code, $expr_type, $expr_prelude, $expr_cleanups) = compile_expr_with_temp_scope(
+                ctx                     => $ctx,
+                expr                    => $stmt->{expr},
+                transfer_root_ownership => 1,
+            );
+            emit_expr_temp_prelude($out, $indent, $expr_prelude);
+            my $expr_cleanup_count = push_active_temp_cleanups($ctx, $expr_cleanups);
             compile_error("Destructuring assignment requires list expression, got $expr_type")
               if $expr_type ne 'string_list' && $expr_type ne 'number_list' && $expr_type ne 'bool_list';
 
@@ -107,6 +126,14 @@ sub _compile_block_stage_try {
                     declare_var($ctx, $name, { type => 'bool', immutable => 1, c_name => $name });
                 }
             }
+            my $tmp_cleanup = cleanup_call_for_temp_expr(
+                var_name  => $tmp,
+                decl_type => $expr_type,
+                expr_code => $expr_code,
+            );
+            register_owned_cleanup_for_var($ctx, $tmp, $tmp_cleanup) if defined $tmp_cleanup;
+            emit_expr_temp_cleanups($out, $indent, $expr_cleanups);
+            pop_active_temp_cleanups($ctx, $expr_cleanup_count);
             return 1;
         }
     return 0;

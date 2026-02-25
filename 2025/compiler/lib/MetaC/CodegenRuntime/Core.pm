@@ -143,12 +143,17 @@ static char *metac_strdup_local(const char *s) {
 }
 
 static char *metac_read_all_stdin(void) {
-  size_t cap = 4096;
-  size_t len = 0;
-  char *buf = (char *)malloc(cap);
+  static char *buf = NULL;
+  static size_t cap = 0;
+  if (buf == NULL) {
+    cap = 4096;
+    buf = (char *)malloc(cap);
+  }
   if (buf == NULL) {
     return NULL;
   }
+
+  size_t len = 0;
 
   int ch = 0;
   while ((ch = fgetc(stdin)) != EOF) {
@@ -156,7 +161,6 @@ static char *metac_read_all_stdin(void) {
       size_t next = cap * 2;
       char *grown = (char *)realloc(buf, next);
       if (grown == NULL) {
-        free(buf);
         return NULL;
       }
       buf = grown;
@@ -224,12 +228,111 @@ static StringList metac_string_list_from_array(const char **items, size_t count)
     const char *src = items[i] == NULL ? "" : items[i];
     copy[i] = metac_strdup_local(src);
     if (copy[i] == NULL) {
+      for (size_t j = 0; j < i; j++) {
+        free(copy[j]);
+      }
+      free(copy);
       return out;
     }
   }
   out.count = count;
   out.items = copy;
   return out;
+}
+
+static void metac_free_number_list(NumberList list) {
+  free(list.items);
+}
+
+static void metac_free_number_list_list(NumberListList list) {
+  if (list.items == NULL) {
+    return;
+  }
+  for (size_t i = 0; i < list.count; i++) {
+    metac_free_number_list(list.items[i]);
+  }
+  free(list.items);
+}
+
+static void metac_free_bool_list(BoolList list) {
+  free(list.items);
+}
+
+static void metac_free_indexed_number_list(IndexedNumberList list) {
+  free(list.items);
+}
+
+static void metac_free_string_list(StringList list, int free_values) {
+  if (list.items == NULL) {
+    return;
+  }
+  if (free_values) {
+    for (size_t i = 0; i < list.count; i++) {
+      free(list.items[i]);
+    }
+  }
+  free(list.items);
+}
+
+static void metac_free_result_string_list(ResultStringList res) {
+  if (!res.is_error) {
+    metac_free_string_list(res.value, 1);
+  }
+}
+
+static void metac_free_matrix_number_member_list(MatrixNumberMemberList list) {
+  if (list.items == NULL) {
+    return;
+  }
+  for (size_t i = 0; i < list.count; i++) {
+    free(list.items[i].index.items);
+  }
+  free(list.items);
+}
+
+static void metac_free_matrix_string_member_list(MatrixStringMemberList list) {
+  if (list.items == NULL) {
+    return;
+  }
+  for (size_t i = 0; i < list.count; i++) {
+    free(list.items[i].index.items);
+  }
+  free(list.items);
+}
+
+static void metac_free_matrix_number(MatrixNumber *matrix) {
+  if (matrix == NULL) {
+    return;
+  }
+  free(matrix->size_spec);
+  free(matrix->coords);
+  free(matrix->values);
+  matrix->size_spec = NULL;
+  matrix->coords = NULL;
+  matrix->values = NULL;
+  matrix->entry_count = 0;
+  matrix->entry_cap = 0;
+  matrix->has_size_spec = 0;
+}
+
+static void metac_free_matrix_string(MatrixString *matrix) {
+  if (matrix == NULL) {
+    return;
+  }
+  if (matrix->values != NULL) {
+    for (size_t i = 0; i < matrix->entry_count; i++) {
+      free(matrix->values[i]);
+    }
+  }
+  free(matrix->size_spec);
+  free(matrix->coords);
+  free(matrix->values);
+  matrix->size_spec = NULL;
+  matrix->coords = NULL;
+  matrix->values = NULL;
+  matrix->entry_count = 0;
+  matrix->entry_cap = 0;
+  matrix->has_size_spec = 0;
 }
 
 static int64_t metac_max(int64_t a, int64_t b) {

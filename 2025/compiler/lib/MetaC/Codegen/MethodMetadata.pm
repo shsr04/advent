@@ -5,7 +5,7 @@ use warnings;
 sub method_specs {
     return {
         size => {
-            receivers     => { string => 1, string_list => 1, number_list => 1, bool_list => 1, indexed_number_list => 1 },
+            receivers     => { string => 1, string_list => 1, number_list => 1, number_list_list => 1, bool_list => 1, indexed_number_list => 1 },
             arity         => 0,
             expr_callable => 1,
             fallibility   => 'never',
@@ -86,7 +86,7 @@ sub method_specs {
             fallibility   => 'always',
         },
         push => {
-            receivers     => { string_list => 1, number_list => 1, bool_list => 1 },
+            receivers     => { string_list => 1, number_list => 1, number_list_list => 1, bool_list => 1 },
             arity         => 1,
             expr_callable => 1,
             fallibility   => 'never',

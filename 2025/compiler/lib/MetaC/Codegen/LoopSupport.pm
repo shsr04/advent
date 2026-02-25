@@ -199,6 +199,8 @@ sub emit_loop_body_with_binding {
     }
     if ($var_type eq 'string') {
         emit_line($out, $indent, "const char *$var_name = $var_c_expr;");
+    } elsif ($var_type eq 'number_list') {
+        emit_line($out, $indent, "const NumberList $var_name = $var_c_expr;");
     } elsif ($var_type eq 'number') {
         emit_line($out, $indent, "const int64_t $var_name = $var_c_expr;");
     } elsif ($var_type eq 'bool') {
@@ -223,7 +225,7 @@ sub emit_loop_body_with_binding {
     $ctx->{loop_depth} = $prev_loop_depth + 1;
     compile_block($body, $ctx, $out, $indent, $current_fn_return);
     $ctx->{loop_depth} = $prev_loop_depth;
-    pop_scope($ctx);
+    close_codegen_scope($ctx, $out, $indent);
 }
 
 

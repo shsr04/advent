@@ -66,6 +66,11 @@ typedef struct {
 
 typedef struct {
   size_t count;
+  NumberList *items;
+} NumberListList;
+
+typedef struct {
+  size_t count;
   int *items;
 } BoolList;
 

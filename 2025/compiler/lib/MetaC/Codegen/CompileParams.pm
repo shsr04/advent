@@ -61,6 +61,7 @@ sub emit_param_bindings {
         if ($param->{type} eq 'string') {
             emit_line($out, $indent, "const char *$name = $in_name;");
             emit_size_constraint_check(
+                ctx         => $ctx,
                 constraints => $constraints,
                 target_expr => $name,
                 target_type => 'string',
@@ -83,6 +84,7 @@ sub emit_param_bindings {
         if ($param->{type} eq 'bool_list') {
             emit_line($out, $indent, "const BoolList $name = $in_name;");
             emit_size_constraint_check(
+                ctx         => $ctx,
                 constraints => $constraints,
                 target_expr => $name,
                 target_type => 'bool_list',

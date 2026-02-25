@@ -3,7 +3,13 @@ use strict;
 use warnings;
 
 sub _emit_try_failure {
-    my ($out, $indent, $current_fn_return, $message_expr) = @_;
+    my ($ctx, $out, $indent, $current_fn_return, $message_expr) = @_;
+    if (defined $ctx->{active_temp_cleanups}) {
+        for (my $i = $#{ $ctx->{active_temp_cleanups} }; $i >= 0; $i--) {
+            emit_line($out, $indent, $ctx->{active_temp_cleanups}[$i] . ';');
+        }
+    }
+    emit_all_owned_cleanups($ctx, $out, $indent);
     if (type_is_number_or_error($current_fn_return)) {
         emit_line($out, $indent, "return err_number($message_expr, __metac_line_no, \"\");");
         return;
@@ -27,7 +33,13 @@ sub _emit_try_failure {
 sub _compile_block_stage_decls {
     my ($stmt, $ctx, $out, $indent, $current_fn_return) = @_;
         if ($stmt->{kind} eq 'let') {
-            my ($expr_code, $expr_type) = compile_expr($stmt->{expr}, $ctx);
+            my ($expr_code, $expr_type, $expr_prelude, $expr_temp_cleanups) = compile_expr_with_temp_scope(
+                ctx                     => $ctx,
+                expr                    => $stmt->{expr},
+                transfer_root_ownership => 1,
+            );
+            emit_expr_temp_prelude($out, $indent, $expr_prelude);
+            my $expr_cleanup_count = push_active_temp_cleanups($ctx, $expr_temp_cleanups);
             my $decl_type = defined($stmt->{type}) ? $stmt->{type} : $expr_type;
             if (!defined($stmt->{type}) && $expr_type eq 'empty_list') {
                 compile_error("Empty list literal requires an explicit list type, e.g. let xs: number[] = []");
@@ -86,6 +98,14 @@ sub _compile_block_stage_decls {
                 } else {
                     emit_line($out, $indent, "NumberList $stmt->{name} = $expr_code;");
                 }
+            } elsif ($decl_type eq 'number_list_list') {
+                if ($expr_type eq 'empty_list') {
+                    emit_line($out, $indent, "NumberListList $stmt->{name};");
+                    emit_line($out, $indent, "$stmt->{name}.count = 0;");
+                    emit_line($out, $indent, "$stmt->{name}.items = NULL;");
+                } else {
+                    emit_line($out, $indent, "NumberListList $stmt->{name} = $expr_code;");
+                }
             } elsif ($decl_type eq 'string_list') {
                 if ($expr_type eq 'empty_list') {
                     emit_line($out, $indent, "StringList $stmt->{name};");
@@ -111,8 +131,10 @@ sub _compile_block_stage_decls {
                     }
                     if ($meta->{elem} eq 'number') {
                         emit_line($out, $indent, "MatrixNumber $stmt->{name} = metac_matrix_number_new($meta->{dim}, $size_expr);");
+                        register_owned_cleanup_for_var($ctx, $stmt->{name}, "metac_free_matrix_number(&$stmt->{name})");
                     } elsif ($meta->{elem} eq 'string') {
                         emit_line($out, $indent, "MatrixString $stmt->{name} = metac_matrix_string_new($meta->{dim}, $size_expr);");
+                        register_owned_cleanup_for_var($ctx, $stmt->{name}, "metac_free_matrix_string(&$stmt->{name})");
                     } else {
                         compile_error("Unsupported matrix variable element type '$meta->{elem}'");
                     }
@@ -149,15 +171,6 @@ sub _compile_block_stage_decls {
                 compile_error("Unsupported let type: $decl_type");
             }
 
-            emit_size_constraint_check(
-                constraints => $constraints,
-                target_expr => $stmt->{name},
-                target_type => $decl_type,
-                out         => $out,
-                indent      => $indent,
-                where       => "variable '$stmt->{name}'",
-            );
-
             declare_var(
                 $ctx,
                 $stmt->{name},
@@ -166,6 +179,24 @@ sub _compile_block_stage_decls {
                     constraints => $constraints,
                     immutable   => 0,
                 }
+            );
+            maybe_register_owned_cleanup_for_decl(
+                ctx       => $ctx,
+                var_name  => $stmt->{name},
+                decl_type => $decl_type,
+                expr_code => $expr_code,
+            );
+            if ($decl_type eq 'number_list_list' && $expr_type eq 'empty_list') {
+                register_owned_cleanup_for_var($ctx, $stmt->{name}, "metac_free_number_list_list($stmt->{name})");
+            }
+            emit_size_constraint_check(
+                ctx         => $ctx,
+                constraints => $constraints,
+                target_expr => $stmt->{name},
+                target_type => $decl_type,
+                out         => $out,
+                indent      => $indent,
+                where       => "variable '$stmt->{name}'",
             );
 
             if ($decl_type eq 'number_or_null') {
@@ -177,6 +208,8 @@ sub _compile_block_stage_decls {
                     clear_nonnull_fact_for_var_name($ctx, $stmt->{name});
                 }
             }
+            emit_expr_temp_cleanups($out, $indent, $expr_temp_cleanups);
+            pop_active_temp_cleanups($ctx, $expr_cleanup_count);
             return 1;
         }
 
@@ -204,7 +237,13 @@ sub _compile_block_stage_decls {
                 return 1;
             }
 
-            my ($expr_code, $expr_type) = compile_expr($stmt->{expr}, $ctx);
+            my ($expr_code, $expr_type, $expr_prelude, $expr_temp_cleanups) = compile_expr_with_temp_scope(
+                ctx                     => $ctx,
+                expr                    => $stmt->{expr},
+                transfer_root_ownership => 1,
+            );
+            emit_expr_temp_prelude($out, $indent, $expr_prelude);
+            my $expr_cleanup_count = push_active_temp_cleanups($ctx, $expr_temp_cleanups);
 
             if ($expr_type eq 'number') {
                 emit_line($out, $indent, "const int64_t $stmt->{name} = $expr_code;");
@@ -223,6 +262,8 @@ sub _compile_block_stage_decls {
                 emit_line($out, $indent, "StringList $stmt->{name} = $expr_code;");
             } elsif ($expr_type eq 'number_list') {
                 emit_line($out, $indent, "NumberList $stmt->{name} = $expr_code;");
+            } elsif ($expr_type eq 'number_list_list') {
+                emit_line($out, $indent, "NumberListList $stmt->{name} = $expr_code;");
             } elsif ($expr_type eq 'bool_list') {
                 emit_line($out, $indent, "BoolList $stmt->{name} = $expr_code;");
             } elsif ($expr_type eq 'indexed_number_list') {
@@ -268,7 +309,7 @@ sub _compile_block_stage_decls {
                 && scalar(@{ $stmt->{expr}{args} }) == 0)
             {
                 my ($size_recv_code, $size_recv_type) = compile_expr($stmt->{expr}{recv}, $ctx);
-                if ($size_recv_type eq 'string' || $size_recv_type eq 'string_list' || $size_recv_type eq 'number_list' || $size_recv_type eq 'bool_list' || $size_recv_type eq 'indexed_number_list') {
+                if ($size_recv_type eq 'string' || $size_recv_type eq 'string_list' || $size_recv_type eq 'number_list' || $size_recv_type eq 'number_list_list' || $size_recv_type eq 'bool_list' || $size_recv_type eq 'indexed_number_list') {
                     $const_info{size_of_recv_code} = $size_recv_code;
                     $const_info{size_of_recv_type} = $size_recv_type;
                 }
@@ -279,11 +320,25 @@ sub _compile_block_stage_decls {
                 $stmt->{name},
                 \%const_info
             );
+            maybe_register_owned_cleanup_for_decl(
+                ctx       => $ctx,
+                var_name  => $stmt->{name},
+                decl_type => $expr_type,
+                expr_code => $expr_code,
+            );
+            emit_expr_temp_cleanups($out, $indent, $expr_temp_cleanups);
+            pop_active_temp_cleanups($ctx, $expr_cleanup_count);
             return 1;
         }
 
         if ($stmt->{kind} eq 'const_typed') {
-            my ($expr_code, $expr_type) = compile_expr($stmt->{expr}, $ctx);
+            my ($expr_code, $expr_type, $expr_prelude, $expr_temp_cleanups) = compile_expr_with_temp_scope(
+                ctx                     => $ctx,
+                expr                    => $stmt->{expr},
+                transfer_root_ownership => 1,
+            );
+            emit_expr_temp_prelude($out, $indent, $expr_prelude);
+            my $expr_cleanup_count = push_active_temp_cleanups($ctx, $expr_temp_cleanups);
             my $decl_type = $stmt->{type};
             compile_error("Type mismatch in const '$stmt->{name}': expected $decl_type, got $expr_type")
               if !type_matches_expected($decl_type, $expr_type);
@@ -337,6 +392,14 @@ sub _compile_block_stage_decls {
                 } else {
                     emit_line($out, $indent, "NumberList $stmt->{name} = $expr_code;");
                 }
+            } elsif ($decl_type eq 'number_list_list') {
+                if ($expr_type eq 'empty_list') {
+                    emit_line($out, $indent, "NumberListList $stmt->{name};");
+                    emit_line($out, $indent, "$stmt->{name}.count = 0;");
+                    emit_line($out, $indent, "$stmt->{name}.items = NULL;");
+                } else {
+                    emit_line($out, $indent, "NumberListList $stmt->{name} = $expr_code;");
+                }
             } elsif ($decl_type eq 'string_list') {
                 if ($expr_type eq 'empty_list') {
                     emit_line($out, $indent, "StringList $stmt->{name};");
@@ -362,8 +425,10 @@ sub _compile_block_stage_decls {
                     }
                     if ($meta->{elem} eq 'number') {
                         emit_line($out, $indent, "MatrixNumber $stmt->{name} = metac_matrix_number_new($meta->{dim}, $size_expr);");
+                        register_owned_cleanup_for_var($ctx, $stmt->{name}, "metac_free_matrix_number(&$stmt->{name})");
                     } elsif ($meta->{elem} eq 'string') {
                         emit_line($out, $indent, "MatrixString $stmt->{name} = metac_matrix_string_new($meta->{dim}, $size_expr);");
+                        register_owned_cleanup_for_var($ctx, $stmt->{name}, "metac_free_matrix_string(&$stmt->{name})");
                     } else {
                         compile_error("Unsupported matrix constant element type '$meta->{elem}'");
                     }
@@ -398,15 +463,6 @@ sub _compile_block_stage_decls {
                 compile_error("Unsupported const type: $decl_type");
             }
 
-            emit_size_constraint_check(
-                constraints => $constraints,
-                target_expr => $stmt->{name},
-                target_type => $decl_type,
-                out         => $out,
-                indent      => $indent,
-                where       => "constant '$stmt->{name}'",
-            );
-
             declare_var(
                 $ctx,
                 $stmt->{name},
@@ -416,6 +472,26 @@ sub _compile_block_stage_decls {
                     immutable   => 1,
                 }
             );
+            maybe_register_owned_cleanup_for_decl(
+                ctx       => $ctx,
+                var_name  => $stmt->{name},
+                decl_type => $decl_type,
+                expr_code => $expr_code,
+            );
+            if ($decl_type eq 'number_list_list' && $expr_type eq 'empty_list') {
+                register_owned_cleanup_for_var($ctx, $stmt->{name}, "metac_free_number_list_list($stmt->{name})");
+            }
+            emit_size_constraint_check(
+                ctx         => $ctx,
+                constraints => $constraints,
+                target_expr => $stmt->{name},
+                target_type => $decl_type,
+                out         => $out,
+                indent      => $indent,
+                where       => "constant '$stmt->{name}'",
+            );
+            emit_expr_temp_cleanups($out, $indent, $expr_temp_cleanups);
+            pop_active_temp_cleanups($ctx, $expr_cleanup_count);
             return 1;
         }
 

@@ -156,12 +156,13 @@ sub emit_size_constraint_check {
     my $out = $args{out};
     my $indent = $args{indent};
     my $where = $args{where} // 'value';
+    my $ctx = $args{ctx};
     $size = int($size);
 
     my $actual_expr;
     if ($target_type eq 'string') {
         $actual_expr = "metac_strlen($target_expr)";
-    } elsif ($target_type eq 'number_list' || $target_type eq 'string_list' || $target_type eq 'bool_list' || $target_type eq 'indexed_number_list') {
+    } elsif ($target_type eq 'number_list' || $target_type eq 'number_list_list' || $target_type eq 'string_list' || $target_type eq 'bool_list' || $target_type eq 'indexed_number_list') {
         $actual_expr = "((int64_t)$target_expr.count)";
     } else {
         compile_error("size(...) constraint is unsupported for runtime check on type '$target_type' in $where");
@@ -169,6 +170,12 @@ sub emit_size_constraint_check {
 
     my $message = c_escape_string("size($size) constraint failed for $where");
     emit_line($out, $indent, "if ($actual_expr != $size) {");
+    if (defined $ctx->{active_temp_cleanups}) {
+        for (my $i = $#{ $ctx->{active_temp_cleanups} }; $i >= 0; $i--) {
+            emit_line($out, $indent + 2, $ctx->{active_temp_cleanups}[$i] . ';');
+        }
+    }
+    emit_all_owned_cleanups($ctx, $out, $indent + 2) if defined $ctx;
     emit_line($out, $indent + 2, "fprintf(stderr, \"%s\\n\", $message);");
     emit_line($out, $indent + 2, 'exit(2);');
     emit_line($out, $indent, '}');
@@ -222,7 +229,7 @@ sub size_check_from_condition {
     return undef if !expr_is_stable_for_facts($target_expr, $ctx);
 
     my (undef, $target_type) = compile_expr($target_expr, $ctx);
-    return undef if $target_type ne 'string_list' && $target_type ne 'number_list' && $target_type ne 'bool_list' && $target_type ne 'indexed_number_list';
+    return undef if $target_type ne 'string_list' && $target_type ne 'number_list' && $target_type ne 'number_list_list' && $target_type ne 'bool_list' && $target_type ne 'indexed_number_list';
 
     return {
         key => expr_fact_key($target_expr, $ctx),

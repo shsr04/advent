@@ -51,6 +51,10 @@ static ResultStringList metac_split_string(const char *input, const char *delim)
     size_t len = (p == NULL) ? strlen(start) : (size_t)(p - start);
     char *tok = (char *)malloc(len + 1);
     if (tok == NULL) {
+      for (size_t j = 0; j < idx; j++) {
+        free(items[j]);
+      }
+      free(items);
       out.is_error = 1;
       snprintf(out.message, sizeof(out.message), "out of memory allocating split token");
       return out;
@@ -102,7 +106,14 @@ static StringList metac_slice_string_list(StringList input, int64_t start) {
   }
 
   out.count = input.count - start_idx;
-  out.items = input.items + start_idx;
+  out.items = (char **)calloc(out.count == 0 ? 1 : out.count, sizeof(char *));
+  if (out.items == NULL) {
+    out.count = 0;
+    return out;
+  }
+  for (size_t i = 0; i < out.count; i++) {
+    out.items[i] = input.items[start_idx + i];
+  }
   return out;
 }
 
@@ -118,7 +129,14 @@ static NumberList metac_slice_number_list(NumberList input, int64_t start) {
   }
 
   out.count = input.count - start_idx;
-  out.items = input.items + start_idx;
+  out.items = (int64_t *)calloc(out.count == 0 ? 1 : out.count, sizeof(int64_t));
+  if (out.items == NULL) {
+    out.count = 0;
+    return out;
+  }
+  for (size_t i = 0; i < out.count; i++) {
+    out.items[i] = input.items[start_idx + i];
+  }
   return out;
 }
 
@@ -217,6 +235,15 @@ static MatrixNumberMemberList metac_filter_matrix_number_member_list(
   for (size_t i = 0; i < list.count; i++) {
     MatrixNumberMember item = list.items[i];
     if (predicate == NULL || predicate(item)) {
+      NumberList idx_copy = metac_number_list_from_array(item.index.items, item.index.count);
+      if (item.index.count > 0 && idx_copy.items == NULL) {
+        for (size_t j = 0; j < out_count; j++) {
+          free(items[j].index.items);
+        }
+        free(items);
+        return out;
+      }
+      item.index = idx_copy;
       items[out_count++] = item;
     }
   }
@@ -246,6 +273,15 @@ static MatrixStringMemberList metac_filter_matrix_string_member_list(
   for (size_t i = 0; i < list.count; i++) {
     MatrixStringMember item = list.items[i];
     if (predicate == NULL || predicate(item)) {
+      NumberList idx_copy = metac_number_list_from_array(item.index.items, item.index.count);
+      if (item.index.count > 0 && idx_copy.items == NULL) {
+        for (size_t j = 0; j < out_count; j++) {
+          free(items[j].index.items);
+        }
+        free(items);
+        return out;
+      }
+      item.index = idx_copy;
       items[out_count++] = item;
     }
   }
@@ -272,6 +308,39 @@ static int64_t metac_number_list_push(NumberList *list, int64_t value) {
   }
 
   items[list->count] = value;
+  list->items = items;
+  list->count = next_count;
+  if (next_count > (size_t)INT64_MAX) {
+    return INT64_MAX;
+  }
+  return (int64_t)next_count;
+}
+
+static int64_t metac_number_list_list_push(NumberListList *list, NumberList value) {
+  if (list == NULL) {
+    fprintf(stderr, "push on null number-list-list\n");
+    exit(1);
+  }
+  if (list->count == SIZE_MAX) {
+    fprintf(stderr, "number-list-list push overflow\n");
+    exit(1);
+  }
+
+  NumberList copied = metac_number_list_from_array(value.items, value.count);
+  if (value.count > 0 && copied.items == NULL) {
+    fprintf(stderr, "out of memory copying nested number list\n");
+    exit(1);
+  }
+
+  size_t next_count = list->count + 1;
+  NumberList *items = (NumberList *)realloc(list->items, (next_count == 0 ? 1 : next_count) * sizeof(NumberList));
+  if (items == NULL) {
+    metac_free_number_list(copied);
+    fprintf(stderr, "out of memory in number-list-list push\n");
+    exit(1);
+  }
+
+  items[list->count] = copied;
   list->items = items;
   list->count = next_count;
   if (next_count > (size_t)INT64_MAX) {

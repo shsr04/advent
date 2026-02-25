@@ -2,6 +2,7 @@ SHELL := /bin/bash
 
 CC := clang
 CFLAGS ?= -std=c23 -O3 -Wall -Wextra -Wpedantic
+PERL := perl
 
 METAC_SOURCES := $(sort $(wildcard day*/day*.metac))
 COMPILER_SOURCES := compiler/metac.pl $(sort $(wildcard compiler/lib/MetaC/*.pm))
@@ -29,7 +30,7 @@ bins: $(BIN_ARTIFACTS)
 run: $(RUN_OUTPUTS)
 
 compiler-test:
-	perl compiler/tests/run.pl
+	$(PERL) compiler/tests/run.pl
 
 test: compiler-test
 
@@ -52,7 +53,7 @@ clean:
 define EMIT_BUILD_RULES
 $(call source_to_c,$1): $1 $(COMPILER_SOURCES)
 	@mkdir -p $$(@D)
-	perl compiler/metac.pl $$< -o $$@
+	$$(PERL) compiler/metac.pl $$< -o $$@
 
 $(call source_to_bin,$1): $(call source_to_c,$1)
 	@mkdir -p $$(@D)

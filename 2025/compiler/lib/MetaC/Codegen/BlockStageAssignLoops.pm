@@ -30,7 +30,7 @@ sub _compile_block_stage_assign_loops {
             emit_line($out, $indent, '{');
             new_scope($ctx);
             compile_block($stmt->{body}, $ctx, $out, $indent + 2, $current_fn_return);
-            pop_scope($ctx);
+            close_codegen_scope($ctx, $out, $indent + 2);
             emit_line($out, $indent, '}');
             return 1;
         }
@@ -44,7 +44,13 @@ sub _compile_block_stage_assign_loops {
             compile_error("Typed assignment type mismatch for '$stmt->{name}': expected $info->{type}, got $stmt->{type}")
               if $info->{type} ne $stmt->{type};
 
-            my ($expr_code, $expr_type) = compile_expr($stmt->{expr}, $ctx);
+            my ($expr_code, $expr_type, $expr_prelude, $expr_temp_cleanups) = compile_expr_with_temp_scope(
+                ctx                     => $ctx,
+                expr                    => $stmt->{expr},
+                transfer_root_ownership => 1,
+            );
+            emit_expr_temp_prelude($out, $indent, $expr_prelude);
+            my $expr_cleanup_count = push_active_temp_cleanups($ctx, $expr_temp_cleanups);
             compile_error("Typed assignment expression mismatch for '$stmt->{name}': expected $stmt->{type}, got $expr_type")
               if !type_matches_expected($stmt->{type}, $expr_type);
 
@@ -89,6 +95,7 @@ sub _compile_block_stage_assign_loops {
             } elsif ($stmt->{type} eq 'string') {
                 emit_line($out, $indent, "metac_copy_str($target, sizeof($target), $expr_code);");
                 emit_size_constraint_check(
+                    ctx         => $ctx,
                     constraints => $constraints,
                     target_expr => $target,
                     target_type => 'string',
@@ -106,9 +113,27 @@ sub _compile_block_stage_assign_loops {
                     emit_line($out, $indent, "$target = $expr_code;");
                 }
                 emit_size_constraint_check(
+                    ctx         => $ctx,
                     constraints => $constraints,
                     target_expr => $target,
                     target_type => 'number_list',
+                    out         => $out,
+                    indent      => $indent,
+                    where       => "typed assignment for '$stmt->{name}'",
+                );
+            } elsif ($stmt->{type} eq 'number_list_list') {
+                if ($expr_type eq 'empty_list') {
+                    emit_line($out, $indent, "metac_free_number_list_list($target);");
+                    emit_line($out, $indent, "$target.count = 0;");
+                    emit_line($out, $indent, "$target.items = NULL;");
+                } else {
+                    emit_line($out, $indent, "$target = $expr_code;");
+                }
+                emit_size_constraint_check(
+                    ctx         => $ctx,
+                    constraints => $constraints,
+                    target_expr => $target,
+                    target_type => 'number_list_list',
                     out         => $out,
                     indent      => $indent,
                     where       => "typed assignment for '$stmt->{name}'",
@@ -121,6 +146,7 @@ sub _compile_block_stage_assign_loops {
                     emit_line($out, $indent, "$target = $expr_code;");
                 }
                 emit_size_constraint_check(
+                    ctx         => $ctx,
                     constraints => $constraints,
                     target_expr => $target,
                     target_type => 'string_list',
@@ -136,6 +162,7 @@ sub _compile_block_stage_assign_loops {
                     emit_line($out, $indent, "$target = $expr_code;");
                 }
                 emit_size_constraint_check(
+                    ctx         => $ctx,
                     constraints => $constraints,
                     target_expr => $target,
                     target_type => 'bool_list',
@@ -151,6 +178,8 @@ sub _compile_block_stage_assign_loops {
             } else {
                 compile_error("Unsupported typed assignment type: $stmt->{type}");
             }
+            emit_expr_temp_cleanups($out, $indent, $expr_temp_cleanups);
+            pop_active_temp_cleanups($ctx, $expr_cleanup_count);
             return 1;
         }
 
@@ -160,7 +189,13 @@ sub _compile_block_stage_assign_loops {
             compile_error("Cannot assign to immutable variable '$stmt->{name}'") if $info->{immutable};
             my $target = $info->{c_name};
 
-            my ($expr_code, $expr_type) = compile_expr($stmt->{expr}, $ctx);
+            my ($expr_code, $expr_type, $expr_prelude, $expr_temp_cleanups) = compile_expr_with_temp_scope(
+                ctx                     => $ctx,
+                expr                    => $stmt->{expr},
+                transfer_root_ownership => 1,
+            );
+            emit_expr_temp_prelude($out, $indent, $expr_prelude);
+            my $expr_cleanup_count = push_active_temp_cleanups($ctx, $expr_temp_cleanups);
             compile_error("Type mismatch in assignment to '$stmt->{name}': expected $info->{type}, got $expr_type")
               if !type_matches_expected($info->{type}, $expr_type);
 
@@ -195,6 +230,7 @@ sub _compile_block_stage_assign_loops {
             } elsif ($info->{type} eq 'string') {
                 emit_line($out, $indent, "metac_copy_str($target, sizeof($target), $expr_code);");
                 emit_size_constraint_check(
+                    ctx         => $ctx,
                     constraints => ($info->{constraints} // parse_constraints(undef)),
                     target_expr => $target,
                     target_type => 'string',
@@ -202,14 +238,18 @@ sub _compile_block_stage_assign_loops {
                     indent      => $indent,
                     where       => "assignment to '$stmt->{name}'",
                 );
-            } elsif ($info->{type} eq 'number_list' || $info->{type} eq 'string_list' || $info->{type} eq 'bool_list') {
+            } elsif ($info->{type} eq 'number_list' || $info->{type} eq 'number_list_list' || $info->{type} eq 'string_list' || $info->{type} eq 'bool_list') {
                 if ($expr_type eq 'empty_list') {
+                    if ($info->{type} eq 'number_list_list') {
+                        emit_line($out, $indent, "metac_free_number_list_list($target);");
+                    }
                     emit_line($out, $indent, "$target.count = 0;");
                     emit_line($out, $indent, "$target.items = NULL;");
                 } else {
                     emit_line($out, $indent, "$target = $expr_code;");
                 }
                 emit_size_constraint_check(
+                    ctx         => $ctx,
                     constraints => ($info->{constraints} // parse_constraints(undef)),
                     target_expr => $target,
                     target_type => $info->{type},
@@ -225,6 +265,8 @@ sub _compile_block_stage_assign_loops {
             } else {
                 compile_error("Unsupported assignment target type for '$stmt->{name}': $info->{type}");
             }
+            emit_expr_temp_cleanups($out, $indent, $expr_temp_cleanups);
+            pop_active_temp_cleanups($ctx, $expr_cleanup_count);
             return 1;
         }
 
@@ -237,7 +279,12 @@ sub _compile_block_stage_assign_loops {
             if ($stmt->{op} eq '+=') {
                 compile_error("'+=' requires numeric target '$stmt->{name}'")
                   if $info->{type} ne 'number';
-                my ($expr_code, $expr_type) = compile_expr($stmt->{expr}, $ctx);
+                my ($expr_code, $expr_type, $expr_prelude, $expr_temp_cleanups) = compile_expr_with_temp_scope(
+                    ctx  => $ctx,
+                    expr => $stmt->{expr},
+                );
+                emit_expr_temp_prelude($out, $indent, $expr_prelude);
+                my $expr_cleanup_count = push_active_temp_cleanups($ctx, $expr_temp_cleanups);
                 my $rhs = number_like_to_c_expr($expr_code, $expr_type, "'+=' for '$stmt->{name}'");
 
                 my $combined = "($target + $rhs)";
@@ -249,6 +296,8 @@ sub _compile_block_stage_assign_loops {
                 } else {
                     emit_line($out, $indent, "$target = $combined;");
                 }
+                emit_expr_temp_cleanups($out, $indent, $expr_temp_cleanups);
+                pop_active_temp_cleanups($ctx, $expr_cleanup_count);
                 return 1;
             }
 
@@ -289,11 +338,11 @@ sub _compile_block_stage_assign_loops {
             declare_var($ctx, $stmt->{var}, { type => 'string', immutable => 1 });
             my $prev_loop_depth = $ctx->{loop_depth} // 0;
             $ctx->{loop_depth} = $prev_loop_depth + 1;
-            push @{ $ctx->{rewind_labels} }, $rewind_label if $has_rewind;
+            push @{ $ctx->{rewind_labels} }, { restart => $rewind_label } if $has_rewind;
             compile_block($stmt->{body}, $ctx, $out, $indent + 4, $current_fn_return);
             pop @{ $ctx->{rewind_labels} } if $has_rewind;
             $ctx->{loop_depth} = $prev_loop_depth;
-            pop_scope($ctx);
+            close_codegen_scope($ctx, $out, $indent + 4);
 
             emit_line($out, $indent + 2, '}');
             emit_line($out, $indent + 2,
@@ -316,22 +365,30 @@ sub _compile_block_stage_assign_loops {
 
         if ($stmt->{kind} eq 'while') {
             enforce_condition_diagnostics($stmt->{cond}, $ctx, "while condition");
-            my ($cond_code, $cond_type) = compile_expr($stmt->{cond}, $ctx);
+            my ($cond_code, $cond_type, $cond_prelude, $cond_cleanups) = compile_expr_with_temp_scope(
+                ctx  => $ctx,
+                expr => $stmt->{cond},
+            );
             compile_error("while condition must evaluate to bool, got $cond_type")
               if $cond_type ne 'bool';
 
             my $has_rewind = loop_body_uses_rewind_current_loop($stmt->{body});
             my $rewind_label = $has_rewind ? ('__metac_rewind_loop' . $ctx->{tmp_counter}++) : undef;
+            my $cond_tmp = '__metac_while_cond' . $ctx->{tmp_counter}++;
             emit_line($out, $indent, "$rewind_label: ;") if $has_rewind;
-            emit_line($out, $indent, "while ($cond_code) {");
+            emit_line($out, $indent, "while (1) {");
+            emit_expr_temp_prelude($out, $indent + 2, $cond_prelude);
+            emit_line($out, $indent + 2, "int $cond_tmp = $cond_code;");
+            emit_expr_temp_cleanups($out, $indent + 2, $cond_cleanups);
+            emit_line($out, $indent + 2, "if (!$cond_tmp) { break; }");
             new_scope($ctx);
             my $prev_loop_depth = $ctx->{loop_depth} // 0;
             $ctx->{loop_depth} = $prev_loop_depth + 1;
-            push @{ $ctx->{rewind_labels} }, $rewind_label if $has_rewind;
+            push @{ $ctx->{rewind_labels} }, { restart => $rewind_label } if $has_rewind;
             compile_block($stmt->{body}, $ctx, $out, $indent + 2, $current_fn_return);
             pop @{ $ctx->{rewind_labels} } if $has_rewind;
             $ctx->{loop_depth} = $prev_loop_depth;
-            pop_scope($ctx);
+            close_codegen_scope($ctx, $out, $indent + 2);
             emit_line($out, $indent, '}');
             return 1;
         }
@@ -356,7 +413,15 @@ sub _compile_block_stage_assign_loops {
             my $labels = $ctx->{rewind_labels} // [];
             compile_error("rewind is unsupported in this loop context")
               if !@$labels;
-            my $label = $labels->[-1];
+            my $entry = $labels->[-1];
+            if (ref($entry) eq 'HASH') {
+                my $target = $entry->{cleanup} // $entry->{restart};
+                compile_error("rewind is unsupported in this loop context")
+                  if !defined $target || $target eq '';
+                emit_line($out, $indent, "goto $target;");
+                return 1;
+            }
+            my $label = $entry;
             emit_line($out, $indent, "goto $label;");
             return 1;
         }

@@ -3,25 +3,58 @@ use strict;
 use warnings;
 
 sub _emit_stmt_try_failure {
-    my ($out, $indent, $current_fn_return, $message_expr) = @_;
+    my ($ctx, $out, $indent, $current_fn_return, $message_expr) = @_;
+    my $message_tmp = "__metac_errmsg" . $ctx->{tmp_counter}++;
+    emit_line($out, $indent, "const char *$message_tmp = $message_expr;");
+    if (defined $ctx->{active_temp_cleanups}) {
+        for (my $i = $#{ $ctx->{active_temp_cleanups} }; $i >= 0; $i--) {
+            emit_line($out, $indent, $ctx->{active_temp_cleanups}[$i] . ';');
+        }
+    }
+    emit_all_owned_cleanups($ctx, $out, $indent);
     if (type_is_number_or_error($current_fn_return)) {
-        emit_line($out, $indent, "return err_number($message_expr, __metac_line_no, \"\");");
+        emit_line($out, $indent, "return err_number($message_tmp, __metac_line_no, \"\");");
         return;
     }
     if (type_is_bool_or_error($current_fn_return)) {
-        emit_line($out, $indent, "return err_bool($message_expr, __metac_line_no, \"\");");
+        emit_line($out, $indent, "return err_bool($message_tmp, __metac_line_no, \"\");");
         return;
     }
     if (type_is_string_or_error($current_fn_return)) {
-        emit_line($out, $indent, "return err_string_value($message_expr, __metac_line_no, \"\");");
+        emit_line($out, $indent, "return err_string_value($message_tmp, __metac_line_no, \"\");");
         return;
     }
     if (is_supported_generic_union_return($current_fn_return) && union_contains_member($current_fn_return, 'error')) {
-        emit_line($out, $indent, "return metac_value_error($message_expr, __metac_line_no, \"\");");
+        emit_line($out, $indent, "return metac_value_error($message_tmp, __metac_line_no, \"\");");
         return;
     }
-    emit_line($out, $indent, "fprintf(stderr, \"%s\\n\", $message_expr);");
+    emit_line($out, $indent, "fprintf(stderr, \"%s\\n\", $message_tmp);");
     emit_line($out, $indent, "exit(2);");
+}
+
+sub _emit_return_stmt {
+    my ($ctx, $out, $indent, $return_expr, $current_fn_return) = @_;
+    my $return_c_type = _return_c_type_from_fn_return($current_fn_return);
+    my $return_tmp = "__metac_return" . $ctx->{tmp_counter}++;
+    emit_line($out, $indent, "$return_c_type $return_tmp = $return_expr;");
+    if (defined $ctx->{active_temp_cleanups}) {
+        for (my $i = $#{ $ctx->{active_temp_cleanups} }; $i >= 0; $i--) {
+            emit_line($out, $indent, $ctx->{active_temp_cleanups}[$i] . ';');
+        }
+    }
+    emit_all_owned_cleanups($ctx, $out, $indent);
+    emit_line($out, $indent, "return $return_tmp;");
+}
+
+sub _return_c_type_from_fn_return {
+    my ($current_fn_return) = @_;
+    return 'ResultNumber' if type_is_number_or_error($current_fn_return);
+    return 'ResultBool' if type_is_bool_or_error($current_fn_return);
+    return 'ResultStringValue' if type_is_string_or_error($current_fn_return);
+    return 'MetaCValue' if is_supported_generic_union_return($current_fn_return);
+    return 'int64_t' if $current_fn_return eq 'number';
+    return 'int' if $current_fn_return eq 'bool';
+    compile_error("Unsupported function return mode for return emission: $current_fn_return");
 }
 
 sub _compile_block_stage_control {
@@ -34,10 +67,16 @@ sub _compile_block_stage_control {
             my $union_check = union_member_check_from_condition($stmt->{cond}, $ctx);
             my $union_true_bindings = union_member_bindings_on_true_expr($stmt->{cond}, $ctx);
             my $union_false_bindings = union_member_bindings_on_false_expr($stmt->{cond}, $ctx);
-            my ($cond_code, $cond_type) = compile_expr($stmt->{cond}, $ctx);
+            my ($cond_code, $cond_type, $cond_prelude, $cond_cleanups) = compile_expr_with_temp_scope(
+                ctx  => $ctx,
+                expr => $stmt->{cond},
+            );
             compile_error("if condition must evaluate to bool, got $cond_type") if $cond_type ne 'bool';
-
-            emit_line($out, $indent, "if ($cond_code) {");
+            emit_expr_temp_prelude($out, $indent, $cond_prelude);
+            my $cond_tmp = "__metac_if_cond" . $ctx->{tmp_counter}++;
+            emit_line($out, $indent, "int $cond_tmp = $cond_code;");
+            emit_expr_temp_cleanups($out, $indent, $cond_cleanups);
+            emit_line($out, $indent, "if ($cond_tmp) {");
             new_scope($ctx);
             if (defined $size_check && $size_check->{op} eq '==') {
                 set_list_len_fact($ctx, $size_check->{key}, $size_check->{len});
@@ -59,7 +98,7 @@ sub _compile_block_stage_control {
                 }
             }
             compile_block($stmt->{then_body}, $ctx, $out, $indent + 2, $current_fn_return);
-            pop_scope($ctx);
+            close_codegen_scope($ctx, $out, $indent + 2);
             emit_line($out, $indent, '}');
 
             if (defined $stmt->{else_body}) {
@@ -80,7 +119,7 @@ sub _compile_block_stage_control {
                     }
                 }
                 compile_block($stmt->{else_body}, $ctx, $out, $indent + 2, $current_fn_return);
-                pop_scope($ctx);
+                close_codegen_scope($ctx, $out, $indent + 2);
                 emit_line($out, $indent, '}');
             }
 
@@ -132,27 +171,32 @@ sub _compile_block_stage_control {
         }
 
         if ($stmt->{kind} eq 'return') {
-            my ($expr_code, $expr_type) = compile_expr($stmt->{expr}, $ctx);
+            my ($expr_code, $expr_type, $expr_prelude, $expr_temp_cleanups) = compile_expr_with_temp_scope(
+                ctx  => $ctx,
+                expr => $stmt->{expr},
+            );
+            emit_expr_temp_prelude($out, $indent, $expr_prelude);
+            my $expr_cleanup_count = push_active_temp_cleanups($ctx, $expr_temp_cleanups);
 
             if (type_is_number_or_error($current_fn_return)) {
                 if ($expr_type eq 'number') {
-                    emit_line($out, $indent, "return ok_number($expr_code);");
+                    _emit_return_stmt($ctx, $out, $indent, "ok_number($expr_code)", $current_fn_return);
                 } elsif ($expr_type eq 'indexed_number') {
                     my $num_expr = number_like_to_c_expr($expr_code, $expr_type, "return");
-                    emit_line($out, $indent, "return ok_number($num_expr);");
+                    _emit_return_stmt($ctx, $out, $indent, "ok_number($num_expr)", $current_fn_return);
                 } elsif ($expr_type eq 'error') {
-                    emit_line($out, $indent, "return $expr_code;");
+                    _emit_return_stmt($ctx, $out, $indent, $expr_code, $current_fn_return);
                 } else {
                     compile_error("return type mismatch: expected number or error for number|error function");
                 }
             } elsif (type_is_bool_or_error($current_fn_return)) {
                 if ($expr_type eq 'bool') {
-                    emit_line($out, $indent, "return ok_bool($expr_code);");
+                    _emit_return_stmt($ctx, $out, $indent, "ok_bool($expr_code)", $current_fn_return);
                 } elsif ($expr_type eq 'error') {
                     if ($stmt->{expr}{kind} eq 'call' && $stmt->{expr}{name} eq 'error') {
                         my ($msg_code, $msg_type) = compile_expr($stmt->{expr}{args}[0], $ctx);
                         compile_error("error(...) expects string message") if $msg_type ne 'string';
-                        emit_line($out, $indent, "return err_bool($msg_code, __metac_line_no, \"\");");
+                        _emit_return_stmt($ctx, $out, $indent, "err_bool($msg_code, __metac_line_no, \"\")", $current_fn_return);
                     } else {
                         compile_error("return type mismatch: bool|error function currently requires error(...) for error returns");
                     }
@@ -161,12 +205,12 @@ sub _compile_block_stage_control {
                 }
             } elsif (type_is_string_or_error($current_fn_return)) {
                 if ($expr_type eq 'string') {
-                    emit_line($out, $indent, "return ok_string_value($expr_code);");
+                    _emit_return_stmt($ctx, $out, $indent, "ok_string_value($expr_code)", $current_fn_return);
                 } elsif ($expr_type eq 'error') {
                     if ($stmt->{expr}{kind} eq 'call' && $stmt->{expr}{name} eq 'error') {
                         my ($msg_code, $msg_type) = compile_expr($stmt->{expr}{args}[0], $ctx);
                         compile_error("error(...) expects string message") if $msg_type ne 'string';
-                        emit_line($out, $indent, "return err_string_value($msg_code, __metac_line_no, \"\");");
+                        _emit_return_stmt($ctx, $out, $indent, "err_string_value($msg_code, __metac_line_no, \"\")", $current_fn_return);
                     } else {
                         compile_error("return type mismatch: string|error function currently requires error(...) for error returns");
                     }
@@ -178,31 +222,34 @@ sub _compile_block_stage_control {
                 my %allowed = map { $_ => 1 } @$members;
 
                 if ($expr_type eq $current_fn_return) {
-                    emit_line($out, $indent, "return $expr_code;");
+                    if ($stmt->{expr}{kind} eq 'ident') {
+                        consume_owned_cleanup_for_var($ctx, $stmt->{expr}{name});
+                    }
+                    _emit_return_stmt($ctx, $out, $indent, $expr_code, $current_fn_return);
                 } elsif ($expr_type eq 'number' || $expr_type eq 'indexed_number') {
                     compile_error("return type mismatch: expected $current_fn_return, got $expr_type")
                       if !$allowed{number};
                     my $num_expr = number_like_to_c_expr($expr_code, $expr_type, "return");
-                    emit_line($out, $indent, "return metac_value_number($num_expr);");
+                    _emit_return_stmt($ctx, $out, $indent, "metac_value_number($num_expr)", $current_fn_return);
                 } elsif ($expr_type eq 'bool') {
                     compile_error("return type mismatch: expected $current_fn_return, got bool")
                       if !$allowed{bool};
-                    emit_line($out, $indent, "return metac_value_bool($expr_code);");
+                    _emit_return_stmt($ctx, $out, $indent, "metac_value_bool($expr_code)", $current_fn_return);
                 } elsif ($expr_type eq 'string') {
                     compile_error("return type mismatch: expected $current_fn_return, got string")
                       if !$allowed{string};
-                    emit_line($out, $indent, "return metac_value_string($expr_code);");
+                    _emit_return_stmt($ctx, $out, $indent, "metac_value_string($expr_code)", $current_fn_return);
                 } elsif ($expr_type eq 'null') {
                     compile_error("return type mismatch: expected $current_fn_return, got null")
                       if !$allowed{null};
-                    emit_line($out, $indent, "return metac_value_null();");
+                    _emit_return_stmt($ctx, $out, $indent, "metac_value_null()", $current_fn_return);
                 } elsif ($expr_type eq 'error') {
                     compile_error("return type mismatch: expected $current_fn_return, got error")
                       if !$allowed{error};
                     if ($stmt->{expr}{kind} eq 'call' && $stmt->{expr}{name} eq 'error') {
                         my ($msg_code, $msg_type) = compile_expr($stmt->{expr}{args}[0], $ctx);
                         compile_error("error(...) expects string message") if $msg_type ne 'string';
-                        emit_line($out, $indent, "return metac_value_error($msg_code, __metac_line_no, \"\");");
+                        _emit_return_stmt($ctx, $out, $indent, "metac_value_error($msg_code, __metac_line_no, \"\")", $current_fn_return);
                     } else {
                         compile_error("generic union error return currently requires error(...) expression");
                     }
@@ -211,16 +258,17 @@ sub _compile_block_stage_control {
                 }
             } elsif ($current_fn_return eq 'number') {
                 my $num_expr = number_like_to_c_expr($expr_code, $expr_type, "return");
-                emit_line($out, $indent, "return $num_expr;");
+                _emit_return_stmt($ctx, $out, $indent, $num_expr, $current_fn_return);
             } elsif ($current_fn_return eq 'bool') {
                 compile_error("return type mismatch: expected bool return")
                   if $expr_type ne 'bool';
-                emit_line($out, $indent, "return $expr_code;");
+                _emit_return_stmt($ctx, $out, $indent, $expr_code, $current_fn_return);
             } elsif ($current_fn_return eq 'void') {
                 compile_error("return is not allowed in function with no return type");
             } else {
                 compile_error("Unsupported function return mode: $current_fn_return");
             }
+            pop_active_temp_cleanups($ctx, $expr_cleanup_count);
             return 1;
         }
 
@@ -243,8 +291,18 @@ sub _compile_block_stage_control {
                 compile_error("Method 'insert(...)' expects 2 args, got $actual")
                   if $actual != 2;
 
-                my ($value_code, $value_type) = compile_expr($expr->{args}[0], $ctx);
-                my ($coord_code, $coord_type) = compile_expr($expr->{args}[1], $ctx);
+                my ($value_code, $value_type, $value_prelude, $value_cleanups) = compile_expr_with_temp_scope(
+                    ctx  => $ctx,
+                    expr => $expr->{args}[0],
+                );
+                emit_expr_temp_prelude($out, $indent, $value_prelude);
+                my ($coord_code, $coord_type, $coord_prelude, $coord_cleanups) = compile_expr_with_temp_scope(
+                    ctx  => $ctx,
+                    expr => $expr->{args}[1],
+                );
+                emit_expr_temp_prelude($out, $indent, $coord_prelude);
+                my @insert_cleanups = (@$value_cleanups, @$coord_cleanups);
+                my $insert_cleanup_count = push_active_temp_cleanups($ctx, \@insert_cleanups);
                 compile_error("Method 'insert(...)' requires number[] coordinates, got $coord_type")
                   if $coord_type ne 'number_list';
                 compile_error("Method 'insert(...)' is fallible on unconstrained matrix; handle it with '?'")
@@ -265,11 +323,20 @@ sub _compile_block_stage_control {
                 }
 
                 emit_line($out, $indent, "$target = $insert_die($target, $value_arg, $coord_code);");
+                emit_expr_temp_cleanups($out, $indent, \@insert_cleanups);
+                pop_active_temp_cleanups($ctx, $insert_cleanup_count);
                 return 1;
             }
 
-            my ($expr_code, undef) = compile_expr($stmt->{expr}, $ctx);
+            my ($expr_code, undef, $expr_prelude, $expr_cleanups) = compile_expr_with_temp_scope(
+                ctx  => $ctx,
+                expr => $stmt->{expr},
+            );
+            emit_expr_temp_prelude($out, $indent, $expr_prelude);
+            my $expr_cleanup_count = push_active_temp_cleanups($ctx, $expr_cleanups);
             emit_line($out, $indent, "(void)($expr_code);");
+            emit_expr_temp_cleanups($out, $indent, $expr_cleanups);
+            pop_active_temp_cleanups($ctx, $expr_cleanup_count);
             return 1;
         }
 
@@ -295,8 +362,18 @@ sub _compile_block_stage_control {
                 compile_error("Method 'insert(...)' expects 2 args, got $actual")
                   if $actual != 2;
 
-                my ($value_code, $value_type) = compile_expr($expr->{args}[0], $ctx);
-                my ($coord_code, $coord_type) = compile_expr($expr->{args}[1], $ctx);
+                my ($value_code, $value_type, $value_prelude, $value_cleanups) = compile_expr_with_temp_scope(
+                    ctx  => $ctx,
+                    expr => $expr->{args}[0],
+                );
+                emit_expr_temp_prelude($out, $indent, $value_prelude);
+                my ($coord_code, $coord_type, $coord_prelude, $coord_cleanups) = compile_expr_with_temp_scope(
+                    ctx  => $ctx,
+                    expr => $expr->{args}[1],
+                );
+                emit_expr_temp_prelude($out, $indent, $coord_prelude);
+                my @insert_cleanups = (@$value_cleanups, @$coord_cleanups);
+                my $insert_cleanup_count = push_active_temp_cleanups($ctx, \@insert_cleanups);
                 compile_error("Method 'insert(...)' requires number[] coordinates, got $coord_type")
                   if $coord_type ne 'number_list';
 
@@ -319,9 +396,11 @@ sub _compile_block_stage_control {
                 my $tmp = '__metac_matrix_insert' . $ctx->{tmp_counter}++;
                 emit_line($out, $indent, "$result_type $tmp = $insert_try($target, $value_arg, $coord_code);");
                 emit_line($out, $indent, "if ($tmp.is_error) {");
-                _emit_stmt_try_failure($out, $indent + 2, $current_fn_return, "$tmp.message");
+                _emit_stmt_try_failure($ctx, $out, $indent + 2, $current_fn_return, "$tmp.message");
                 emit_line($out, $indent, "}");
                 emit_line($out, $indent, "$target = $tmp.value;");
+                emit_expr_temp_cleanups($out, $indent, \@insert_cleanups);
+                pop_active_temp_cleanups($ctx, $insert_cleanup_count);
                 return 1;
             }
 
@@ -335,7 +414,7 @@ sub _compile_block_stage_control {
             };
             new_scope($ctx);
             compile_block([ $tmp_stmt ], $ctx, $out, $indent, $current_fn_return);
-            pop_scope($ctx);
+            close_codegen_scope($ctx, $out, $indent);
             return 1;
         }
 
@@ -349,7 +428,10 @@ sub _compile_block_stage_control {
             compile_error("or catch requires fallible user function call, got '$expr->{name}'")
               if !defined($sig) || !union_contains_member($sig->{return_type}, 'error');
 
-            my $arg_code = _compile_call_args_for_sig($expr, $sig, $ctx);
+            my $arg_info = _compile_call_args_for_sig($expr, $sig, $ctx);
+            emit_expr_temp_prelude($out, $indent, $arg_info->{prelude});
+            my $arg_cleanup_count = push_active_temp_cleanups($ctx, $arg_info->{cleanups});
+            my $arg_code = $arg_info->{arg_code};
             my $return_type = $sig->{return_type};
             my $tmp = '__metac_or_stmt' . $ctx->{tmp_counter}++;
 
@@ -366,6 +448,8 @@ sub _compile_block_stage_control {
                     message_expr      => "$tmp.message",
                 );
                 emit_line($out, $indent, "}");
+                emit_expr_temp_cleanups($out, $indent, $arg_info->{cleanups});
+                pop_active_temp_cleanups($ctx, $arg_cleanup_count);
                 return 1;
             }
             if (type_is_bool_or_error($return_type)) {
@@ -381,6 +465,8 @@ sub _compile_block_stage_control {
                     message_expr      => "$tmp.message",
                 );
                 emit_line($out, $indent, "}");
+                emit_expr_temp_cleanups($out, $indent, $arg_info->{cleanups});
+                pop_active_temp_cleanups($ctx, $arg_cleanup_count);
                 return 1;
             }
             if (type_is_string_or_error($return_type)) {
@@ -396,6 +482,8 @@ sub _compile_block_stage_control {
                     message_expr      => "$tmp.message",
                 );
                 emit_line($out, $indent, "}");
+                emit_expr_temp_cleanups($out, $indent, $arg_info->{cleanups});
+                pop_active_temp_cleanups($ctx, $arg_cleanup_count);
                 return 1;
             }
             if (is_supported_generic_union_return($return_type)) {
@@ -411,6 +499,8 @@ sub _compile_block_stage_control {
                     message_expr      => "$tmp.error_message",
                 );
                 emit_line($out, $indent, "}");
+                emit_expr_temp_cleanups($out, $indent, $arg_info->{cleanups});
+                pop_active_temp_cleanups($ctx, $arg_cleanup_count);
                 return 1;
             }
             compile_error("Unsupported fallible return type '$return_type' for '$expr->{name}'");

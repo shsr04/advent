@@ -100,7 +100,7 @@ sub compile_expr_method_call {
         return ("metac_chars_string($recv_code)", 'string_list');
     }
 
-    if (($recv_type eq 'string_list' || $recv_type eq 'number_list' || $recv_type eq 'bool_list' || $recv_type eq 'indexed_number_list')
+    if (($recv_type eq 'string_list' || $recv_type eq 'number_list' || $recv_type eq 'number_list_list' || $recv_type eq 'bool_list' || $recv_type eq 'indexed_number_list')
         && ($method eq 'size' || $method eq 'count'))
     {
         compile_error("Method '$method()' expects 0 args, got $actual")
@@ -232,7 +232,7 @@ sub compile_expr_method_call {
         }
     }
 
-    if (($recv_type eq 'number_list' || $recv_type eq 'string_list' || $recv_type eq 'bool_list') && $method eq 'push') {
+    if (($recv_type eq 'number_list' || $recv_type eq 'number_list_list' || $recv_type eq 'string_list' || $recv_type eq 'bool_list') && $method eq 'push') {
         compile_error("Method 'push(...)' expects 1 arg, got $actual")
           if $actual != 1;
         compile_error("Method 'push(...)' receiver must be a mutable list variable")
@@ -247,6 +247,13 @@ sub compile_expr_method_call {
             my ($arg_code, $arg_type) = compile_expr($expr->{args}[0], $ctx);
             my $arg_num = number_like_to_c_expr($arg_code, $arg_type, "Method 'push(...)'");
             return ("metac_number_list_push(&$recv_info->{c_name}, $arg_num)", 'number');
+        }
+
+        if ($recv_type eq 'number_list_list') {
+            my ($arg_code, $arg_type) = compile_expr($expr->{args}[0], $ctx);
+            compile_error("Method 'push(...)' on number-list-list expects number[] arg, got $arg_type")
+              if $arg_type ne 'number_list';
+            return ("metac_number_list_list_push(&$recv_info->{c_name}, $arg_code)", 'number');
         }
 
         if ($recv_type eq 'bool_list') {

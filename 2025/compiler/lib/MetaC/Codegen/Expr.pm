@@ -41,6 +41,17 @@ sub _compile_union_scalar_comparison {
     return $op eq '==' ? $match_code : "(!($match_code))";
 }
 
+sub _is_empty_list_comparable_type {
+    my ($type) = @_;
+    return 1 if $type eq 'string_list';
+    return 1 if $type eq 'number_list';
+    return 1 if $type eq 'number_list_list';
+    return 1 if $type eq 'bool_list';
+    return 1 if $type eq 'indexed_number_list';
+    return 1 if is_matrix_member_list_type($type);
+    return 0;
+}
+
 sub compile_expr {
     my ($expr, $ctx) = @_;
 
@@ -109,7 +120,12 @@ sub compile_expr {
         my ($recv_code, $recv_type) = compile_expr($expr->{recv}, $ctx);
         my $method = $expr->{method};
         my $actual = scalar @{ $expr->{args} };
-        return compile_expr_method_call($expr, $ctx, $recv_code, $recv_type, $method, $actual);
+        my ($method_code, $method_type) = compile_expr_method_call($expr, $ctx, $recv_code, $recv_type, $method, $actual);
+        return maybe_materialize_owned_expr_result(
+            ctx       => $ctx,
+            expr_code => $method_code,
+            expr_type => $method_type,
+        );
     }
     if ($expr->{kind} eq 'call') {
         if ($expr->{name} eq 'error') {
@@ -335,6 +351,17 @@ sub compile_expr {
                 my $num_type = $l_type eq 'number_or_null' ? $r_type : $l_type;
                 my $num_code = number_like_to_c_expr($num_code_raw, $num_type, "Operator '$op'");
                 my $cmp = "(!($nullable_code).is_null && ($nullable_code).value == $num_code)";
+                return ($cmp, 'bool') if $op eq '==';
+                return ("(!($cmp))", 'bool');
+            }
+            if ($l_type eq 'empty_list' && $r_type eq 'empty_list') {
+                return ($op eq '==' ? '1' : '0', 'bool');
+            }
+            if (($l_type eq 'empty_list' && _is_empty_list_comparable_type($r_type))
+                || ($r_type eq 'empty_list' && _is_empty_list_comparable_type($l_type)))
+            {
+                my $list_code = $l_type eq 'empty_list' ? $r_code : $l_code;
+                my $cmp = "(($list_code).count == 0)";
                 return ($cmp, 'bool') if $op eq '==';
                 return ("(!($cmp))", 'bool');
             }

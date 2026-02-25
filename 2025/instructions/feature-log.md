@@ -58,6 +58,7 @@ Track all language features here. Add items as we iterate.
 44. `F-044` Normative conformance harness + implementation-percentage gate - `draft`
 45. `F-045` Optional extension: effect-system abstraction for fallibility - `draft`
 46. `F-046` Loop rewind statement (`rewind`) for iterable recomputation - `implemented`
+47. `F-047` Compiler architecture split (`parser -> IR -> correctness gates -> codegen`) - `draft`
 
 ## Feature Record Template
 
@@ -413,3 +414,40 @@ Use this block for each feature:
 - Key guarantees: `rewind` restarts the current loop statement from its beginning; for `for-in` loops this recomputes the iterable and loop variable sequence against current outer state.
 - Blocking questions: whether future normative scope should include/exclude `rewind` in all loop kinds or constrain it to `for-in` only.
 - Notes/evidence: parser support added for `rewind` statements in `compiler/lib/MetaC/Parser/BlockParse.pm`; loop restart lowering added via per-loop rewind labels in `compiler/lib/MetaC/Codegen/Compile.pm`, `compiler/lib/MetaC/Codegen/ProofIter.pm`, and `compiler/lib/MetaC/Codegen/BlockStageAssignLoops.pm`; misuse diagnostic covered by `compiler/tests/cases/diagnostic_rewind_outside_loop.metac`; iterable recomputation behavior covered by `compiler/tests/cases/rewind_recomputes_iterable.metac`; full suite green (`97 passed, 0 failed`).
+
+### F-047 `Compiler Architecture Split: Parser -> IR -> Correctness Gates -> Codegen`
+- Status: draft
+- Spec file: `instructions/normative-f047-compiler-architecture-split.md` (planned)
+- Correctness classes: C0/C1/C2/C3/C4
+- Key guarantees:
+  - introduce a typed, explicit IR as the only input to backend code generation; parser/AST nodes must not be lowered directly to C.
+  - make control flow explicit in IR (`block`, `branch`, `loop`, `break`, `continue`, `rewind`, `return`, error-propagation edges), so every edge is machine-checkable before emission.
+  - model ownership/resources in IR (owned values, borrows, move/copy rules, cleanup ops) and require proof that every allocation has a matching cleanup across all exits and back-edges.
+  - enforce correctness gates as hard blockers before C emission:
+    - `Gate-CFG`: structurally valid CFG with resolved targets and dominance/post-dominance invariants.
+    - `Gate-Type`: IR-level type/effect consistency, including union narrowing and fallibility flow.
+    - `Gate-Ownership`: no use-after-free, no double-free, and no leak on any reachable path.
+    - `Gate-Lowering`: deterministic IR->C mapping with reproducible output for identical IR.
+    - `Gate-Traceability`: every accepted guarantee maps to check IDs + tests.
+  - standardize compiler phase contracts:
+    - parser outputs canonical AST with source spans.
+    - AST->IR lowering carries provenance metadata (`source span`, `type facts`, `constraint facts`, `effect facts`).
+    - codegen accepts only verified IR; unverified IR must be rejected.
+  - provide explainable failure output: diagnostics must cite failing gate/check and the originating source span.
+- Blocking questions:
+  - IR shape strategy: single SSA-like IR vs staged HIR/MIR split.
+  - ownership representation granularity: explicit `retain/release` ops vs inferred cleanup regions with proof annotations.
+  - migration policy: feature-freeze during migration vs compatibility shim that allows old lowering for a bounded transition window.
+  - proof tooling depth for first release: custom dataflow checks only vs SMT-backed obligations for selected gates.
+- Notes/evidence:
+  - Motivation: direct AST->C lowering has exposed correctness-risk regressions in control-flow/ownership interactions; this feature institutionalizes gate-based prevention.
+  - Initial implementation plan:
+    - Phase 1: introduce minimal IR for statements/control flow and function signatures; keep existing expression lowering as wrapped intrinsics.
+    - Phase 2: move ownership semantics and fallibility flow into IR + add gate checks.
+    - Phase 3: require verified IR before codegen; retire direct-lowering paths.
+    - Phase 4: enable conformance reporting (gate pass/fail matrix + requirement trace links).
+  - Required verification artifacts:
+    - adversarial CFG tests (loop back-edges, rewind, nested handlers, early returns).
+    - ownership stress tests proving alloc/free pairing on all paths.
+    - deterministic-codegen snapshots from normalized IR inputs.
+    - migration parity suite: old vs new pipeline output/behavior equivalence where guarantees overlap.

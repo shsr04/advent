@@ -151,9 +151,11 @@ sub _normalize_single_type {
     $t = _strip_outer_parens($t);
     $t =~ s/\s+//g;
 
+    return 'number' if $t eq 'int';
     return 'bool' if $t eq 'boolean';
     return 'bool_list' if $t eq 'bool[]' || $t eq 'boolean[]';
-    return 'number_list' if $t eq 'number[]';
+    return 'number_list' if $t eq 'number[]' || $t eq 'int[]';
+    return 'number_list_list' if $t eq 'number[][]' || $t eq 'int[][]';
     return 'string_list' if $t eq 'string[]';
     if ($t =~ /^matrix\((number|string)\)$/) {
         return _build_matrix_type(elem => $1, dim => 2, sizes => undef);
