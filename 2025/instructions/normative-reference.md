@@ -83,7 +83,7 @@ A function *is* a named block of executable statements.
 
 The program execution begins at the function `main(): int`. The return value of `main` determines the exit code of the program.
 
-When a function does not specify a return type, it returns no value. The exception is `main`, which implicitly returns `number`.
+When a function does not specify a return type, it returns no value. The exception is `main`, which implicitly returns `int`.
 A function without a return type *can* use the `return` statement to exit early.
 A function with a return type *must* return a conformant value in all of its execution paths.
 
@@ -104,7 +104,7 @@ The available types *are*:
   - Operations: logical + comparison
 - `string`
   - Domain: all UTF-8 character sequences
-  - Operations: sequence-based + character-specific + comparison
+  - Operations: sequence-based + lexical + comparison
 - `error`
   - Domain: error objects with `{ message: string }`
   - Operations: access `message`
@@ -221,6 +221,8 @@ The program must not use error propagation if the enclosing function has a non-`
 
 The program must not perform invalid operations, as *specified* in this section.
 
+The program must not produce a runtime error for operations which are not explicitly marked as fallible by having an `error`-containing return type.
+
 ### 5.1 Comparison operations
 
 A comparison operation *can* only occur between two operands which share at least one basic type. Two operands are equal if they contain exactly the same values. Otherwise, they are not equal.
@@ -244,3 +246,55 @@ The program must:
 - use floating-point division where both operands are of type `float`
 - use integer division where both operands are of type `int`
 - not use division in any other case
+
+### 5.3 Logical operations
+
+A logical operation can only be applied to expressions of `boolean` type.
+
+The evaluation order is from left to right. If an operand has been evaluated such that the other part of the logical operation is unreachable, the program must short-circuit and skip evaluation of the other part.
+
+### 5.4 Sequence-based operations
+
+The following operations are available on sequence-based types `S: <type>[]`:
+- `S[<index-expr: number>]: <type> [| error]`
+  - Returns the element at `<index-expr>`.
+  - Fallible: exactly if `S` has no constraint determining its size, therefore making `<index-expr>` possibly out of bounds.
+- `<type>.index(): number`
+  - Returns the index of the element originating from a sequence.
+  - This operation is not available if the value cannot be traced back to a source sequence.
+- `S.map(<mapper>): S [| error]`
+  - Returns the sequence, where each element `x` has been replaced by the result of `<mapper>(x)`.
+  - Fallible: exactly if `<mapper>` is fallible.
+- `S.filter(<filter>): S [| error]`
+  - Returns the sequence, where an element `x` is dropped exactly if `<filter>(x) == false`.
+  - Fallible: exactly if `<filter>` is fallible.
+- `<target>.reduce(<initial: T>, <reducer>): <result: T> [| error]`
+  - Returns the result, obtained by applying `<reducer>` to each of the elements and accumulating them into a single value. The initial value is given by `<initial>`.
+  - Fallible: exactly if `<reducer>` is fallible.
+- ...
+
+### 5.5 Lexical operations
+
+The following operations are available on character sequences `S: string`:
+- `S.chars(): string[]`
+  - Returns the UTF-8 characters of the string.
+- `S.match(<regex>): string[] | error`
+  - Returns the list of captured values of the matched Regular Expression. If no capture groups are given, returns a single-element list of the entire matched string.
+  - Fallible: fails when the supplied RegEx is invalid.
+- `S.split(<delimiter: string>): string[]`
+  - Returns the parts of the string, obtained by splitting at `<delimiter>`.
+- `S.isBlank(): boolean`
+  - Returns true exactly if the string consists entirely of whitespace.
+
+### 5.6 Matrix operations
+
+The following operations are available on matrix types `M: matrix(<type>) with dim(<dim>) + matrixSize(<sizes>)`:
+- `M.members(): <type>[] with size(<sum(sizes)>)`
+  - Returns the members in sequential order, iterating over the highest dimension first, then incrementing the second-highest, and so on.
+- `<type>.neighbours(): <type>[]`
+  - Returns the neighbours of the given member.
+  - This operation is not available if the member cannot be traced back to a source matrix.
+- `<type>.index(): number[] with size(<dim>)`
+  - Returns the coordinates of the member.
+  - This operation is not available if the member cannot be traced back to a source matrix.
+

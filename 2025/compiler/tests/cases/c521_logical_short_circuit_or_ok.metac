@@ -1,0 +1,11 @@
+function rhs(): boolean {
+  log("rhs")
+  return false
+}
+
+function main(): number {
+  if true || rhs() {
+    log("ok")
+  }
+  return 0
+}

@@ -408,9 +408,18 @@ sub compile_expr_method_call {
         }
 
         my ($arg_code, $arg_type) = compile_expr($expr->{args}[0], $ctx);
-        compile_error("Method 'push(...)' on string list expects string arg, got $arg_type")
-          if $arg_type ne 'string';
-        return ("metac_string_list_push(&$recv_info->{c_name}, $arg_code)", 'number');
+        my $arg_str = $arg_code;
+        if ($arg_type eq 'string') {
+            # pass-through
+        } elsif (is_matrix_member_type($arg_type)) {
+            my $meta = matrix_member_meta($arg_type);
+            compile_error("Method 'push(...)' on string list expects string arg, got $arg_type")
+              if $meta->{elem} ne 'string';
+            $arg_str = "(($arg_code).value)";
+        } else {
+            compile_error("Method 'push(...)' on string list expects string arg, got $arg_type");
+        }
+        return ("metac_string_list_push(&$recv_info->{c_name}, $arg_str)", 'number');
     }
 
     compile_error("Unsupported method call '$method' on type '$recv_type'");

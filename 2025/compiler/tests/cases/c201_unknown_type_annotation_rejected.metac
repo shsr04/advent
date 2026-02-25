@@ -1,0 +1,4 @@
+function main(): number {
+  let x: mystery = 0
+  return x
+}

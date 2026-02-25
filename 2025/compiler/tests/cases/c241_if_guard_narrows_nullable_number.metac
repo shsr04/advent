@@ -1,0 +1,7 @@
+function main(): number {
+  const n: number | null = 1
+  if n == null {
+    return 0
+  }
+  return n + 1
+}

@@ -1,0 +1,13 @@
+function mk(flag: boolean): matrix(boolean) {
+  const g: matrix(boolean) = []
+  return g
+}
+
+function consume(grid: matrix(boolean)): number {
+  return 0
+}
+
+function main(): number {
+  const g: matrix(boolean) = mk(true)
+  return consume(g)
+}

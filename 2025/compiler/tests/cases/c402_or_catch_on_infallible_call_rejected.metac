@@ -1,0 +1,10 @@
+function foo(): number {
+  return 1
+}
+
+function main(): number {
+  const y = foo() or catch(e) {
+    return 0
+  }
+  return y
+}

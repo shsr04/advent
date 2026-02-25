@@ -138,6 +138,22 @@ sub expr_fact_key {
     compile_error("Unsupported expression in arity analysis: $expr->{kind}");
 }
 
+sub static_list_len_fact_from_expr {
+    my ($expr, $ctx) = @_;
+    return undef if ($expr->{kind} // '') ne 'method_call';
+    return undef if ($expr->{method} // '') ne 'index';
+    return undef if scalar(@{ $expr->{args} // [] }) != 0;
+    return undef if ($expr->{recv}{kind} // '') ne 'ident';
+
+    my $recv_info = lookup_var($ctx, $expr->{recv}{name});
+    return undef if !defined $recv_info;
+    return undef if !is_matrix_member_type($recv_info->{type});
+
+    my $meta = matrix_member_meta($recv_info->{type});
+    return undef if !defined $meta || !defined $meta->{dim};
+    return int($meta->{dim});
+}
+
 
 sub is_size_call_expr {
     my ($expr) = @_;

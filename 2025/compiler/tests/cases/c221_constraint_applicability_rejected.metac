@@ -1,0 +1,4 @@
+function main(): number {
+  let n: number with size(1) = 0
+  return n
+}

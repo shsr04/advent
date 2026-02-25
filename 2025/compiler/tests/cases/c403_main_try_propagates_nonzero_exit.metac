@@ -1,0 +1,8 @@
+function fail(): number | error {
+  return error("bad")
+}
+
+function main(): number {
+  fail()?
+  return 0
+}

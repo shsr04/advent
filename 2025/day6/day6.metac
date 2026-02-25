@@ -16,13 +16,18 @@ function sumProblems(): number|error {
     }
   }
   
-  for const cell in grid.members() {
-    cell.index().log()
-  }
+  extractColumn(grid,0).log()
   
   return sum
 }
 
 function extractColumn(grid: matrix(string) with dim(2), column: number): string[] {
-  // ...
+  let extracted: string[] = []
+  for const cell in grid.members() {
+    const [row,col] = cell.index()
+    if col == column {
+      extracted.push(cell)
+    }
+  }
+  return extracted
 }

@@ -1,0 +1,5 @@
+function main(): number {
+  let n: number with range(0, 10) = 5
+  let m: number = n
+  return m
+}

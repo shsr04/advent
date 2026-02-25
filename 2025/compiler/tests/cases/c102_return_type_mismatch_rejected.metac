@@ -1,0 +1,7 @@
+function bad(): string {
+  return 1
+}
+
+function main(): number {
+  return 0
+}

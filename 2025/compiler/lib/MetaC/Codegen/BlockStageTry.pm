@@ -94,10 +94,13 @@ sub _compile_block_stage_try {
               if $expr_type ne 'string_list' && $expr_type ne 'number_list' && $expr_type ne 'bool_list';
 
             my $expected = scalar @{ $stmt->{vars} };
-            compile_error("Cannot prove destructuring arity of $expected for a non-stable expression")
-              if !expr_is_stable_for_facts($stmt->{expr}, $ctx);
-            my $proof_key = expr_fact_key($stmt->{expr}, $ctx);
-            my $known_len = lookup_list_len_fact($ctx, $proof_key);
+            my $known_len = static_list_len_fact_from_expr($stmt->{expr}, $ctx);
+            if (!defined $known_len) {
+                compile_error("Cannot prove destructuring arity of $expected for a non-stable expression")
+                  if !expr_is_stable_for_facts($stmt->{expr}, $ctx);
+                my $proof_key = expr_fact_key($stmt->{expr}, $ctx);
+                $known_len = lookup_list_len_fact($ctx, $proof_key);
+            }
             compile_error("Cannot prove destructuring arity of $expected for this expression; add a guard like: if <expr>.size() != $expected { return ... }")
               if !defined $known_len;
             compile_error("Destructuring arity mismatch: expected $expected, but proven size is $known_len")

@@ -1,0 +1,22 @@
+function main() {
+  const result = run()?
+  log("Result: ${result}")
+}
+
+function run(): number | error {
+  let grid: matrix(string) with dim(2), matrixSize([2, 2]) = []
+  grid.insert("a", [0, 0])
+  grid.insert("bc", [0, 1])
+
+  let extracted: string[] = []
+  for const cell in grid.members() {
+    extracted.push(cell)
+  }
+
+  const stable = extracted
+  if stable.size() != 2 {
+    return error("unexpected extracted size")
+  }
+  const [x, y] = stable
+  return x.size() + y.size()
+}
