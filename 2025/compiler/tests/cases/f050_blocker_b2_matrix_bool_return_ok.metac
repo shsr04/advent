@@ -1,0 +1,9 @@
+function mk(flag: boolean): matrix(boolean) {
+  const g: matrix(boolean) = []
+  return g
+}
+
+function main(): number {
+  const x: matrix(boolean) = mk(true)
+  return 0
+}

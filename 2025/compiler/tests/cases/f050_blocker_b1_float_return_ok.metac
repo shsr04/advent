@@ -1,0 +1,7 @@
+function bounce(x: float): float {
+  return x
+}
+
+function main(): number {
+  return bounce(0)
+}

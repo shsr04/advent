@@ -41,6 +41,7 @@ sub _runtime_memory_policies {
         metac_matrix_number_members           => { mode => 'owned_return', cleanup => 'metac_free_matrix_number_member_list' },
         metac_matrix_number_neighbours        => { mode => 'owned_return', cleanup => 'metac_free_number_list' },
         metac_matrix_string_new               => { mode => 'owned_return', cleanup => 'metac_free_matrix_string' },
+        metac_matrix_opaque_new               => { mode => 'owned_return', cleanup => 'metac_free_matrix_opaque' },
         metac_matrix_string_ensure_capacity   => { mode => 'mutates_owner' },
         metac_matrix_string_insert_try        => { mode => 'mutates_owner' },
         metac_matrix_string_members           => { mode => 'owned_return', cleanup => 'metac_free_matrix_string_member_list' },
@@ -251,6 +252,21 @@ sub _validate_consumer_owned_lifetimes {
                 $split_src_to_alias{$src} = $alias;
             }
 
+            # Track simple ownership moves across identifier assignment.
+            my ($dst, $src);
+            if ($line =~ /^\s*(?:const\s+)?[A-Za-z_][A-Za-z0-9_\s\*]*\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([A-Za-z_][A-Za-z0-9_]*)\s*;\s*$/) {
+                ($dst, $src) = ($1, $2);
+            } elsif ($line =~ /^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([A-Za-z_][A-Za-z0-9_]*)\s*;\s*$/) {
+                ($dst, $src) = ($1, $2);
+            }
+            if (defined($dst) && defined($src)
+                && $dst ne $src
+                && $dst =~ /^__metac_return\d+$/
+                && exists $state{$src})
+            {
+                $state{$dst} = delete $state{$src};
+            }
+
             for my $var (keys %state) {
                 my $cleanup = $state{$var}{cleanup};
                 my $cleanup_re = $cleanup eq 'free'
@@ -267,6 +283,11 @@ sub _validate_consumer_owned_lifetimes {
                         next;
                     }
                 }
+            }
+
+            if ($line =~ /\breturn\s+([A-Za-z_][A-Za-z0-9_]*)\s*;/) {
+                my $ret_var = $1;
+                delete $state{$ret_var} if exists $state{$ret_var};
             }
 
             my @next = @{ $succ[$i] // [] };

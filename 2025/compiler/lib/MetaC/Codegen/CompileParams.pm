@@ -104,6 +104,29 @@ sub emit_param_bindings {
             next;
         }
 
+        if (is_array_type($param->{type})) {
+            emit_line($out, $indent, "const AnyList $name = $in_name;");
+            emit_size_constraint_check(
+                ctx         => $ctx,
+                constraints => $constraints,
+                target_expr => $name,
+                target_type => $param->{type},
+                out         => $out,
+                indent      => $indent,
+                where       => "parameter '$name'",
+            );
+            declare_var(
+                $ctx,
+                $name,
+                {
+                    type      => $param->{type},
+                    immutable => 1,
+                    c_name    => $name,
+                }
+            );
+            next;
+        }
+
         if (is_supported_generic_union_return($param->{type})) {
             emit_line($out, $indent, "const MetaCValue $name = $in_name;");
             declare_var(
@@ -125,7 +148,7 @@ sub emit_param_bindings {
             } elsif ($meta->{elem} eq 'string') {
                 emit_line($out, $indent, "const MatrixString $name = $in_name;");
             } else {
-                compile_error("Unsupported matrix parameter element type '$meta->{elem}'");
+                emit_line($out, $indent, "const MatrixOpaque $name = $in_name;");
             }
             declare_var(
                 $ctx,

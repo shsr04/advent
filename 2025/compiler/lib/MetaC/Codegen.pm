@@ -55,6 +55,7 @@ use MetaC::TypeSpec qw(
     non_error_member_of_error_union
     type_without_union_member
     is_matrix_type
+    is_array_type
     matrix_type_meta
     matrix_member_type
     matrix_member_list_type

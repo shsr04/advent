@@ -1,0 +1,8 @@
+function f(): (string with size(5))[] | error {
+  return [1, 2]
+}
+
+function main(): number {
+  const _ = f()?
+  return 0
+}

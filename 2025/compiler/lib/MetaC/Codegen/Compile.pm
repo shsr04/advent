@@ -287,10 +287,6 @@ sub emit_function_prototypes {
             push @out, "static ResultNumber $name($sig_params);";
             next;
         }
-        if ($fn->{return_type} eq 'number') {
-            push @out, "static int64_t $name($sig_params);";
-            next;
-        }
         if (type_is_bool_or_error($fn->{return_type})) {
             push @out, "static ResultBool $name($sig_params);";
             next;
@@ -299,16 +295,55 @@ sub emit_function_prototypes {
             push @out, "static ResultStringValue $name($sig_params);";
             next;
         }
-        if (is_supported_generic_union_return($fn->{return_type})) {
+        if (is_union_type($fn->{return_type}) && is_supported_generic_union_return($fn->{return_type})) {
             push @out, "static MetaCValue $name($sig_params);";
+            next;
+        }
+        if (type_is_number_or_error($fn->{return_type})) {
+            push @out, "static ResultNumber $name($sig_params);";
+            next;
+        }
+        if ($fn->{return_type} eq 'number') {
+            push @out, "static int64_t $name($sig_params);";
             next;
         }
         if ($fn->{return_type} eq 'bool') {
             push @out, "static int $name($sig_params);";
             next;
         }
-        if (type_is_number_or_error($fn->{return_type})) {
-            push @out, "static ResultNumber $name($sig_params);";
+        if ($fn->{return_type} eq 'string') {
+            push @out, "static const char *$name($sig_params);";
+            next;
+        }
+        if ($fn->{return_type} eq 'number_or_null') {
+            push @out, "static NullableNumber $name($sig_params);";
+            next;
+        }
+        if ($fn->{return_type} eq 'number_list') {
+            push @out, "static NumberList $name($sig_params);";
+            next;
+        }
+        if ($fn->{return_type} eq 'number_list_list') {
+            push @out, "static NumberListList $name($sig_params);";
+            next;
+        }
+        if ($fn->{return_type} eq 'string_list') {
+            push @out, "static StringList $name($sig_params);";
+            next;
+        }
+        if ($fn->{return_type} eq 'bool_list') {
+            push @out, "static BoolList $name($sig_params);";
+            next;
+        }
+        if (is_array_type($fn->{return_type})) {
+            push @out, "static AnyList $name($sig_params);";
+            next;
+        }
+        if (is_matrix_type($fn->{return_type})) {
+            my $meta = matrix_type_meta($fn->{return_type});
+            push @out, "static MatrixNumber $name($sig_params);" if $meta->{elem} eq 'number';
+            push @out, "static MatrixString $name($sig_params);" if $meta->{elem} eq 'string';
+            push @out, "static MatrixOpaque $name($sig_params);" if $meta->{elem} ne 'number' && $meta->{elem} ne 'string';
             next;
         }
         compile_error("Unsupported function return type for '$name': $fn->{return_type}");

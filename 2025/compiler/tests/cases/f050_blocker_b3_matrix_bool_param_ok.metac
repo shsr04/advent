@@ -1,0 +1,8 @@
+function consume(grid: matrix(boolean)): number {
+  return 0
+}
+
+function main(): number {
+  const g: matrix(boolean) = []
+  return consume(g)
+}

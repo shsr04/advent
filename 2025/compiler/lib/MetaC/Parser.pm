@@ -21,6 +21,7 @@ use MetaC::TypeSpec qw(
     union_member_types
     apply_matrix_constraints
     is_matrix_type
+    is_array_type
 );
 
 our @EXPORT_OK = qw(

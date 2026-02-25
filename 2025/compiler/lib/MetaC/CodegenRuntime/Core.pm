@@ -78,6 +78,14 @@ static MetaCValue metac_value_number(int64_t value) {
   out.bool_value = 0;
   out.string_value[0] = '\0';
   out.error_message[0] = '\0';
+  out.number_list_value = (NumberList){0, NULL};
+  out.number_list_list_value = (NumberListList){0, NULL};
+  out.string_list_value = (StringList){0, NULL};
+  out.bool_list_value = (BoolList){0, NULL};
+  out.any_list_value = (AnyList){0, NULL};
+  out.matrix_number_value = (MatrixNumber){0, 0, NULL, 0, 0, NULL, NULL};
+  out.matrix_string_value = (MatrixString){0, 0, NULL, 0, 0, NULL, NULL};
+  out.matrix_opaque_value = (MatrixOpaque){0, 0, NULL, 0, 0, NULL, NULL};
   return out;
 }
 
@@ -88,6 +96,14 @@ static MetaCValue metac_value_bool(int value) {
   out.bool_value = value ? 1 : 0;
   out.string_value[0] = '\0';
   out.error_message[0] = '\0';
+  out.number_list_value = (NumberList){0, NULL};
+  out.number_list_list_value = (NumberListList){0, NULL};
+  out.string_list_value = (StringList){0, NULL};
+  out.bool_list_value = (BoolList){0, NULL};
+  out.any_list_value = (AnyList){0, NULL};
+  out.matrix_number_value = (MatrixNumber){0, 0, NULL, 0, 0, NULL, NULL};
+  out.matrix_string_value = (MatrixString){0, 0, NULL, 0, 0, NULL, NULL};
+  out.matrix_opaque_value = (MatrixOpaque){0, 0, NULL, 0, 0, NULL, NULL};
   return out;
 }
 
@@ -100,6 +116,14 @@ static MetaCValue metac_value_string(const char *value) {
   strncpy(out.string_value, src, sizeof(out.string_value) - 1);
   out.string_value[sizeof(out.string_value) - 1] = '\0';
   out.error_message[0] = '\0';
+  out.number_list_value = (NumberList){0, NULL};
+  out.number_list_list_value = (NumberListList){0, NULL};
+  out.string_list_value = (StringList){0, NULL};
+  out.bool_list_value = (BoolList){0, NULL};
+  out.any_list_value = (AnyList){0, NULL};
+  out.matrix_number_value = (MatrixNumber){0, 0, NULL, 0, 0, NULL, NULL};
+  out.matrix_string_value = (MatrixString){0, 0, NULL, 0, 0, NULL, NULL};
+  out.matrix_opaque_value = (MatrixOpaque){0, 0, NULL, 0, 0, NULL, NULL};
   return out;
 }
 
@@ -110,6 +134,14 @@ static MetaCValue metac_value_null(void) {
   out.bool_value = 0;
   out.string_value[0] = '\0';
   out.error_message[0] = '\0';
+  out.number_list_value = (NumberList){0, NULL};
+  out.number_list_list_value = (NumberListList){0, NULL};
+  out.string_list_value = (StringList){0, NULL};
+  out.bool_list_value = (BoolList){0, NULL};
+  out.any_list_value = (AnyList){0, NULL};
+  out.matrix_number_value = (MatrixNumber){0, 0, NULL, 0, 0, NULL, NULL};
+  out.matrix_string_value = (MatrixString){0, 0, NULL, 0, 0, NULL, NULL};
+  out.matrix_opaque_value = (MatrixOpaque){0, 0, NULL, 0, 0, NULL, NULL};
   return out;
 }
 
@@ -120,6 +152,70 @@ static MetaCValue metac_value_error(const char *message, int line_no, const char
   out.bool_value = 0;
   out.string_value[0] = '\0';
   snprintf(out.error_message, sizeof(out.error_message), "%s (line %d: %s)", message, line_no, line_text);
+  out.number_list_value = (NumberList){0, NULL};
+  out.number_list_list_value = (NumberListList){0, NULL};
+  out.string_list_value = (StringList){0, NULL};
+  out.bool_list_value = (BoolList){0, NULL};
+  out.any_list_value = (AnyList){0, NULL};
+  out.matrix_number_value = (MatrixNumber){0, 0, NULL, 0, 0, NULL, NULL};
+  out.matrix_string_value = (MatrixString){0, 0, NULL, 0, 0, NULL, NULL};
+  out.matrix_opaque_value = (MatrixOpaque){0, 0, NULL, 0, 0, NULL, NULL};
+  return out;
+}
+
+static MetaCValue metac_value_number_list(NumberList value) {
+  MetaCValue out = metac_value_null();
+  out.kind = METAC_VALUE_NUMBER_LIST;
+  out.number_list_value = value;
+  return out;
+}
+
+static MetaCValue metac_value_number_list_list(NumberListList value) {
+  MetaCValue out = metac_value_null();
+  out.kind = METAC_VALUE_NUMBER_LIST_LIST;
+  out.number_list_list_value = value;
+  return out;
+}
+
+static MetaCValue metac_value_string_list(StringList value) {
+  MetaCValue out = metac_value_null();
+  out.kind = METAC_VALUE_STRING_LIST;
+  out.string_list_value = value;
+  return out;
+}
+
+static MetaCValue metac_value_bool_list(BoolList value) {
+  MetaCValue out = metac_value_null();
+  out.kind = METAC_VALUE_BOOL_LIST;
+  out.bool_list_value = value;
+  return out;
+}
+
+static MetaCValue metac_value_any_list(AnyList value) {
+  MetaCValue out = metac_value_null();
+  out.kind = METAC_VALUE_ANY_LIST;
+  out.any_list_value = value;
+  return out;
+}
+
+static MetaCValue metac_value_matrix_number(MatrixNumber value) {
+  MetaCValue out = metac_value_null();
+  out.kind = METAC_VALUE_MATRIX_NUMBER;
+  out.matrix_number_value = value;
+  return out;
+}
+
+static MetaCValue metac_value_matrix_string(MatrixString value) {
+  MetaCValue out = metac_value_null();
+  out.kind = METAC_VALUE_MATRIX_STRING;
+  out.matrix_string_value = value;
+  return out;
+}
+
+static MetaCValue metac_value_matrix_opaque(MatrixOpaque value) {
+  MetaCValue out = metac_value_null();
+  out.kind = METAC_VALUE_MATRIX_OPAQUE;
+  out.matrix_opaque_value = value;
   return out;
 }
 
@@ -258,6 +354,10 @@ static void metac_free_bool_list(BoolList list) {
   free(list.items);
 }
 
+static void metac_free_any_list(AnyList list) {
+  free(list.items);
+}
+
 static void metac_free_indexed_number_list(IndexedNumberList list) {
   free(list.items);
 }
@@ -333,6 +433,82 @@ static void metac_free_matrix_string(MatrixString *matrix) {
   matrix->entry_count = 0;
   matrix->entry_cap = 0;
   matrix->has_size_spec = 0;
+}
+
+static MatrixOpaque metac_matrix_opaque_new(int64_t dimensions, const int64_t *size_spec) {
+  MatrixOpaque out;
+  out.dimensions = dimensions;
+  out.has_size_spec = 0;
+  out.size_spec = NULL;
+  out.entry_count = 0;
+  out.entry_cap = 0;
+  out.coords = NULL;
+  out.values = NULL;
+  if (size_spec == NULL || dimensions <= 0) {
+    return out;
+  }
+  out.size_spec = (int64_t *)calloc((size_t)dimensions, sizeof(int64_t));
+  if (out.size_spec == NULL) {
+    return out;
+  }
+  out.has_size_spec = 1;
+  for (int64_t i = 0; i < dimensions; i++) {
+    out.size_spec[i] = size_spec[i];
+  }
+  return out;
+}
+
+static void metac_free_matrix_opaque(MatrixOpaque *matrix) {
+  if (matrix == NULL) {
+    return;
+  }
+  free(matrix->size_spec);
+  free(matrix->coords);
+  free(matrix->values);
+  matrix->size_spec = NULL;
+  matrix->coords = NULL;
+  matrix->values = NULL;
+  matrix->entry_count = 0;
+  matrix->entry_cap = 0;
+  matrix->has_size_spec = 0;
+}
+
+static void metac_free_value(const MetaCValue *value) {
+  if (value == NULL) {
+    return;
+  }
+  if (value->kind == METAC_VALUE_NUMBER_LIST) {
+    metac_free_number_list(value->number_list_value);
+    return;
+  }
+  if (value->kind == METAC_VALUE_NUMBER_LIST_LIST) {
+    metac_free_number_list_list(value->number_list_list_value);
+    return;
+  }
+  if (value->kind == METAC_VALUE_STRING_LIST) {
+    metac_free_string_list(value->string_list_value, 1);
+    return;
+  }
+  if (value->kind == METAC_VALUE_BOOL_LIST) {
+    metac_free_bool_list(value->bool_list_value);
+    return;
+  }
+  if (value->kind == METAC_VALUE_ANY_LIST) {
+    metac_free_any_list(value->any_list_value);
+    return;
+  }
+  if (value->kind == METAC_VALUE_MATRIX_NUMBER) {
+    metac_free_matrix_number((MatrixNumber *)&value->matrix_number_value);
+    return;
+  }
+  if (value->kind == METAC_VALUE_MATRIX_STRING) {
+    metac_free_matrix_string((MatrixString *)&value->matrix_string_value);
+    return;
+  }
+  if (value->kind == METAC_VALUE_MATRIX_OPAQUE) {
+    metac_free_matrix_opaque((MatrixOpaque *)&value->matrix_opaque_value);
+    return;
+  }
 }
 
 static int64_t metac_max(int64_t a, int64_t b) {

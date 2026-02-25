@@ -5,6 +5,8 @@ use Exporter 'import';
 
 use MetaC::Support qw(compile_error);
 use MetaC::TypeSpec qw(
+    is_union_type
+    is_supported_value_type
     is_supported_generic_union_return
     type_is_number_or_error
     type_is_bool_or_error
@@ -70,10 +72,11 @@ sub dump_vnf_hir {
 sub _type_supported {
     my ($ret) = @_;
     return 1 if !defined $ret;
-    return 1 if $ret eq 'number' || $ret eq 'bool';
+    return 1 if is_supported_value_type($ret);
     return 1 if type_is_number_or_error($ret);
     return 1 if type_is_bool_or_error($ret);
     return 1 if type_is_string_or_error($ret);
+    return 1 if is_union_type($ret) && is_supported_generic_union_return($ret);
     return 1 if is_supported_generic_union_return($ret);
     return 0;
 }

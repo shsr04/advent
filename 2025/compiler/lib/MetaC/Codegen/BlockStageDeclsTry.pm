@@ -176,6 +176,25 @@ sub _compile_block_stage_decls_try_ops {
                     } elsif ($non_error_type eq 'string') {
                         emit_line($out, $indent, 'char ' . $stmt->{name} . '[256];');
                         emit_line($out, $indent, "metac_copy_str($stmt->{name}, sizeof($stmt->{name}), $tmp.string_value);");
+                    } elsif ($non_error_type eq 'number_list') {
+                        emit_line($out, $indent, "NumberList $stmt->{name} = $tmp.number_list_value;");
+                    } elsif ($non_error_type eq 'number_list_list') {
+                        emit_line($out, $indent, "NumberListList $stmt->{name} = $tmp.number_list_list_value;");
+                    } elsif ($non_error_type eq 'string_list') {
+                        emit_line($out, $indent, "StringList $stmt->{name} = $tmp.string_list_value;");
+                    } elsif ($non_error_type eq 'bool_list') {
+                        emit_line($out, $indent, "BoolList $stmt->{name} = $tmp.bool_list_value;");
+                    } elsif (is_array_type($non_error_type)) {
+                        emit_line($out, $indent, "AnyList $stmt->{name} = $tmp.any_list_value;");
+                    } elsif (is_matrix_type($non_error_type)) {
+                        my $meta = matrix_type_meta($non_error_type);
+                        if ($meta->{elem} eq 'number') {
+                            emit_line($out, $indent, "MatrixNumber $stmt->{name} = $tmp.matrix_number_value;");
+                        } elsif ($meta->{elem} eq 'string') {
+                            emit_line($out, $indent, "MatrixString $stmt->{name} = $tmp.matrix_string_value;");
+                        } else {
+                            emit_line($out, $indent, "MatrixOpaque $stmt->{name} = $tmp.matrix_opaque_value;");
+                        }
                     } elsif (is_supported_generic_union_return($non_error_type)) {
                         emit_line($out, $indent, "const MetaCValue $stmt->{name} = $tmp;");
                     } else {
@@ -194,6 +213,27 @@ sub _compile_block_stage_decls_try_ops {
                         c_name    => $stmt->{name},
                     }
                 );
+                if ($non_error_type eq 'number_list') {
+                    register_owned_cleanup_for_var($ctx, $stmt->{name}, "metac_free_number_list($stmt->{name})");
+                } elsif ($non_error_type eq 'number_list_list') {
+                    register_owned_cleanup_for_var($ctx, $stmt->{name}, "metac_free_number_list_list($stmt->{name})");
+                } elsif ($non_error_type eq 'string_list') {
+                    register_owned_cleanup_for_var($ctx, $stmt->{name}, "metac_free_string_list($stmt->{name}, 1)");
+                } elsif ($non_error_type eq 'bool_list') {
+                    register_owned_cleanup_for_var($ctx, $stmt->{name}, "metac_free_bool_list($stmt->{name})");
+                } elsif (is_array_type($non_error_type)) {
+                    register_owned_cleanup_for_var($ctx, $stmt->{name}, "metac_free_any_list($stmt->{name})");
+                } elsif (is_matrix_type($non_error_type)) {
+                    my $meta = matrix_type_meta($non_error_type);
+                    register_owned_cleanup_for_var($ctx, $stmt->{name}, "metac_free_matrix_number(&$stmt->{name})")
+                      if $meta->{elem} eq 'number';
+                    register_owned_cleanup_for_var($ctx, $stmt->{name}, "metac_free_matrix_string(&$stmt->{name})")
+                      if $meta->{elem} eq 'string';
+                    register_owned_cleanup_for_var($ctx, $stmt->{name}, "metac_free_matrix_opaque(&$stmt->{name})")
+                      if $meta->{elem} ne 'number' && $meta->{elem} ne 'string';
+                } elsif (is_supported_generic_union_return($non_error_type)) {
+                    register_owned_cleanup_for_var($ctx, $stmt->{name}, "metac_free_value(&$stmt->{name})");
+                }
                 emit_expr_temp_cleanups($out, $indent, $call_args->{cleanups});
                 pop_active_temp_cleanups($ctx, $call_cleanup_count);
                 return 1;
@@ -592,6 +632,25 @@ sub _compile_block_stage_decls_try_ops {
             } elsif ($non_error_type eq 'string') {
                 emit_line($out, $indent, 'char ' . $stmt->{name} . '[256];');
                 emit_line($out, $indent, "metac_copy_str($stmt->{name}, sizeof($stmt->{name}), $tmp.string_value);");
+            } elsif ($non_error_type eq 'number_list') {
+                emit_line($out, $indent, "NumberList $stmt->{name} = $tmp.number_list_value;");
+            } elsif ($non_error_type eq 'number_list_list') {
+                emit_line($out, $indent, "NumberListList $stmt->{name} = $tmp.number_list_list_value;");
+            } elsif ($non_error_type eq 'string_list') {
+                emit_line($out, $indent, "StringList $stmt->{name} = $tmp.string_list_value;");
+            } elsif ($non_error_type eq 'bool_list') {
+                emit_line($out, $indent, "BoolList $stmt->{name} = $tmp.bool_list_value;");
+            } elsif (is_array_type($non_error_type)) {
+                emit_line($out, $indent, "AnyList $stmt->{name} = $tmp.any_list_value;");
+            } elsif (is_matrix_type($non_error_type)) {
+                my $meta = matrix_type_meta($non_error_type);
+                if ($meta->{elem} eq 'number') {
+                    emit_line($out, $indent, "MatrixNumber $stmt->{name} = $tmp.matrix_number_value;");
+                } elsif ($meta->{elem} eq 'string') {
+                    emit_line($out, $indent, "MatrixString $stmt->{name} = $tmp.matrix_string_value;");
+                } else {
+                    emit_line($out, $indent, "MatrixOpaque $stmt->{name} = $tmp.matrix_opaque_value;");
+                }
             } elsif (is_supported_generic_union_return($non_error_type)) {
                 emit_line($out, $indent, "const MetaCValue $stmt->{name} = $tmp;");
             } else {
@@ -610,6 +669,27 @@ sub _compile_block_stage_decls_try_ops {
                 c_name    => $stmt->{name},
             }
         );
+        if ($non_error_type eq 'number_list') {
+            register_owned_cleanup_for_var($ctx, $stmt->{name}, "metac_free_number_list($stmt->{name})");
+        } elsif ($non_error_type eq 'number_list_list') {
+            register_owned_cleanup_for_var($ctx, $stmt->{name}, "metac_free_number_list_list($stmt->{name})");
+        } elsif ($non_error_type eq 'string_list') {
+            register_owned_cleanup_for_var($ctx, $stmt->{name}, "metac_free_string_list($stmt->{name}, 1)");
+        } elsif ($non_error_type eq 'bool_list') {
+            register_owned_cleanup_for_var($ctx, $stmt->{name}, "metac_free_bool_list($stmt->{name})");
+        } elsif (is_array_type($non_error_type)) {
+            register_owned_cleanup_for_var($ctx, $stmt->{name}, "metac_free_any_list($stmt->{name})");
+        } elsif (is_matrix_type($non_error_type)) {
+            my $meta = matrix_type_meta($non_error_type);
+            register_owned_cleanup_for_var($ctx, $stmt->{name}, "metac_free_matrix_number(&$stmt->{name})")
+              if $meta->{elem} eq 'number';
+            register_owned_cleanup_for_var($ctx, $stmt->{name}, "metac_free_matrix_string(&$stmt->{name})")
+              if $meta->{elem} eq 'string';
+            register_owned_cleanup_for_var($ctx, $stmt->{name}, "metac_free_matrix_opaque(&$stmt->{name})")
+              if $meta->{elem} ne 'number' && $meta->{elem} ne 'string';
+        } elsif (is_supported_generic_union_return($non_error_type)) {
+            register_owned_cleanup_for_var($ctx, $stmt->{name}, "metac_free_value(&$stmt->{name})");
+        }
         emit_expr_temp_cleanups($out, $indent, $arg_info->{cleanups});
         pop_active_temp_cleanups($ctx, $arg_cleanup_count);
         return 1;

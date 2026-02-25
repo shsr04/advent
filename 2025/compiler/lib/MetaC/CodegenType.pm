@@ -5,6 +5,8 @@ use Exporter 'import';
 
 use MetaC::Support qw(compile_error);
 use MetaC::TypeSpec qw(
+    is_array_type
+    array_type_meta
     is_matrix_type
     matrix_type_meta
     is_matrix_member_type
@@ -32,13 +34,17 @@ sub param_c_type {
     return 'NullableNumber' if $param->{type} eq 'number_or_null';
     return 'int' if $param->{type} eq 'bool';
     return 'const char *' if $param->{type} eq 'string';
+    return 'AnyList' if is_array_type($param->{type});
+    return 'NumberList' if $param->{type} eq 'number_list';
+    return 'NumberListList' if $param->{type} eq 'number_list_list';
+    return 'StringList' if $param->{type} eq 'string_list';
     return 'BoolList' if $param->{type} eq 'bool_list';
     return 'MetaCValue' if is_supported_generic_union_return($param->{type});
     if (is_matrix_type($param->{type})) {
         my $meta = matrix_type_meta($param->{type});
         return 'MatrixNumber' if $meta->{elem} eq 'number';
         return 'MatrixString' if $meta->{elem} eq 'string';
-        compile_error("Unsupported matrix parameter element type '$meta->{elem}'");
+        return 'MatrixOpaque';
     }
     compile_error("Unsupported parameter type: $param->{type}");
 }
@@ -95,6 +101,8 @@ sub type_matches_expected {
     }
     return 1 if type_is_number_or_null($expected) && ($actual eq 'number' || $actual eq 'indexed_number' || $actual eq 'null');
     return 1 if ($expected eq 'number_list' || $expected eq 'number_list_list' || $expected eq 'string_list' || $expected eq 'bool_list') && $actual eq 'empty_list';
+    return 1 if is_array_type($expected) && $actual eq 'empty_list';
+    return 1 if is_array_type($expected) && is_array_type($actual) && $expected eq $actual;
     return 1 if is_matrix_type($expected) && $actual eq 'empty_list';
     return 1 if is_matrix_type($expected) && is_matrix_type($actual) && $expected eq $actual;
     return 0;
@@ -143,10 +151,64 @@ sub generic_union_to_c_expr {
         return "metac_value_string($code)";
     }
 
+    if ($actual_type eq 'number_list') {
+        compile_error("$where cannot convert number[] to '$expected_union'")
+          if !union_contains_member($expected_union, 'number_list');
+        return "metac_value_number_list($code)";
+    }
+
+    if ($actual_type eq 'number_list_list') {
+        compile_error("$where cannot convert number[][] to '$expected_union'")
+          if !union_contains_member($expected_union, 'number_list_list');
+        return "metac_value_number_list_list($code)";
+    }
+
+    if ($actual_type eq 'string_list') {
+        compile_error("$where cannot convert string[] to '$expected_union'")
+          if !union_contains_member($expected_union, 'string_list');
+        return "metac_value_string_list($code)";
+    }
+
+    if ($actual_type eq 'bool_list') {
+        compile_error("$where cannot convert bool[] to '$expected_union'")
+          if !union_contains_member($expected_union, 'bool_list');
+        return "metac_value_bool_list($code)";
+    }
+
+    if (is_array_type($actual_type)) {
+        compile_error("$where cannot convert '$actual_type' to '$expected_union'")
+          if !union_contains_member($expected_union, $actual_type);
+        return "metac_value_any_list($code)";
+    }
+
+    if (is_matrix_type($actual_type)) {
+        my $meta = matrix_type_meta($actual_type);
+        compile_error("$where cannot convert '$actual_type' to '$expected_union'")
+          if !union_contains_member($expected_union, $actual_type);
+        return "metac_value_matrix_number($code)" if $meta->{elem} eq 'number';
+        return "metac_value_matrix_string($code)" if $meta->{elem} eq 'string';
+        return "metac_value_matrix_opaque($code)";
+    }
+
     if ($actual_type eq 'null') {
         compile_error("$where cannot convert null to '$expected_union'")
           if !union_contains_member($expected_union, 'null');
         return "metac_value_null()";
+    }
+
+    if ($actual_type eq 'empty_list') {
+        return "metac_value_number_list((NumberList){0, NULL})"
+          if union_contains_member($expected_union, 'number_list');
+        return "metac_value_number_list_list((NumberListList){0, NULL})"
+          if union_contains_member($expected_union, 'number_list_list');
+        return "metac_value_string_list((StringList){0, NULL})"
+          if union_contains_member($expected_union, 'string_list');
+        return "metac_value_bool_list((BoolList){0, NULL})"
+          if union_contains_member($expected_union, 'bool_list');
+        for my $member (@{ union_member_types($expected_union) }) {
+            next if !is_array_type($member);
+            return "metac_value_any_list((AnyList){0, NULL})";
+        }
     }
 
     compile_error("$where cannot convert '$actual_type' to '$expected_union'");

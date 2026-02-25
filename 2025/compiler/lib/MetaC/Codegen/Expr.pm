@@ -225,6 +225,13 @@ sub compile_expr {
         compile_error("Function '$expr->{name}' returning '$return_type' is not expression-callable")
           if $return_type ne 'number'
           && $return_type ne 'bool'
+          && $return_type ne 'string'
+          && $return_type ne 'number_list'
+          && $return_type ne 'number_list_list'
+          && $return_type ne 'string_list'
+          && $return_type ne 'bool_list'
+          && !is_array_type($return_type)
+          && !is_matrix_type($return_type)
           && !type_is_number_or_error($return_type)
           && !type_is_bool_or_error($return_type)
           && !type_is_string_or_error($return_type)

@@ -4,7 +4,13 @@ use warnings;
 
 sub _constraint_applicable_to_type {
     my ($constraint_name, $type) = @_;
-    return 1 if $constraint_name eq 'size' && ($type eq 'string' || $type eq 'number_list' || $type eq 'number_list_list' || $type eq 'string_list' || $type eq 'bool_list');
+    return 1 if $constraint_name eq 'size'
+      && ($type eq 'string'
+          || $type eq 'number_list'
+          || $type eq 'number_list_list'
+          || $type eq 'string_list'
+          || $type eq 'bool_list'
+          || is_array_type($type));
     return 1 if ($constraint_name eq 'range' || $constraint_name eq 'wrap' || $constraint_name eq 'positive' || $constraint_name eq 'negative') && $type eq 'number';
     return 1 if ($constraint_name eq 'dim' || $constraint_name eq 'matrixSize') && is_matrix_type($type);
     return 0;
@@ -105,19 +111,21 @@ sub parse_declared_type_and_constraints {
             raw   => $inner_raw,
             where => "nested list element type in $where",
         );
-        compile_error("Unsupported nested list element type '$inner_raw' in $where")
-          if $inner_type ne 'number_list';
-        my $inner_nodes = constraint_nodes($inner_constraints);
-        my @unsupported = grep { $_->{kind} ne 'size' } @$inner_nodes;
-        compile_error("Only size(...) constraint is supported on nested list element type in $where")
-          if @unsupported;
-        my $inner_size = constraint_size_exact($inner_constraints);
-        compile_error("Nested element size(*) is unsupported in $where; use explicit size(N)")
-          if !defined $inner_size;
-        compile_error("Nested element size(...) must be >= 0 in $where")
-          if $inner_size < 0;
-        $nested_number_list_size = $inner_size;
-        $type_raw = 'number[][]';
+        if ($inner_type eq 'number_list') {
+            my $inner_nodes = constraint_nodes($inner_constraints);
+            my @unsupported = grep { $_->{kind} ne 'size' } @$inner_nodes;
+            compile_error("Only size(...) constraint is supported on nested list element type in $where")
+              if @unsupported;
+            my $inner_size = constraint_size_exact($inner_constraints);
+            compile_error("Nested element size(*) is unsupported in $where; use explicit size(N)")
+              if !defined $inner_size;
+            compile_error("Nested element size(...) must be >= 0 in $where")
+              if $inner_size < 0;
+            $nested_number_list_size = $inner_size;
+            $type_raw = 'number[][]';
+        } else {
+            $type_raw = "($inner_type)[]";
+        }
     }
 
     my $type = normalize_type_annotation($type_raw);
@@ -132,6 +140,7 @@ sub parse_declared_type_and_constraints {
         next if $m eq 'number_list_list';
         next if $m eq 'string_list';
         next if $m eq 'bool_list';
+        next if is_array_type($m);
         next if is_matrix_type($m);
         compile_error("Unsupported type annotation '$type_raw' in $where");
     }

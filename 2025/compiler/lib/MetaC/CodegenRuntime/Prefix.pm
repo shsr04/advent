@@ -35,20 +35,6 @@ typedef struct {
   char message[160];
 } ResultStringValue;
 
-#define METAC_VALUE_NUMBER 1
-#define METAC_VALUE_BOOL 2
-#define METAC_VALUE_STRING 3
-#define METAC_VALUE_ERROR 4
-#define METAC_VALUE_NULL 5
-
-typedef struct {
-  int kind;
-  int64_t number_value;
-  int bool_value;
-  char string_value[256];
-  char error_message[160];
-} MetaCValue;
-
 typedef struct {
   int is_null;
   int64_t value;
@@ -73,6 +59,11 @@ typedef struct {
   size_t count;
   int *items;
 } BoolList;
+
+typedef struct {
+  size_t count;
+  void **items;
+} AnyList;
 
 typedef struct {
   int64_t value;
@@ -143,6 +134,46 @@ typedef struct {
   size_t count;
   MatrixStringMember *items;
 } MatrixStringMemberList;
+
+typedef struct {
+  int64_t dimensions;
+  int has_size_spec;
+  int64_t *size_spec;
+  size_t entry_count;
+  size_t entry_cap;
+  int64_t *coords;
+  void **values;
+} MatrixOpaque;
+
+#define METAC_VALUE_NUMBER 1
+#define METAC_VALUE_BOOL 2
+#define METAC_VALUE_STRING 3
+#define METAC_VALUE_ERROR 4
+#define METAC_VALUE_NULL 5
+#define METAC_VALUE_NUMBER_LIST 6
+#define METAC_VALUE_NUMBER_LIST_LIST 7
+#define METAC_VALUE_STRING_LIST 8
+#define METAC_VALUE_BOOL_LIST 9
+#define METAC_VALUE_MATRIX_NUMBER 10
+#define METAC_VALUE_MATRIX_STRING 11
+#define METAC_VALUE_ANY_LIST 12
+#define METAC_VALUE_MATRIX_OPAQUE 13
+
+typedef struct {
+  int kind;
+  int64_t number_value;
+  int bool_value;
+  char string_value[256];
+  char error_message[160];
+  NumberList number_list_value;
+  NumberListList number_list_list_value;
+  StringList string_list_value;
+  BoolList bool_list_value;
+  AnyList any_list_value;
+  MatrixNumber matrix_number_value;
+  MatrixString matrix_string_value;
+  MatrixOpaque matrix_opaque_value;
+} MetaCValue;
 C_RUNTIME_PREFIX
 }
 

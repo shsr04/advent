@@ -54,6 +54,19 @@ sub _return_c_type_from_fn_return {
     return 'MetaCValue' if is_supported_generic_union_return($current_fn_return);
     return 'int64_t' if $current_fn_return eq 'number';
     return 'int' if $current_fn_return eq 'bool';
+    return 'const char *' if $current_fn_return eq 'string';
+    return 'NullableNumber' if $current_fn_return eq 'number_or_null';
+    return 'NumberList' if $current_fn_return eq 'number_list';
+    return 'NumberListList' if $current_fn_return eq 'number_list_list';
+    return 'StringList' if $current_fn_return eq 'string_list';
+    return 'BoolList' if $current_fn_return eq 'bool_list';
+    return 'AnyList' if is_array_type($current_fn_return);
+    if (is_matrix_type($current_fn_return)) {
+        my $meta = matrix_type_meta($current_fn_return);
+        return 'MatrixNumber' if $meta->{elem} eq 'number';
+        return 'MatrixString' if $meta->{elem} eq 'string';
+        return 'MatrixOpaque';
+    }
     compile_error("Unsupported function return mode for return emission: $current_fn_return");
 }
 
@@ -318,34 +331,14 @@ sub _compile_block_stage_control {
                     compile_error("return type mismatch: expected string or error for string|error function");
                 }
             } elsif (is_supported_generic_union_return($current_fn_return)) {
-                my $members = union_member_types($current_fn_return);
-                my %allowed = map { $_ => 1 } @$members;
-
                 if ($expr_type eq $current_fn_return) {
                     if ($stmt->{expr}{kind} eq 'ident') {
                         consume_owned_cleanup_for_var($ctx, $stmt->{expr}{name});
                     }
                     _emit_return_stmt($ctx, $out, $indent, $expr_code, $current_fn_return);
-                } elsif ($expr_type eq 'number' || $expr_type eq 'indexed_number') {
-                    compile_error("return type mismatch: expected $current_fn_return, got $expr_type")
-                      if !$allowed{number};
-                    my $num_expr = number_like_to_c_expr($expr_code, $expr_type, "return");
-                    _emit_return_stmt($ctx, $out, $indent, "metac_value_number($num_expr)", $current_fn_return);
-                } elsif ($expr_type eq 'bool') {
-                    compile_error("return type mismatch: expected $current_fn_return, got bool")
-                      if !$allowed{bool};
-                    _emit_return_stmt($ctx, $out, $indent, "metac_value_bool($expr_code)", $current_fn_return);
-                } elsif ($expr_type eq 'string') {
-                    compile_error("return type mismatch: expected $current_fn_return, got string")
-                      if !$allowed{string};
-                    _emit_return_stmt($ctx, $out, $indent, "metac_value_string($expr_code)", $current_fn_return);
-                } elsif ($expr_type eq 'null') {
-                    compile_error("return type mismatch: expected $current_fn_return, got null")
-                      if !$allowed{null};
-                    _emit_return_stmt($ctx, $out, $indent, "metac_value_null()", $current_fn_return);
                 } elsif ($expr_type eq 'error') {
                     compile_error("return type mismatch: expected $current_fn_return, got error")
-                      if !$allowed{error};
+                      if !union_contains_member($current_fn_return, 'error');
                     if ($stmt->{expr}{kind} eq 'call' && $stmt->{expr}{name} eq 'error') {
                         my ($msg_code, $msg_type) = compile_expr($stmt->{expr}{args}[0], $ctx);
                         compile_error("error(...) expects string message") if $msg_type ne 'string';
@@ -354,7 +347,16 @@ sub _compile_block_stage_control {
                         compile_error("generic union error return currently requires error(...) expression");
                     }
                 } else {
-                    compile_error("return type mismatch: expected $current_fn_return, got $expr_type");
+                    my $as_union = generic_union_to_c_expr(
+                        $expr_code,
+                        $expr_type,
+                        $current_fn_return,
+                        "return",
+                    );
+                    if ($stmt->{expr}{kind} eq 'ident') {
+                        consume_owned_cleanup_for_var($ctx, $stmt->{expr}{name});
+                    }
+                    _emit_return_stmt($ctx, $out, $indent, $as_union, $current_fn_return);
                 }
             } elsif ($current_fn_return eq 'number') {
                 my $num_expr = number_like_to_c_expr($expr_code, $expr_type, "return");
@@ -362,6 +364,23 @@ sub _compile_block_stage_control {
             } elsif ($current_fn_return eq 'bool') {
                 compile_error("return type mismatch: expected bool return")
                   if $expr_type ne 'bool';
+                _emit_return_stmt($ctx, $out, $indent, $expr_code, $current_fn_return);
+            } elsif ($current_fn_return eq 'string') {
+                compile_error("return type mismatch: expected string return")
+                  if $expr_type ne 'string';
+                _emit_return_stmt($ctx, $out, $indent, $expr_code, $current_fn_return);
+            } elsif ($current_fn_return eq 'number_list'
+                || $current_fn_return eq 'number_list_list'
+                || $current_fn_return eq 'string_list'
+                || $current_fn_return eq 'bool_list'
+                || is_array_type($current_fn_return)
+                || is_matrix_type($current_fn_return))
+            {
+                compile_error("return type mismatch: expected $current_fn_return, got $expr_type")
+                  if !type_matches_expected($current_fn_return, $expr_type);
+                if ($stmt->{expr}{kind} eq 'ident') {
+                    consume_owned_cleanup_for_var($ctx, $stmt->{expr}{name});
+                }
                 _emit_return_stmt($ctx, $out, $indent, $expr_code, $current_fn_return);
             } elsif ($current_fn_return eq 'void') {
                 compile_error("return is not allowed in function with no return type");

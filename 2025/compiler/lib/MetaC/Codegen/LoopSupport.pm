@@ -153,7 +153,8 @@ sub compile_filter_lambda_helper {
         $item_c_type = 'const char *';
     } elsif (is_matrix_member_list_type($recv_type)) {
         my $member_meta = matrix_member_list_meta($recv_type);
-        $item_type = "matrix_member<$member_meta->{elem};d=$member_meta->{dim}>";
+        $item_type = $recv_type;
+        $item_type =~ s/^matrix_member_list</matrix_member</;
         if ($member_meta->{elem} eq 'number') {
             $item_c_type = 'MatrixNumberMember';
         } elsif ($member_meta->{elem} eq 'string') {

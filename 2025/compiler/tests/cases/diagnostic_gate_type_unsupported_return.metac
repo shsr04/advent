@@ -1,5 +1,5 @@
-function bad(): string {
-  return "x"
+function bad(): indexed_number {
+  return 0
 }
 
 function main() {

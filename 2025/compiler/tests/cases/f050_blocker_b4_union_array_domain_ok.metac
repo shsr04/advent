@@ -1,0 +1,9 @@
+function identity(v: (number | string)[]): (number | string)[] {
+  return v
+}
+
+function main(): number {
+  const xs: (number | string)[] = []
+  const ys: (number | string)[] = identity(xs)
+  return 0
+}

@@ -308,7 +308,8 @@ sub emit_for_each_from_iterable_expr {
         $elem_type = 'indexed_number';
     } elsif (is_matrix_member_list_type($iter->{base_type})) {
         my $member_meta = matrix_member_list_meta($iter->{base_type});
-        $elem_type = "matrix_member<$member_meta->{elem};d=$member_meta->{dim}>";
+        $elem_type = $iter->{base_type};
+        $elem_type =~ s/^matrix_member_list</matrix_member</;
     }
     my $elem_expr = "$container.items[$idx_name]";
     my $elem_len_proof;

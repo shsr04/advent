@@ -166,7 +166,13 @@ sub emit_size_constraint_check {
     my $actual_expr;
     if ($target_type eq 'string') {
         $actual_expr = "metac_strlen($target_expr)";
-    } elsif ($target_type eq 'number_list' || $target_type eq 'number_list_list' || $target_type eq 'string_list' || $target_type eq 'bool_list' || $target_type eq 'indexed_number_list') {
+    } elsif ($target_type eq 'number_list'
+        || $target_type eq 'number_list_list'
+        || $target_type eq 'string_list'
+        || $target_type eq 'bool_list'
+        || $target_type eq 'indexed_number_list'
+        || is_array_type($target_type))
+    {
         $actual_expr = "((int64_t)$target_expr.count)";
     } else {
         compile_error("size(...) constraint is unsupported for runtime check on type '$target_type' in $where");

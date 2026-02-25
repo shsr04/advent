@@ -91,6 +91,7 @@ sub _compile_block_stage_assign_loops {
                 }
             } elsif (is_supported_generic_union_return($stmt->{type})) {
                 my $rhs = generic_union_to_c_expr($expr_code, $expr_type, $stmt->{type}, "typed assignment for '$stmt->{name}'");
+                emit_line($out, $indent, "metac_free_value(&$target);");
                 emit_line($out, $indent, "$target = $rhs;");
             } elsif ($stmt->{type} eq 'string') {
                 emit_line($out, $indent, "metac_copy_str($target, sizeof($target), $expr_code);");
@@ -181,6 +182,24 @@ sub _compile_block_stage_assign_loops {
                     indent      => $indent,
                     where       => "typed assignment for '$stmt->{name}'",
                 );
+            } elsif (is_array_type($stmt->{type})) {
+                if ($expr_type eq 'empty_list') {
+                    emit_line($out, $indent, "metac_free_any_list($target);");
+                    emit_line($out, $indent, "$target.count = 0;");
+                    emit_line($out, $indent, "$target.items = NULL;");
+                } else {
+                    emit_line($out, $indent, "metac_free_any_list($target);");
+                    emit_line($out, $indent, "$target = $expr_code;");
+                }
+                emit_size_constraint_check(
+                    ctx         => $ctx,
+                    constraints => $constraints,
+                    target_expr => $target,
+                    target_type => $stmt->{type},
+                    out         => $out,
+                    indent      => $indent,
+                    where       => "typed assignment for '$stmt->{name}'",
+                );
             } elsif (is_matrix_type($stmt->{type}) || is_matrix_member_list_type($stmt->{type}) || is_matrix_member_type($stmt->{type})) {
                 if ($expr_type eq 'empty_list') {
                     compile_error("Matrix reassignment from [] is not supported; initialize matrix variables in their declaration");
@@ -233,6 +252,7 @@ sub _compile_block_stage_assign_loops {
                 }
             } elsif (is_supported_generic_union_return($info->{type})) {
                 my $rhs = generic_union_to_c_expr($expr_code, $expr_type, $info->{type}, "assignment to '$stmt->{name}'");
+                emit_line($out, $indent, "metac_free_value(&$target);");
                 emit_line($out, $indent, "$target = $rhs;");
             } elsif ($info->{type} eq 'indexed_number') {
                 emit_line($out, $indent, "$target = $expr_code;");
@@ -249,7 +269,7 @@ sub _compile_block_stage_assign_loops {
                     indent      => $indent,
                     where       => "assignment to '$stmt->{name}'",
                 );
-            } elsif ($info->{type} eq 'number_list' || $info->{type} eq 'number_list_list' || $info->{type} eq 'string_list' || $info->{type} eq 'bool_list') {
+            } elsif ($info->{type} eq 'number_list' || $info->{type} eq 'number_list_list' || $info->{type} eq 'string_list' || $info->{type} eq 'bool_list' || is_array_type($info->{type})) {
                 if ($info->{type} eq 'number_list_list'
                     && defined($info->{constraints})
                     && defined($info->{constraints}{nested_number_list_size})
@@ -268,10 +288,13 @@ sub _compile_block_stage_assign_loops {
                 if ($expr_type eq 'empty_list') {
                     if ($info->{type} eq 'number_list_list') {
                         emit_line($out, $indent, "metac_free_number_list_list($target);");
+                    } elsif (is_array_type($info->{type})) {
+                        emit_line($out, $indent, "metac_free_any_list($target);");
                     }
                     emit_line($out, $indent, "$target.count = 0;");
                     emit_line($out, $indent, "$target.items = NULL;");
                 } else {
+                    emit_line($out, $indent, "metac_free_any_list($target);") if is_array_type($info->{type});
                     emit_line($out, $indent, "$target = $expr_code;");
                 }
                 emit_size_constraint_check(

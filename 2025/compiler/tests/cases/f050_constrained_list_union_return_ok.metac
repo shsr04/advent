@@ -1,0 +1,11 @@
+function f(x: number with range(0, 10)): (string with size(5))[] | error {
+  if x == 0 {
+    return error("bad")
+  }
+  return ["aaaaa", "bbbbb"]
+}
+
+function main(): number {
+  const xs = f(1)?
+  return xs.size()
+}

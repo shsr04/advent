@@ -33,7 +33,7 @@ This section *specifies* the syntactic structure of a parseable MetaC program.
 - Type := `(` Type `)` | TypeIntersection
 - TypeIntersection := SingleType | SingleType `|` Type
 - SingleType := TypeName TypeConstraintList?
-- TypeName := (-> see 2.)
+- TypeName := `number` | `int` | `float` | `string` | `boolean` | `null` | `error` | Type `[]` | `matrix(` Type `)`
 - TypeConstraintList := `with` TypeConstraintSeq
 - TypeConstraintSeq := TypeConstraint | TypeConstraint `+` TypeConstraintSeq
 - TypeConstraint := Name TypeConstraintArgList?
@@ -81,7 +81,7 @@ This section *specifies* the syntactic structure of a parseable MetaC program.
 
 A function *is* a named block of executable statements.
 
-The program execution begins at the function `main(): number`. The return value of `main` determines the exit code of the program.
+The program execution begins at the function `main(): int`. The return value of `main` determines the exit code of the program.
 
 When a function does not specify a return type, it returns no value. The exception is `main`, which implicitly returns `number`.
 A function without a return type *can* use the `return` statement to exit early.
@@ -114,7 +114,7 @@ The available types *are*:
 - Array (`<type>[]`)
   - Domain: all sequences of the given base type
   - Operations: sequence-based + comparison
-- Matrix (`matrix(<type>`)
+- Matrix (`matrix(<type>)`)
   - Domain: all matrices of the given base type and dimensions
   - Operations: matrix-based + comparison
 

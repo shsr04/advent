@@ -87,6 +87,20 @@ my $metac = "$compiler_dir/metac.pl";
 my $cc = $ENV{CC} // 'clang';
 my @cflags = split /\s+/, ($ENV{CFLAGS} // '-std=c17 -O2 -Wall -Wextra -Wpedantic');
 
+my @purity_files = (
+    "$compiler_dir/lib/MetaC/HIR/BackendC.pm",
+    "$compiler_dir/lib/MetaC/HIR/MaterializeC.pm",
+);
+for my $file (@purity_files) {
+    next if !-f $file;
+    my $text = slurp_file($file);
+    if ($text =~ /\btype_is_[A-Za-z0-9_]+\b/) {
+        print "[FAIL] purity-check: forbidden type-shape helper in $file\n";
+        print "\nSummary: 0 passed, 1 failed\n";
+        exit 1;
+    }
+}
+
 opendir my $dh, $cases_dir or die "io error: unable to open '$cases_dir': $!\n";
 my @cases = sort grep { /\.metac$/ } readdir($dh);
 closedir $dh;

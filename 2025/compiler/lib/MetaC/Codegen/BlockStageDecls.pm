@@ -140,6 +140,14 @@ sub _compile_block_stage_decls {
                 } else {
                     emit_line($out, $indent, "BoolList $stmt->{name} = $expr_code;");
                 }
+            } elsif (is_array_type($decl_type)) {
+                if ($expr_type eq 'empty_list') {
+                    emit_line($out, $indent, "AnyList $stmt->{name};");
+                    emit_line($out, $indent, "$stmt->{name}.count = 0;");
+                    emit_line($out, $indent, "$stmt->{name}.items = NULL;");
+                } else {
+                    emit_line($out, $indent, "AnyList $stmt->{name} = $expr_code;");
+                }
             } elsif (is_matrix_type($decl_type)) {
                 my $meta = matrix_type_meta($decl_type);
                 if ($expr_type eq 'empty_list') {
@@ -154,7 +162,8 @@ sub _compile_block_stage_decls {
                         emit_line($out, $indent, "MatrixString $stmt->{name} = metac_matrix_string_new($meta->{dim}, $size_expr);");
                         register_owned_cleanup_for_var($ctx, $stmt->{name}, "metac_free_matrix_string(&$stmt->{name})");
                     } else {
-                        compile_error("Unsupported matrix variable element type '$meta->{elem}'");
+                        emit_line($out, $indent, "MatrixOpaque $stmt->{name} = metac_matrix_opaque_new($meta->{dim}, NULL);");
+                        register_owned_cleanup_for_var($ctx, $stmt->{name}, "metac_free_matrix_opaque(&$stmt->{name})");
                     }
                 } else {
                     compile_error("Type mismatch in let '$stmt->{name}': expected $decl_type, got $expr_type")
@@ -164,7 +173,7 @@ sub _compile_block_stage_decls {
                     } elsif ($meta->{elem} eq 'string') {
                         emit_line($out, $indent, "MatrixString $stmt->{name} = $expr_code;");
                     } else {
-                        compile_error("Unsupported matrix variable element type '$meta->{elem}'");
+                        emit_line($out, $indent, "MatrixOpaque $stmt->{name} = $expr_code;");
                     }
                 }
             } elsif (is_matrix_member_list_type($decl_type)) {
@@ -207,6 +216,12 @@ sub _compile_block_stage_decls {
                 decl_type => $decl_type,
                 expr_code => $expr_code,
             );
+            if (is_supported_generic_union_return($decl_type)) {
+                register_owned_cleanup_for_var($ctx, $stmt->{name}, "metac_free_value(&$stmt->{name})");
+            }
+            if (is_array_type($decl_type)) {
+                register_owned_cleanup_for_var($ctx, $stmt->{name}, "metac_free_any_list($stmt->{name})");
+            }
             if ($decl_type eq 'number_list_list' && $expr_type eq 'empty_list') {
                 register_owned_cleanup_for_var($ctx, $stmt->{name}, "metac_free_number_list_list($stmt->{name})");
             }
@@ -287,6 +302,8 @@ sub _compile_block_stage_decls {
                 emit_line($out, $indent, "NumberListList $stmt->{name} = $expr_code;");
             } elsif ($expr_type eq 'bool_list') {
                 emit_line($out, $indent, "BoolList $stmt->{name} = $expr_code;");
+            } elsif (is_array_type($expr_type)) {
+                emit_line($out, $indent, "AnyList $stmt->{name} = $expr_code;");
             } elsif ($expr_type eq 'indexed_number_list') {
                 emit_line($out, $indent, "IndexedNumberList $stmt->{name} = $expr_code;");
             } elsif (is_matrix_type($expr_type)) {
@@ -296,7 +313,7 @@ sub _compile_block_stage_decls {
                 } elsif ($meta->{elem} eq 'string') {
                     emit_line($out, $indent, "MatrixString $stmt->{name} = $expr_code;");
                 } else {
-                    compile_error("Unsupported matrix const expression element type '$meta->{elem}'");
+                    emit_line($out, $indent, "MatrixOpaque $stmt->{name} = $expr_code;");
                 }
             } elsif (is_matrix_member_list_type($expr_type)) {
                 my $meta = matrix_member_list_meta($expr_type);
@@ -444,6 +461,14 @@ sub _compile_block_stage_decls {
                 } else {
                     emit_line($out, $indent, "BoolList $stmt->{name} = $expr_code;");
                 }
+            } elsif (is_array_type($decl_type)) {
+                if ($expr_type eq 'empty_list') {
+                    emit_line($out, $indent, "AnyList $stmt->{name};");
+                    emit_line($out, $indent, "$stmt->{name}.count = 0;");
+                    emit_line($out, $indent, "$stmt->{name}.items = NULL;");
+                } else {
+                    emit_line($out, $indent, "AnyList $stmt->{name} = $expr_code;");
+                }
             } elsif (is_matrix_type($decl_type)) {
                 my $meta = matrix_type_meta($decl_type);
                 if ($expr_type eq 'empty_list') {
@@ -458,7 +483,8 @@ sub _compile_block_stage_decls {
                         emit_line($out, $indent, "MatrixString $stmt->{name} = metac_matrix_string_new($meta->{dim}, $size_expr);");
                         register_owned_cleanup_for_var($ctx, $stmt->{name}, "metac_free_matrix_string(&$stmt->{name})");
                     } else {
-                        compile_error("Unsupported matrix constant element type '$meta->{elem}'");
+                        emit_line($out, $indent, "MatrixOpaque $stmt->{name} = metac_matrix_opaque_new($meta->{dim}, NULL);");
+                        register_owned_cleanup_for_var($ctx, $stmt->{name}, "metac_free_matrix_opaque(&$stmt->{name})");
                     }
                 } else {
                     if ($meta->{elem} eq 'number') {
@@ -466,7 +492,7 @@ sub _compile_block_stage_decls {
                     } elsif ($meta->{elem} eq 'string') {
                         emit_line($out, $indent, "MatrixString $stmt->{name} = $expr_code;");
                     } else {
-                        compile_error("Unsupported matrix constant element type '$meta->{elem}'");
+                        emit_line($out, $indent, "MatrixOpaque $stmt->{name} = $expr_code;");
                     }
                 }
             } elsif (is_matrix_member_list_type($decl_type)) {
@@ -509,6 +535,12 @@ sub _compile_block_stage_decls {
                 decl_type => $decl_type,
                 expr_code => $expr_code,
             );
+            if (is_supported_generic_union_return($decl_type)) {
+                register_owned_cleanup_for_var($ctx, $stmt->{name}, "metac_free_value(&$stmt->{name})");
+            }
+            if (is_array_type($decl_type)) {
+                register_owned_cleanup_for_var($ctx, $stmt->{name}, "metac_free_any_list($stmt->{name})");
+            }
             if ($decl_type eq 'number_list_list' && $expr_type eq 'empty_list') {
                 register_owned_cleanup_for_var($ctx, $stmt->{name}, "metac_free_number_list_list($stmt->{name})");
             }

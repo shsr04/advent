@@ -469,3 +469,107 @@ Use this block for each feature:
     - ownership stress tests proving cleanup pairing for explicit and implicit owned values (including `ForInExit` iterable epochs).
     - deterministic-codegen snapshots from normalized VNF-HIR inputs.
     - migration parity suite: old vs new pipeline output/behavior equivalence where guarantees overlap.
+
+### F-048 `Backend Purity: Mechanical VNF-HIR -> C Emission`
+- Status: implemented
+- Spec file: `instructions/backend-purity-f048.md` (planned)
+- Correctness classes: C1/C2/C3/C4
+- Key guarantees:
+  - backend emission is driven exclusively by verified VNF-HIR nodes and facts; no AST/statement-shape payloads are consumed during C emission.
+  - each emitted C construct is a deterministic mapping from explicit HIR constructs (`Region`, `Step`, `Exit`, `Edge`) with no additional semantic inference in codegen.
+  - all semantic decisions (type narrowing, fallibility routing, ownership transfer/drop requirements) are finalized before backend entry and represented in HIR facts.
+  - backend failures are structural only (for example unsupported HIR node kind/version), not semantic re-checks that belong to gate passes.
+  - deterministic codegen remains byte-stable for identical verified HIR input and compiler mode.
+- Notes/evidence:
+  - Motivation: F-047 established HIR as the enforced pipeline boundary, but backend still contains semantic lowering behavior inherited from prior statement-driven codegen; this feature completes architectural separation by making backend translation mechanical.
+  - Implemented in:
+    - semantic C-lowering moved to pre-backend materialization pass (`materialize_c_templates`) in `compiler/lib/MetaC/HIR/MaterializeC.pm`.
+    - backend emission reduced to structural assembly over verified HIR + materialized templates in `compiler/lib/MetaC/HIR/BackendC.pm`.
+    - pipeline ordering updated so materialization runs after gates and before backend emission in `compiler/lib/MetaC/HIR.pm`.
+  - Locked policy decisions:
+    - templates are backend-specific; a backend may skip unsupported semantic artifacts (for example ownership-drop or strong-typing constructs) as long as verified HIR guarantees and observable behavior contracts are preserved for that backend target.
+    - no duplication of source-level constructs in backend-purity migration; all semantic expansion remains frontloaded in HIR normalization/solver passes.
+    - backend purity allows only structural sanity checks on HIR shape/version; backend must not re-run or emulate gate semantics.
+  - Verification evidence:
+    - full compiler regression suite green after backend-purity migration (`109 passed, 0 failed`).
+    - deterministic HIR snapshots still pass under the purity pipeline (`hir_snapshot_simple`).
+    - backend now rejects unverified HIR and missing structural template artifacts via dedicated structural diagnostics.
+
+### F-049 `Generic Backend Lowering over Canonical HIR ABI`
+- Status: implemented
+- Spec file: `instructions/backend-generic-lowering-f049.md` (planned)
+- Correctness classes: C1/C2/C3/C4
+- Key guarantees:
+  - backend lowering is generic over HIR node/fact schemas and does not branch on ad-hoc language return-shape helpers (for example `type_is_number_or_error`).
+  - function return/call lowering uses a canonical HIR-level ABI contract (single normalized result model), eliminating backend specialization by union shape.
+  - emission templates are selected by HIR node kind + explicit verified facts, not by source-language type shortcuts.
+  - backend capability differences remain backend-specific but are expressed through declared capability tables, not handwritten special-case control flow.
+  - equivalent verified HIR semantics produce equivalent backend behavior across specialization-free lowering paths.
+- Notes/evidence:
+  - Motivation: F-048 removed semantic logic from backend phase boundaries, but materialization still includes type-shape specialization; this feature removes those residual backend-specific hacks by moving to a truly generic HIR-driven lowering model.
+  - Implemented in:
+    - canonical HIR ABI normalization pass (`normalize_hir_abi`) in `compiler/lib/MetaC/HIR/ABI.pm`.
+    - HIR pipeline wiring updated so ABI normalization runs before C template materialization in `compiler/lib/MetaC/HIR.pm`.
+    - materialization now consumes normalized `fn->{abi}` contracts and no longer branches on `type_is_*` helpers in `compiler/lib/MetaC/HIR/MaterializeC.pm`.
+    - backend capability checks are declared by node kind (`Step.kind`, `Exit.kind`) and backend emission remains structural in `compiler/lib/MetaC/HIR/BackendC.pm`.
+    - regression harness now includes a purity invariant that fails if backend/materialization reintroduces `type_is_*` helpers in `compiler/tests/run.pl`.
+  - Locked policy decisions:
+    - ABI model: pure MetaC-level canonical ABI (single normalized contract for backend consumption).
+    - migration policy: hard ABI break is accepted for this feature.
+    - backend capabilities: declared by HIR node kind.
+    - normalization boundary: HIR must be fully normalized before backend/materialization consumption.
+    - runtime contract policy: fixed stable runtime contracts are required and versioned explicitly.
+    - enforcement policy: regression/unit tests must verify absence of backend type-shape hacks.
+    - effect/error channel: normalized into the canonical ABI channel in HIR (single backend-facing protocol).
+    - optimization policy: backend optimizations are allowed only if canonical ABI and verified HIR semantics are preserved.
+  - Verification targets:
+    - parity suite: behavior equivalence before/after ABI normalization on existing programs.
+    - deterministic template snapshots for canonical HIR ABI inputs.
+    - targeted regressions asserting backend paths stay generic when adding new return unions/effects.
+    - traceability matrix linking ABI-normalization rules to emitted C templates and runtime contracts.
+  - Verification evidence:
+    - full compiler regression suite green after F-049 migration (`109 passed, 0 failed`).
+    - backend/materialization purity invariant active in test runner (`type_is_*` forbidden in `HIR/BackendC.pm` and `HIR/MaterializeC.pm`).
+
+### F-050 `Normative Domain Alignment`
+- Status: in_progress (reopened)
+- Spec file: `instructions/normative-domain-alignment-f050.md` (planned)
+- Correctness classes: C0/C1/C2/C3/C4
+- Key guarantees:
+  - the compiler accepted-program domain is aligned to the normative reference domain (within explicitly versioned exclusions), not to ad-hoc implementation whitelists.
+  - return, parameter, variable, and expression type acceptance for unions/constraints/collections is governed by normative typing rules.
+  - all gate checks reject only normative-invalid programs and accept normative-valid programs for in-scope language constructs.
+  - conformance gaps are explicit, machine-traceable, and bounded by documented exclusion IDs.
+  - deterministic lowering behavior is preserved while expanding acceptance.
+- Notes/evidence:
+  - Motivation: current implementation still rejects some normative-valid type shapes (for example constrained collection unions in returns), indicating a domain mismatch between implementation and normative contract.
+  - Implemented in:
+    - type normalization now strips top-level constraint clauses before shape normalization and correctly normalizes constrained array members (for example `(string with size(5))[]` -> `string_list`) in `compiler/lib/MetaC/TypeSpec.pm`.
+    - supported value-domain checks were generalized from scalar-only to include collection and matrix value families via `is_supported_value_type` and updated generic-union acceptance in `compiler/lib/MetaC/TypeSpec.pm` and `compiler/lib/MetaC/HIR/Gates.pm`.
+    - HIR ABI normalization accepts generalized value returns and union returns over supported collection/matrix members, with deterministic fallback contracts, in `compiler/lib/MetaC/HIR/ABI.pm`.
+    - generic union lowering now supports `number_list`, `number_list_list`, `string_list`, `bool_list`, and matrix members in `compiler/lib/MetaC/CodegenType.pm`.
+    - runtime `MetaCValue` ABI expanded with collection/matrix payload kinds plus cleanup support (`metac_free_value`) in `compiler/lib/MetaC/CodegenRuntime/Prefix.pm` and `compiler/lib/MetaC/CodegenRuntime/Core.pm`.
+    - return lowering and fallible extraction paths (`return`, `?`, `or catch`) were generalized to consume/produce these union members without scalar-only branching in `compiler/lib/MetaC/Codegen/BlockStageControl.pm` and `compiler/lib/MetaC/Codegen/BlockStageDeclsTry.pm`.
+    - ownership cleanup for union variables now routes through `metac_free_value` and assignment paths free prior union payloads before overwrite in `compiler/lib/MetaC/Codegen/BlockStageDecls.pm` and `compiler/lib/MetaC/Codegen/BlockStageAssignLoops.pm`.
+    - function prototype emission and expression-callability checks were expanded to cover newly supported value return families in `compiler/lib/MetaC/Codegen/Compile.pm` and `compiler/lib/MetaC/Codegen/Expr.pm`.
+    - matrix type normalization/encoding now accepts recursive `Type` elements in `matrix(Type)` and preserves deterministic canonical form using encoded element payloads in `compiler/lib/MetaC/TypeSpec.pm`.
+    - generic-union initialization now supports deterministic `[]` -> collection-member conversion for union targets (for example `matrix(...) | int[]` selecting `int[]`) in `compiler/lib/MetaC/CodegenType.pm`.
+    - legacy matrix-member type string construction in loop/proof stages now uses canonical encoded matrix-member forms in `compiler/lib/MetaC/Codegen/LoopSupport.pm` and `compiler/lib/MetaC/Codegen/ProofIter.pm`.
+  - Locked policy decisions:
+    - rollout policy: full immediate alignment (no staged semantic-area rollout).
+    - exclusion policy: no implementation gaps allowed.
+    - release policy: required conformance is full normative-reference conformance, except only in cases of grave normative inconsistencies (which must be explicitly documented and justified).
+  - Verification evidence:
+    - added normative-positive test `f050_constrained_list_union_return_ok` covering constrained collection-union return acceptance and `?` extraction.
+    - added normative-negative test `f050_constrained_list_union_return_type_mismatch` covering invalid member return conversion rejection.
+    - added normative-positive test `f050_matrix_union_elem_type_ok` covering acceptance of `matrix(string with size(2) | number) | int[]`.
+    - added blocker regression `f050_blocker_b1_float_return_ok` (B1).
+    - added blocker regression `f050_blocker_b2_matrix_bool_return_ok` (B2).
+    - added blocker regression `f050_blocker_b3_matrix_bool_param_ok` (B3).
+    - added blocker regression `f050_blocker_b4_union_array_domain_ok` (B4).
+    - full compiler regression suite green after blocker closure (`116 passed, 0 failed`).
+  - Blocker list:
+    - `B1` closed: non-`main` `float` return family accepted (covered by `f050_blocker_b1_float_return_ok`).
+    - `B2` closed: non-`number|string` matrix return ABI/codegen path accepted (covered by `f050_blocker_b2_matrix_bool_return_ok`).
+    - `B3` closed: matrix parameter ABI accepts non-`number|string` element domains (covered by `f050_blocker_b3_matrix_bool_param_ok`).
+    - `B4` closed: generic array domains like `(number | string)[]` accepted across declaration/return/call paths (covered by `f050_blocker_b4_union_array_domain_ok`).
