@@ -21,6 +21,7 @@ sub _runtime_memory_policies {
         metac_bool_list_from_array            => { mode => 'owned_return', cleanup => 'metac_free_bool_list' },
         metac_string_list_from_array          => { mode => 'owned_return', cleanup => 'metac_free_string_list' },
         metac_split_string                    => { mode => 'owned_return', cleanup => 'metac_free_result_string_list' },
+        metac_match_string                    => { mode => 'owned_return', cleanup => 'metac_free_result_string_list' },
         metac_slice_string_list               => { mode => 'owned_return', cleanup => 'metac_free_string_list' },
         metac_slice_number_list               => { mode => 'owned_return', cleanup => 'metac_free_number_list' },
         metac_filter_number_list              => { mode => 'owned_return', cleanup => 'metac_free_number_list' },
@@ -230,7 +231,7 @@ sub _validate_consumer_owned_lifetimes {
             my $line_no = $fn->{start_line} + $i;
 
             for my $alloc_fn (@owned_funcs) {
-                next if $alloc_fn eq 'metac_split_string';
+                next if $alloc_fn eq 'metac_split_string' || $alloc_fn eq 'metac_match_string';
                 next if $line !~ /\b\Q$alloc_fn\E\s*\(/;
                 next if $line !~ /\b([A-Za-z_][A-Za-z0-9_]*)\s*=\s*\Q$alloc_fn\E\s*\(/;
                 my $var = $1;
@@ -242,10 +243,11 @@ sub _validate_consumer_owned_lifetimes {
             }
             if ($line =~ /\bStringList\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([A-Za-z_][A-Za-z0-9_]*)\.value\s*;/) {
                 my ($alias, $src) = ($1, $2);
-                if ($src =~ /^__metac_split/ && !exists $state{$src}) {
+                if (($src =~ /^__metac_split/ || $src =~ /^__metac_match/) && !exists $state{$src}) {
+                    my $alloc_fn = $src =~ /^__metac_match/ ? 'metac_match_string' : 'metac_split_string';
                     $state{$src} = {
-                        alloc_fn => 'metac_split_string',
-                        cleanup  => ($owned->{metac_split_string} // 'metac_free_result_string_list'),
+                        alloc_fn => $alloc_fn,
+                        cleanup  => ($owned->{$alloc_fn} // 'metac_free_result_string_list'),
                         line     => $line_no,
                     };
                 }
@@ -276,7 +278,7 @@ sub _validate_consumer_owned_lifetimes {
                     delete $state{$var};
                     next;
                 }
-                if ($state{$var}{alloc_fn} eq 'metac_split_string') {
+                if ($state{$var}{alloc_fn} eq 'metac_split_string' || $state{$var}{alloc_fn} eq 'metac_match_string') {
                     my $alias = $split_src_to_alias{$var};
                     if (defined $alias && $line =~ /\bmetac_free_string_list\s*\(\s*\Q$alias\E\s*,\s*1\s*\)/) {
                         delete $state{$var};

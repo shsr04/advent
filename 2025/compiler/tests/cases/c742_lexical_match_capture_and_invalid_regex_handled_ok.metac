@@ -1,0 +1,21 @@
+@Test({
+   "exit" : 0,
+   "stdout" : ""
+})
+function main(): int {
+  const whole = "ab12".match("[a-z]+[0-9]+")?
+  if whole.size() != 1 {
+    return 1
+  }
+
+  const caps = "ab12".match("([a-z]+)([0-9]+)")?
+  if caps.size() != 2 {
+    return 2
+  }
+
+  "x".match("[") or catch(e) {
+    return 0
+  }
+
+  return 3
+}

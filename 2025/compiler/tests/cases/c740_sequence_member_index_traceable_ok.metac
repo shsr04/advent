@@ -1,0 +1,18 @@
+@Test({
+   "exit" : 0,
+   "stdout" : ""
+})
+function main(): int {
+  const xs: int[] with size(3) = [4, 5, 6]
+  let sum: int = 0
+
+  for const x in xs {
+    const i = x.index()
+    sum = sum + i
+  }
+
+  if sum == 3 {
+    return 0
+  }
+  return 1
+}

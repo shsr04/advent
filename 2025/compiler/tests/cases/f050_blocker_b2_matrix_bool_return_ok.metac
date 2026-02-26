@@ -3,6 +3,10 @@ function mk(flag: boolean): matrix(boolean) {
   return g
 }
 
+@Test({
+   "exit" : 0,
+   "stdout" : ""
+})
 function main(): number {
   const x: matrix(boolean) = mk(true)
   return 0

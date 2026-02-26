@@ -1,0 +1,30 @@
+function maybeLen(s: string): int | error {
+  const m = s.match(s)?
+  return m.size()
+}
+
+function badReturn(): int {
+  return maybeLen("ab")?
+}
+
+function badCondition(): int {
+  if maybeLen("ab")? > 0 {
+    return 1
+  }
+  return 0
+}
+
+function take(v: int): int {
+  return v
+}
+
+function badArg(): int {
+  return take(maybeLen("ab")?)
+}
+
+@Test({
+   "compile_err" : "Postfix '?' is only supported"
+})
+function main(): int {
+  return badReturn() + badCondition() + badArg()
+}

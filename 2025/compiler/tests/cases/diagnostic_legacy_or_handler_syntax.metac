@@ -1,3 +1,6 @@
+@Test({
+   "compile_err" : "Legacy error handler syntax removed; use 'or catch(<name>) { ... }'"
+})
 function main() {
   const [a, b] = split("1-2", "-") or (e) => {
     log(e)

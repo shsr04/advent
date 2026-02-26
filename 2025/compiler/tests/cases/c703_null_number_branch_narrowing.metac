@@ -1,0 +1,28 @@
+@Test({
+   "exit" : 0,
+   "stdout" : "Result: 5\n"
+})
+function main() {
+  const result = run()?
+  log("Result: ${result}")
+}
+
+function run(): number | error {
+  let best: number | null = null
+
+  for const n in seq(1, 5) {
+    if best == null {
+      best = n
+    } else {
+      if n > best {
+        best = n
+      }
+    }
+  }
+
+  if best == null {
+    return error("missing best")
+  } else {
+    return best
+  }
+}

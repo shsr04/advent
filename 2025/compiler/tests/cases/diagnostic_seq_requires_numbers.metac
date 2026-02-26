@@ -1,3 +1,6 @@
+@Test({
+   "compile_err" : "seq start must be number"
+})
 function main() {
   const result = solve()?
   log("Result: ${result}")

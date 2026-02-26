@@ -2,6 +2,10 @@ function bounce(x: float): float {
   return x
 }
 
+@Test({
+   "exit" : 0,
+   "stdout" : ""
+})
 function main(): number {
   return bounce(0)
 }

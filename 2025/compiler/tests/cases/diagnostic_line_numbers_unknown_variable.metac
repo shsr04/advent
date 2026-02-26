@@ -1,3 +1,6 @@
+@Test({
+   "compile_err" : "Unknown variable: y"
+})
 function main() {
   const result = run()?
   log("Result: ${result}")

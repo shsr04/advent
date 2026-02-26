@@ -1,3 +1,6 @@
+@Test({
+   "compile_err" : "requires pushed number[] with proven size(2)"
+})
 function main(): number {
   let fresh: (int[] with size(2))[] = []
   fresh.push([1, 2, 3])

@@ -1,3 +1,0 @@
-function main() {
-  const n: number with range(*,3) = 5
-}

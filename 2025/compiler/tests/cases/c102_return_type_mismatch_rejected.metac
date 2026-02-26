@@ -2,6 +2,9 @@ function bad(): string {
   return 1
 }
 
-function main(): number {
+@Test({
+   "compile_err" : "return type"
+})
+function main(): int {
   return 0
 }

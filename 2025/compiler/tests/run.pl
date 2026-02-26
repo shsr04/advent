@@ -4,6 +4,7 @@ use warnings;
 use File::Basename qw(dirname basename);
 use File::Path qw(make_path);
 use File::Temp qw(tempfile);
+use JSON::PP qw(decode_json);
 
 sub slurp_file {
     my ($path) = @_;
@@ -12,6 +13,121 @@ sub slurp_file {
     my $data = <$fh>;
     close $fh;
     return $data;
+}
+
+sub write_file {
+    my ($path, $content) = @_;
+    open my $fh, '>', $path or die "io error: unable to write '$path': $!\n";
+    print {$fh} $content;
+    close $fh;
+}
+
+sub parse_case_annotation {
+    my ($name, $source_text) = @_;
+    my $tag_pos = index($source_text, '@Test(');
+    if ($tag_pos < 0) {
+        die "[FAIL] $name: missing \@Test({...}) annotation directly before main()\n";
+    }
+
+    my $open_paren = $tag_pos + length('@Test');
+    my $depth = 0;
+    my $in_string = 0;
+    my $escaped = 0;
+    my $close_paren = -1;
+    my $len = length($source_text);
+
+    for (my $i = $open_paren; $i < $len; $i += 1) {
+        my $ch = substr($source_text, $i, 1);
+        if ($in_string) {
+            if ($escaped) {
+                $escaped = 0;
+                next;
+            }
+            if ($ch eq '\\') {
+                $escaped = 1;
+                next;
+            }
+            if ($ch eq '"') {
+                $in_string = 0;
+            }
+            next;
+        }
+
+        if ($ch eq '"') {
+            $in_string = 1;
+            next;
+        }
+
+        if ($ch eq '(') {
+            $depth += 1;
+            next;
+        }
+
+        if ($ch eq ')') {
+            $depth -= 1;
+            if ($depth == 0) {
+                $close_paren = $i;
+                last;
+            }
+            next;
+        }
+    }
+
+    if ($close_paren < 0) {
+        die "[FAIL] $name: unterminated \@Test(...) annotation\n";
+    }
+
+    my $suffix = substr($source_text, $close_paren + 1);
+    if ($suffix !~ /\A([ \t\r\n]*)(?=function\s+main\s*\()/s) {
+        die "[FAIL] $name: \@Test annotation must be directly before main()\n";
+    }
+    my $gap_len = length($1);
+
+    my $json_text = substr($source_text, $open_paren + 1, $close_paren - $open_paren - 1);
+    my $expect = eval { decode_json($json_text) };
+    if (!$expect || ref($expect) ne 'HASH') {
+        my $err = $@ // 'invalid JSON payload';
+        die "[FAIL] $name: invalid \@Test JSON: $err\n";
+    }
+
+    my %allowed = map { $_ => 1 } qw(compile_err stdout exit stdin hir);
+    for my $key (keys %$expect) {
+        die "[FAIL] $name: unsupported \@Test key '$key'\n" if !$allowed{$key};
+    }
+
+    if (exists $expect->{compile_err}) {
+        die "[FAIL] $name: \@Test.compile_err must be a string\n"
+            if !defined($expect->{compile_err}) || ref($expect->{compile_err});
+    } else {
+        die "[FAIL] $name: \@Test.stdout must be present for run tests\n"
+            if !exists $expect->{stdout};
+        die "[FAIL] $name: \@Test.stdout must be a string\n"
+            if !defined($expect->{stdout}) || ref($expect->{stdout});
+    }
+
+    if (exists $expect->{exit}) {
+        die "[FAIL] $name: \@Test.exit must be an integer\n"
+            if !defined($expect->{exit}) || ref($expect->{exit}) || $expect->{exit} !~ /^-?\d+$/;
+        $expect->{exit} = int($expect->{exit});
+    } else {
+        $expect->{exit} = 0;
+    }
+
+    if (exists $expect->{stdin}) {
+        die "[FAIL] $name: \@Test.stdin must be a string\n"
+            if !defined($expect->{stdin}) || ref($expect->{stdin});
+    } else {
+        $expect->{stdin} = '';
+    }
+
+    if (exists $expect->{hir}) {
+        die "[FAIL] $name: \@Test.hir must be a string\n"
+            if !defined($expect->{hir}) || ref($expect->{hir});
+    }
+
+    my $stripped = $source_text;
+    substr($stripped, $tag_pos, $close_paren - $tag_pos + 1 + $gap_len, '');
+    return ($expect, $stripped);
 }
 
 sub run_cmd {
@@ -112,17 +228,20 @@ for my $case_file (@cases) {
     my ($name) = $case_file =~ /^(.*)\.metac$/;
     my $prefix = "$cases_dir/$name";
     my $source = "$prefix.metac";
-    my $expect_compile_err = read_optional("$prefix.compile_err");
-    my $expect_hir = read_optional("$prefix.hir");
+
+    my $source_text = slurp_file($source);
+    my ($expect, $stripped_source) = parse_case_annotation($name, $source_text);
+    my $source_for_compile = "$build_dir/$name.test.metac";
+    write_file($source_for_compile, $stripped_source);
 
     my $c_out = "$build_dir/$name.c";
     my $bin_out = "$build_dir/$name";
     my $hir_out = "$build_dir/$name.hir";
 
-    my $compile = run_cmd(cmd => ['perl', $metac, $source, '-o', $c_out, '--dump-hir', $hir_out]);
+    my $compile = run_cmd(cmd => ['perl', $metac, $source_for_compile, '-o', $c_out, '--dump-hir', $hir_out]);
 
-    if (defined $expect_compile_err) {
-        my $needle = $expect_compile_err;
+    if (exists $expect->{compile_err}) {
+        my $needle = $expect->{compile_err};
         $needle =~ s/\s+$//;
 
         if ($compile->{exit} == 0) {
@@ -149,16 +268,16 @@ for my $case_file (@cases) {
         next;
     }
 
-    if (defined $expect_hir) {
+    if (exists $expect->{hir}) {
         my $actual_hir = read_optional($hir_out);
         if (!defined $actual_hir) {
             $failed += 1;
             fail_case($name, 'missing generated HIR dump');
             next;
         }
-        if ($actual_hir ne $expect_hir) {
+        if ($actual_hir ne $expect->{hir}) {
             $failed += 1;
-            fail_case($name, "HIR dump mismatch\nexpected:\n$expect_hir\nactual:\n$actual_hir");
+            fail_case($name, "HIR dump mismatch\nexpected:\n$expect->{hir}\nactual:\n$actual_hir");
             next;
         }
     }
@@ -170,32 +289,16 @@ for my $case_file (@cases) {
         next;
     }
 
-    my $input = read_optional("$prefix.in");
-    $input = '' if !defined $input;
-    my $expected_out = read_optional("$prefix.out");
-    if (!defined $expected_out) {
+    my $run = run_cmd(cmd => [$bin_out], stdin => $expect->{stdin});
+    if ($run->{exit} != $expect->{exit}) {
         $failed += 1;
-        fail_case($name, 'missing expected output file (.out) for run test');
+        fail_case($name, "unexpected exit code $run->{exit}, expected $expect->{exit}");
         next;
     }
 
-    my $expected_exit_raw = read_optional("$prefix.exit");
-    my $expected_exit = 0;
-    if (defined $expected_exit_raw) {
-        $expected_exit_raw =~ s/\s+$//;
-        $expected_exit = int($expected_exit_raw);
-    }
-
-    my $run = run_cmd(cmd => [$bin_out], stdin => $input);
-    if ($run->{exit} != $expected_exit) {
+    if ($run->{stdout} ne $expect->{stdout}) {
         $failed += 1;
-        fail_case($name, "unexpected exit code $run->{exit}, expected $expected_exit");
-        next;
-    }
-
-    if ($run->{stdout} ne $expected_out) {
-        $failed += 1;
-        fail_case($name, "stdout mismatch\nexpected:\n$expected_out\nactual:\n$run->{stdout}");
+        fail_case($name, "stdout mismatch\nexpected:\n$expect->{stdout}\nactual:\n$run->{stdout}");
         next;
     }
 

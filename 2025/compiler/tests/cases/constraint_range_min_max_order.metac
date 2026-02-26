@@ -1,3 +1,6 @@
+@Test({
+   "compile_err" : "range(min,max) requires min <= max"
+})
 function main() {
   let n: number with range(10,1) = 5
 }

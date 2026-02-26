@@ -1,3 +1,6 @@
+@Test({
+   "compile_err" : "Builtin 'log' does not support argument type 'bool | number'"
+})
 function main() {
   const v = tri()?
   log(v)

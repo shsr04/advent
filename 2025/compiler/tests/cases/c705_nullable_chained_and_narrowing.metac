@@ -1,0 +1,16 @@
+@Test({
+   "exit" : 0,
+   "stdout" : "Result: 7\n"
+})
+function main() {
+  const y = run(5)
+  log("Result: ${y}")
+}
+
+function run(x: number|null): number {
+  let y = 0
+  if x != null && 1 <= x && x < 10 {
+    y = x + 2
+  }
+  return y
+}

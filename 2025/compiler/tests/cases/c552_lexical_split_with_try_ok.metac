@@ -1,0 +1,10 @@
+@Test({
+   "compile_err" : "is fallible; handle it with '?'"
+})
+function main(): int {
+  const parts = "a-b-c".split("-")
+  if parts.size() == 3 {
+    return 0
+  }
+  return 1
+}

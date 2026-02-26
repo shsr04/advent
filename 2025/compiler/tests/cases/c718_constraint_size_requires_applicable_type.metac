@@ -1,0 +1,6 @@
+@Test({
+   "compile_err" : "Constraint 'size' cannot be applied to type 'number'"
+})
+function main() {
+  let n: number with size(1) = 1
+}

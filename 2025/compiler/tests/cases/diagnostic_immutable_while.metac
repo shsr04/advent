@@ -1,3 +1,6 @@
+@Test({
+   "compile_err" : "Conditional comparison in while condition depends only on immutable values"
+})
 function main() {
   const result = solve()?
   log("Result: ${result}")

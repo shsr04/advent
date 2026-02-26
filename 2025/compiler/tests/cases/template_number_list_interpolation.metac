@@ -1,3 +1,7 @@
+@Test({
+   "exit" : 0,
+   "stdout" : "xs=[1, 2, 3]\n"
+})
 function main(): number {
   const xs: number[] = [1, 2, 3]
   log("xs=${xs}")

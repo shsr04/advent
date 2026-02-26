@@ -1,3 +1,7 @@
+@Test({
+   "exit" : 0,
+   "stdout" : "ok\n"
+})
 function main() {
   const text = run()?
   log(text)

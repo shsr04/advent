@@ -1,0 +1,16 @@
+@Test({
+   "exit" : 0,
+   "stdout" : "Result: 1\n"
+})
+function main() {
+  u2()
+  log("Result: 1")
+}
+
+function u1(): number | bool {
+  return 9
+}
+
+function u2(): bool | number {
+  return u1()
+}

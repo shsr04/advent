@@ -1,3 +1,6 @@
+@Test({
+   "compile_err" : "reduce(...) second arg must be a two-parameter lambda"
+})
 function main() {
   const result = solve()?
   log("Result: ${result}")

@@ -1,8 +1,8 @@
-function fail(): number | error {
-  return error("bad")
-}
-
-function main(): number {
-  fail()?
-  return 0
+@Test({
+   "exit" : 2,
+   "stdout" : ""
+})
+function main(): int {
+  const caps = "x".match("[")?
+  return caps.size()
 }

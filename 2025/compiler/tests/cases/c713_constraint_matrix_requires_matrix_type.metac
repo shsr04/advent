@@ -1,0 +1,6 @@
+@Test({
+   "compile_err" : "Matrix constraints require matrix type"
+})
+function main() {
+  const s: string with dim(2) = "x"
+}

@@ -1,4 +1,7 @@
-function main(): number {
+@Test({
+   "compile_err" : "cannot be applied to type"
+})
+function main(): int {
   let n: number with size(1) = 0
   return n
 }

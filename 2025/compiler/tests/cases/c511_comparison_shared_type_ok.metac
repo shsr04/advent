@@ -1,4 +1,8 @@
-function main(): number {
+@Test({
+   "exit" : 0,
+   "stdout" : ""
+})
+function main(): int {
   if 2 == 2 {
     return 0
   }

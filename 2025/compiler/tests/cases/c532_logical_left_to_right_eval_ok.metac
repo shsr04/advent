@@ -1,0 +1,14 @@
+function left(): boolean | error {
+  const caps = "x".match("[")?
+  return caps.size() > 0
+}
+
+@Test({
+   "compile_err" : "Postfix '?' is only supported"
+})
+function main(): int {
+  if left()? && false {
+    return 1
+  }
+  return 0
+}

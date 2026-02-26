@@ -1,0 +1,10 @@
+@Test({
+   "exit" : 7,
+   "stdout" : ""
+})
+function main(): int {
+  const a: int = 3
+  const b: float = 4.0
+  const x = a + b
+  return x
+}

@@ -1,0 +1,31 @@
+function pred(s: string): boolean | error {
+  const m = s.match("[")?
+  return m.size() > 0
+}
+
+function reducer(acc: int, s: string): int | error {
+  const m = s.match("[")?
+  return acc + m.size()
+}
+
+function scanner(acc: int, s: string): int | error {
+  const m = s.match("[")?
+  return acc + m.size()
+}
+
+@Test({
+   "compile_err" : "any(...) predicate must be a single-parameter lambda"
+})
+function main(): int {
+  const xs: string[] = ["a", "bb"]
+
+  const a = xs.any(pred)
+  const b = xs.all(pred)
+  const r = xs.reduce(0, reducer)
+  const s = xs.scan(0, scanner)
+
+  if a && b && r > 0 && s.size() > 0 {
+    return 0
+  }
+  return 1
+}

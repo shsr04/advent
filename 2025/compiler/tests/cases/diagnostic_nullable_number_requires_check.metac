@@ -1,3 +1,6 @@
+@Test({
+   "compile_err" : "Operator '+' requires number operand, got number_or_null"
+})
 function main() {
   const result = run()?
   log("Result: ${result}")

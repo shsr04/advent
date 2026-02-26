@@ -1,3 +1,7 @@
+@Test({
+   "exit" : 0,
+   "stdout" : "3\n"
+})
 function main() {
   let count = 0
   for const flag in [true, false, true, true] {

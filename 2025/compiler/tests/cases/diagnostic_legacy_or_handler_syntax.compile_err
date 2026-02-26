@@ -1,1 +1,0 @@
-Legacy error handler syntax removed; use 'or catch(<name>) { ... }'

@@ -1,0 +1,9 @@
+@Test({
+   "compile_err" : "requires bool operands"
+})
+function main(): int {
+  if true || 1 {
+    return 1
+  }
+  return 0
+}

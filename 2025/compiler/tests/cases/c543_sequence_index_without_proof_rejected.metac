@@ -1,0 +1,9 @@
+@Test({
+   "compile_err" : "requires compile-time in-bounds proof"
+})
+function main(): int {
+  const nums: int[] = [4, 5, 6]
+  let i: int = 1
+  const v = nums[i]
+  return v
+}

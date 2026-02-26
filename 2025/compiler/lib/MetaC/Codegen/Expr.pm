@@ -331,10 +331,11 @@ sub compile_expr {
         my ($l_code, $l_type) = compile_expr($expr->{left}, $ctx);
         my ($r_code, $r_type) = compile_expr($expr->{right}, $ctx);
 
-        if ($expr->{op} eq '+' || $expr->{op} eq '-' || $expr->{op} eq '*' || $expr->{op} eq '/' || $expr->{op} eq '%') {
+        if ($expr->{op} eq '+' || $expr->{op} eq '-' || $expr->{op} eq '*' || $expr->{op} eq '/' || $expr->{op} eq '~/' || $expr->{op} eq '%') {
             my $l_num = number_like_to_c_expr($l_code, $l_type, "Operator '$expr->{op}'");
             my $r_num = number_like_to_c_expr($r_code, $r_type, "Operator '$expr->{op}'");
-            return ("($l_num $expr->{op} $r_num)", 'number');
+            my $c_op = $expr->{op} eq '~/' ? '/' : $expr->{op};
+            return ("($l_num $c_op $r_num)", 'number');
         }
 
         if ($expr->{op} eq '==' || $expr->{op} eq '!=') {

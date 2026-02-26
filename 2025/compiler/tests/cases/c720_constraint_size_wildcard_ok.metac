@@ -1,0 +1,8 @@
+@Test({
+   "exit" : 0,
+   "stdout" : "5\n"
+})
+function main() {
+  const s: string with size(*) = "hello"
+  log("${s.size()}")
+}

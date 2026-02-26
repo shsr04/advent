@@ -1,0 +1,31 @@
+function predOk(s: string): boolean | error {
+  const m = s.match(s)?
+  return m.size() > 0
+}
+
+function reducerOk(acc: int, s: string): int | error {
+  const m = s.match(s)?
+  return acc + m.size()
+}
+
+function scannerOk(acc: int, s: string): int | error {
+  const m = s.match(s)?
+  return acc + m.size()
+}
+
+@Test({
+   "compile_err" : "Unsupported try expression in const assignment"
+})
+function main(): int {
+  const xs: string[] = ["a", "bb"]
+
+  const a = xs.any(predOk)?
+  const b = xs.all(predOk)?
+  const r = xs.reduce(0, reducerOk)?
+  const s = xs.scan(0, scannerOk)?
+
+  if a && b && r == 2 && s.size() == 2 {
+    return 0
+  }
+  return 1
+}

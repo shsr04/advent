@@ -1,3 +1,7 @@
+@Test({
+   "exit" : 0,
+   "stdout" : "Result: 17\n"
+})
 function main() {
   const result = solve()?
   log("Result: ${result}")

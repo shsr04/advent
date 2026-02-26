@@ -1,0 +1,18 @@
+@Test({
+   "exit" : 1,
+   "stdout" : ""
+})
+function main(): int {
+  const i1: int = 7
+  const i2: int = 2
+  const q: int = i1 ~/ i2
+
+  const f1: float = 7.0
+  const f2: float = 2.0
+  const d: float = f1 / f2
+
+  if q == 3 && d > 3.4 && d < 3.6 {
+    return 0
+  }
+  return 1
+}

@@ -1,3 +1,8 @@
+@Test({
+   "exit" : 0,
+   "hir" : "version:f047-vnf-hir-v2\nfact_lattice.merge_policy:weaken_only\nfunction:f0:main:number\n  entry_region:r0\n  region:r0\n    step:s0:Declare:let:line=2\n    exit.kind:Goto\n    exit.target_region:r1\n    facts.goto:type:x:number\n  region:r1\n    step:s1:Control:if:line=3\n    exit.cond_value:\n    exit.  kind:binop\n    exit.  left:\n    exit.    kind:ident\n    exit.    name:x\n    exit.  op:==\n    exit.  right:\n    exit.    kind:num\n    exit.    value:1\n    exit.else_region:r5\n    exit.join_region:r2\n    exit.kind:IfExit\n    exit.then_region:r4\n    facts.else:type:x:number\n    facts.join:type:x:number\n    facts.then:type:x:number\n  region:r2\n    step:s2:Control:return:line=6\n    exit.kind:Return\n    exit.value:\n    exit.  kind:num\n    exit.  value:0\n    facts.return:cfg:return\n  region:r3\n    exit.kind:Return\n    exit.value:\n    facts.return:cfg:return\n  region:r4\n    step:s3:Assign:assign:line=4\n    exit.kind:Goto\n    exit.target_region:r2\n    facts.goto:\n  region:r5\n    exit.kind:Goto\n    exit.target_region:r2\n    facts.goto:type:x:number\n",
+   "stdout" : ""
+})
 function main() {
   let x: number = 1
   if x == 1 {

@@ -1,4 +1,7 @@
-function main(): number {
+@Test({
+   "compile_err" : "Unsupported type annotation"
+})
+function main(): int {
   let x: mystery = 0
   return x
 }

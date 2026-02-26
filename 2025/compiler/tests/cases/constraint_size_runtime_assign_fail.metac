@@ -1,3 +1,7 @@
+@Test({
+   "exit" : 2,
+   "stdout" : ""
+})
 function main() {
   let s: string with size(3) = "abc"
   s = "toolong"

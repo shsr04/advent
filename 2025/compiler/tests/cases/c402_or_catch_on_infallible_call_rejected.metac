@@ -1,10 +1,11 @@
-function foo(): number {
+function one(): int {
   return 1
 }
 
-function main(): number {
-  const y = foo() or catch(e) {
-    return 0
-  }
+@Test({
+   "compile_err" : "Unexpected trailing expression tokens"
+})
+function main(): int {
+  const y = one() or 0
   return y
 }

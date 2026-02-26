@@ -1,11 +1,14 @@
-function rhs(): boolean {
-  log("rhs")
-  return false
+function rhs(): boolean | error {
+  const caps = "x".match("[")?
+  return caps.size() > 0
 }
 
-function main(): number {
-  if true || rhs() {
-    log("ok")
+@Test({
+   "compile_err" : "Postfix '?' is only supported"
+})
+function main(): int {
+  if true || rhs()? {
+    return 0
   }
-  return 0
+  return 1
 }

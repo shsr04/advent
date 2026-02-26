@@ -39,12 +39,20 @@ sub expr_tokens {
             push @tokens, { type => 'op', value => '&&' };
             next;
         }
+        if ($expr =~ /\G~\//gc) {
+            push @tokens, { type => 'op', value => '~/' };
+            next;
+        }
         if ($expr =~ /\G[<>,\+\-\*\/%\.\(\)\[\]\?]/gc) {
             push @tokens, { type => 'op', value => $& };
             next;
         }
         if ($expr =~ /\G"((?:\\.|[^"\\])*)"/gc) {
             push @tokens, { type => 'str', value => $&, raw => $1 };
+            next;
+        }
+        if ($expr =~ /\G\d+\.\d+/gc) {
+            push @tokens, { type => 'num', value => $& };
             next;
         }
         if ($expr =~ /\G\d+/gc) {
@@ -237,7 +245,7 @@ sub parse_expr {
         my $left = $parse_unary->();
         while (1) {
             my $tok = $peek->();
-            last if !defined $tok || $tok->{type} ne 'op' || ($tok->{value} ne '*' && $tok->{value} ne '/' && $tok->{value} ne '%');
+            last if !defined $tok || $tok->{type} ne 'op' || ($tok->{value} ne '*' && $tok->{value} ne '/' && $tok->{value} ne '~/' && $tok->{value} ne '%');
             my $op = $tok->{value};
             $idx++;
             my $right = $parse_unary->();

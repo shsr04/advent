@@ -1,3 +1,7 @@
+@Test({
+   "exit" : 0,
+   "stdout" : "1\n"
+})
 function main(): number {
   const value = run() or catch(e) {
     return 1

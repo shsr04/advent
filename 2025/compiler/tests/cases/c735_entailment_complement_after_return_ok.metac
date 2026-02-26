@@ -1,0 +1,16 @@
+@Test({
+   "exit" : 0,
+   "stdout" : ""
+})
+function main(): int {
+  const n: number | null = 2
+  if n == null {
+    return 1
+  }
+
+  const m: number = n
+  if m > 1 && m < 3 {
+    return 0
+  }
+  return 2
+}

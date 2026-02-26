@@ -1,3 +1,6 @@
+@Test({
+   "compile_err" : "Method 'map(...)' is fallible for mapper 'parseNumber'; handle it with '?'"
+})
 function main() {
   const result = solve()?
   log("Result: ${result}")

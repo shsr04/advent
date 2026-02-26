@@ -1,3 +1,6 @@
+@Test({
+   "compile_err" : "Empty list literal requires an explicit list type"
+})
 function main() {
   const result = run()?
   log("Result: ${result}")

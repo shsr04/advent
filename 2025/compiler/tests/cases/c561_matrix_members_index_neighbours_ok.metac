@@ -1,0 +1,20 @@
+function inspect(m: matrix(number) with dim(2) + matrixSize([2, 2])): int {
+  for const cell in m.members() {
+    const idx = cell.index()
+    const row = idx[0]
+    const col = idx[1]
+    const ns = cell.neighbours()
+
+    if row < 0 && col < 0 && ns.size() < 0 {
+      return 1
+    }
+  }
+  return 0
+}
+
+@Test({
+   "compile_err" : "requires compile-time in-bounds proof"
+})
+function main(): int {
+  return 0
+}

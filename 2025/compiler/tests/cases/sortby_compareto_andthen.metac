@@ -1,3 +1,7 @@
+@Test({
+   "exit" : 0,
+   "stdout" : "Result: 521\n"
+})
 function main() {
   let pairs: int[][] = []
   pairs.push([2, 3])

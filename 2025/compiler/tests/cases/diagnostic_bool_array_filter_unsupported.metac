@@ -1,3 +1,6 @@
+@Test({
+   "compile_err" : "filter(...) receiver must be string_list, number_list, or matrix member list, got bool_list"
+})
 function main() {
   const xs: bool[] = [true, false]
   const ys = xs.filter(x => x)

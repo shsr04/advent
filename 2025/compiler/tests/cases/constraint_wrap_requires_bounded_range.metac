@@ -1,3 +1,6 @@
+@Test({
+   "compile_err" : "wrap requires bounded range(min,max)"
+})
 function main() {
   let n: number with range(0,*) + wrap = 1
 }

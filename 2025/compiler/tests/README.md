@@ -14,10 +14,32 @@ perl compiler/tests/run.pl
 
 ## Case File Conventions
 
-Each test lives under `compiler/tests/cases/` with basename `<name>`.
+Each test lives under `compiler/tests/cases/` as a single `<name>.metac` file.
 
-- `<name>.metac`: required source program
-- `<name>.in`: optional stdin input
-- `<name>.out`: required expected stdout for compile+run tests
-- `<name>.exit`: optional expected process exit code (default `0`)
-- `<name>.compile_err`: if present, test is compile-fail and this file must contain an expected diagnostic substring
+`main()` must be preceded by a `@Test({...})` annotation with JSON expectations.
+
+Run test:
+
+```metac
+@Test({
+  "stdout": "ok\n",
+  "exit": 0,
+  "stdin": ""
+})
+function main(): int { ... }
+```
+
+Compile-fail test:
+
+```metac
+@Test({
+  "compile_err": "requires bool operands"
+})
+function main(): int { ... }
+```
+
+Optional keys:
+
+- `stdin` (string, default `""`)
+- `exit` (integer, default `0`)
+- `hir` (string, exact expected HIR dump)

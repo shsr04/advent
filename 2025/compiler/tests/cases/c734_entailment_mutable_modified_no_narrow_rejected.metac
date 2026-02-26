@@ -1,0 +1,14 @@
+@Test({
+   "compile_err" : "null"
+})
+function main(): int {
+  let n: number | null = 1
+
+  if n != null {
+    n = null
+    const m: number = n
+    return m
+  }
+
+  return 0
+}

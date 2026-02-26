@@ -1,0 +1,13 @@
+function toLengthOrError(s: string): int | error {
+  const caps = s.match(s)?
+  return caps.size()
+}
+
+@Test({
+   "compile_err" : "Method 'map(...)' is fallible for mapper"
+})
+function main(): int {
+  const parts: string[] = ["12", "34"]
+  const lengths = parts.map(toLengthOrError)
+  return lengths.size()
+}

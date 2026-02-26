@@ -1,3 +1,6 @@
+@Test({
+   "compile_err" : "Operator '+' requires number operand, got bool | number"
+})
 function main() {
   const x: number | bool = pick()
   const y = x + 1

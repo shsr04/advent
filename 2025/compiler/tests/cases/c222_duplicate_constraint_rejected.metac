@@ -1,4 +1,7 @@
-function main(): number {
+@Test({
+   "compile_err" : "Duplicate constraint term"
+})
+function main(): int {
   const s: string with size(1) + size(2) = "a"
   return s.size()
 }

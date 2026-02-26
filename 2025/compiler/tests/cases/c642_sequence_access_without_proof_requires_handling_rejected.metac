@@ -1,0 +1,13 @@
+function sumThree(xs: int[]): int {
+  const h = xs.head()
+  const l = xs.last()
+  const m = xs[0]
+  return h + l + m
+}
+
+@Test({
+   "compile_err" : "Unsupported parameter type binding: number_list"
+})
+function main(): int {
+  return sumThree([1, 2, 3])
+}

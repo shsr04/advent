@@ -1,4 +1,7 @@
-function main(): number {
+@Test({
+   "compile_err" : "requires bool operands"
+})
+function main(): int {
   if 1 && true {
     return 1
   }

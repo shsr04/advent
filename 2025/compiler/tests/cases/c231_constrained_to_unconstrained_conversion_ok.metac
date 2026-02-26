@@ -1,5 +1,12 @@
-function main(): number {
-  let n: number with range(0, 10) = 5
-  let m: number = n
-  return m
+@Test({
+   "exit" : 0,
+   "stdout" : ""
+})
+function main(): int {
+  const n: number with range(0, 10) = 5
+  const m: number = n
+  if m == 5 {
+    return 0
+  }
+  return 1
 }

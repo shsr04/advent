@@ -2,8 +2,14 @@ function identity(v: (number | string)[]): (number | string)[] {
   return v
 }
 
-function main(): number {
-  const xs: (number | string)[] = []
+@Test({
+   "compile_err" : "List literal items must share the same type category"
+})
+function main(): int {
+  const xs: (number | string)[] = [1, "x"]
   const ys: (number | string)[] = identity(xs)
-  return 0
+  if ys.size() == 2 {
+    return 0
+  }
+  return 1
 }

@@ -1,3 +1,6 @@
+@Test({
+   "compile_err" : "Cannot mutate immutable variable 'digits'"
+})
 function main() {
   const result = run()?
   log("Result: ${result}")

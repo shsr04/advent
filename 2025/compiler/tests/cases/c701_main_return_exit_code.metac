@@ -1,0 +1,7 @@
+@Test({
+   "exit" : 7,
+   "stdout" : ""
+})
+function main(): number {
+  return 7
+}

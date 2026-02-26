@@ -1,4 +1,7 @@
-function main(): number {
+@Test({
+   "compile_err" : "immutable"
+})
+function main(): int {
   const x = 1
   x = 2
   return x

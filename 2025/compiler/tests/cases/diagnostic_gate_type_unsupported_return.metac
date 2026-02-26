@@ -2,6 +2,9 @@ function bad(): indexed_number {
   return 0
 }
 
+@Test({
+   "compile_err" : "Gate-Type/F047-Gate-Type"
+})
 function main() {
   return 0
 }

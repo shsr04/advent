@@ -1,13 +1,15 @@
-function mk(flag: boolean): matrix(boolean) {
-  const g: matrix(boolean) = []
-  return g
+function idMatrix(grid: matrix(boolean)): matrix(boolean) {
+  return grid
 }
 
-function consume(grid: matrix(boolean)): number {
+function consume(grid: matrix(boolean)): int {
   return 0
 }
 
-function main(): number {
-  const g: matrix(boolean) = mk(true)
-  return consume(g)
+@Test({
+   "exit" : 0,
+   "stdout" : ""
+})
+function main(): int {
+  return 0
 }

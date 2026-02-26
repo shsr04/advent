@@ -1,3 +1,0 @@
-function main() {
-  const s: string with size(1) + size(2) = "a"
-}

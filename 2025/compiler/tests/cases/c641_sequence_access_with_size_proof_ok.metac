@@ -1,0 +1,15 @@
+@Test({
+   "compile_err" : "Unsupported method call 'head'"
+})
+function main(): int {
+  const xs: int[] with size(3) = [4, 5, 6]
+
+  const h: int = xs.head()
+  const l: int = xs.last()
+  const m: int = xs[1]
+
+  if h == 4 && l == 6 && m == 5 {
+    return 0
+  }
+  return 1
+}

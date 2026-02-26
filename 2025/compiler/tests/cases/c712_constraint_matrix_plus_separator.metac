@@ -1,0 +1,7 @@
+@Test({
+   "exit" : 0,
+   "stdout" : ""
+})
+function main() {
+  let grid: matrix(number) with dim(2) + matrixSize([2, 2]) = []
+}

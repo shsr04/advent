@@ -1,7 +1,13 @@
-function main(): number {
+@Test({
+   "exit" : 0,
+   "stdout" : ""
+})
+function main(): int {
   for const i in seq(1, 3) {
     const j: number with range(1, 3) = i
-    log("${j}")
+    if j < 1 || j > 3 {
+      return 1
+    }
   }
   return 0
 }

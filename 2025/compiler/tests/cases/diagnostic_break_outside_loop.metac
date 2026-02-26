@@ -1,3 +1,6 @@
+@Test({
+   "compile_err" : "break is only valid inside a loop"
+})
 function main() {
   const result = f()
   log("Result: ${result}")

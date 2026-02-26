@@ -1,3 +1,6 @@
+@Test({
+   "compile_err" : "Cannot prove destructuring arity"
+})
 function main() {
   const result = solve()?
   log("Result: ${result}")

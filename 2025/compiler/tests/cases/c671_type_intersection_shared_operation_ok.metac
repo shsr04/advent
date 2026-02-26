@@ -1,0 +1,13 @@
+function isSelfEqual(v: number | boolean): boolean {
+  return v == v
+}
+
+@Test({
+   "compile_err" : "Unsupported '==' operand type: bool | number"
+})
+function main(): int {
+  if isSelfEqual(1) && isSelfEqual(true) {
+    return 0
+  }
+  return 1
+}

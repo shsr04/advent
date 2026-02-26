@@ -1,3 +1,6 @@
+@Test({
+   "compile_err" : "parseNumber(...) is fallible; use parseNumber(...)? or map(parseNumber)?"
+})
 function main() {
   const result = solve()?
   log("Result: ${result}")

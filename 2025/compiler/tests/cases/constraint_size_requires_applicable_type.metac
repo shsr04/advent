@@ -1,3 +1,0 @@
-function main() {
-  let n: number with size(1) = 1
-}

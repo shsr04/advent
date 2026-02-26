@@ -1,4 +1,7 @@
-function main(): number {
+@Test({
+   "compile_err" : "requires number operand"
+})
+function main(): int {
   const x = true + 1
   return x
 }

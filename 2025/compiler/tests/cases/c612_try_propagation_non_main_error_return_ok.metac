@@ -1,0 +1,15 @@
+function helper(s: string): int | error {
+  const parts = s.match(s)?
+  return parts.size()
+}
+
+@Test({
+   "compile_err" : "Unexpected trailing expression tokens"
+})
+function main(): int {
+  const n = helper("ab") or 0
+  if n == 1 {
+    return 0
+  }
+  return 1
+}

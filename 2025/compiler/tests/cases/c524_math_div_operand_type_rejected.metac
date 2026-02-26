@@ -1,4 +1,10 @@
-function main(): number {
-  const x = "2" / 1
+@Test({
+   "exit" : 2,
+   "stdout" : ""
+})
+function main(): int {
+  const a: int = 4
+  const b: int = 2
+  const x = a / b
   return x
 }

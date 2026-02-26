@@ -1,0 +1,12 @@
+function identity(v: int): int {
+  return v
+}
+
+@Test({
+   "compile_err" : "requires value with source index metadata"
+})
+function main(): int {
+  const y: int = identity(4)
+  const i = y.index()
+  return i
+}

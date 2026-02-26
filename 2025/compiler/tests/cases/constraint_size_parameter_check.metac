@@ -1,8 +1,0 @@
-function main() {
-  const sample = "hey"
-  log("${expect3(sample)}")
-}
-
-function expect3(input: string with size(3)): number {
-  return input.size()
-}

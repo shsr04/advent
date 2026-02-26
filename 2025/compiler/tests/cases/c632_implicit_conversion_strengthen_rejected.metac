@@ -1,0 +1,9 @@
+@Test({
+   "exit" : 5,
+   "stdout" : ""
+})
+function main(): int {
+  const a: number = 5
+  const b: number with range(0, 10) = a
+  return b
+}

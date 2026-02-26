@@ -1,0 +1,12 @@
+function first(xs: int[]): int {
+  for const x in xs {
+    return x
+  }
+}
+
+@Test({
+   "compile_err" : "Unsupported parameter type binding: number_list"
+})
+function main(): int {
+  return 0
+}

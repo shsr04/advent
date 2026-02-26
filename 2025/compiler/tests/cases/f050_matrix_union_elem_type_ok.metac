@@ -1,3 +1,7 @@
+@Test({
+   "exit" : 0,
+   "stdout" : ""
+})
 function main(): number {
   const x: matrix(string with size(2) | number) | int[] = []
   return 0

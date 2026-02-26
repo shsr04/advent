@@ -1,0 +1,13 @@
+@Test({
+   "exit" : 0,
+   "stdout" : ""
+})
+function main(): int {
+  if "   ".isBlank() == false {
+    return 1
+  }
+  if " a ".isBlank() == true {
+    return 2
+  }
+  return 0
+}

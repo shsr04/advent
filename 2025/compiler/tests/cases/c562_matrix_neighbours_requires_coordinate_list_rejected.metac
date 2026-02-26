@@ -1,0 +1,11 @@
+function bad(m: matrix(number)): int {
+  const around = m.neighbours(0)
+  return around.size()
+}
+
+@Test({
+   "compile_err" : "requires number[] coordinates"
+})
+function main(): int {
+  return 0
+}

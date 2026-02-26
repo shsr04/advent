@@ -1,4 +1,7 @@
-function main(): number {
-  const x = parseNumber("1")
-  return x
+@Test({
+   "compile_err" : "fallible; handle it with '?'"
+})
+function main(): int {
+  const caps = "x".match("[")
+  return caps.size()
 }

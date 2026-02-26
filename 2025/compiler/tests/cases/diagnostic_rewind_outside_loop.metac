@@ -1,3 +1,6 @@
+@Test({
+   "compile_err" : "rewind is only valid inside a loop"
+})
 function main() {
   rewind
   log("Result: 0")

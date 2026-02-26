@@ -1,3 +1,6 @@
+@Test({
+   "compile_err" : "Method 'split(...)' is fallible; handle it with '?'"
+})
 function main(): number {
   const parts = "1-2".split("-")
   return parts.size()

@@ -1,0 +1,8 @@
+@Test({
+   "exit" : 2,
+   "stdout" : ""
+})
+function main(): int {
+  const parts = "a-b".split("-")?
+  return parts.size()
+}

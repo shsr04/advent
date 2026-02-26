@@ -34,6 +34,12 @@ sub method_specs {
             expr_callable => 0,
             fallibility   => 'always',
         },
+        match => {
+            receivers     => { string => 1 },
+            arity         => 1,
+            expr_callable => 0,
+            fallibility   => 'always',
+        },
         slice => {
             receivers     => { string_list => 1, number_list => 1 },
             arity         => 1,

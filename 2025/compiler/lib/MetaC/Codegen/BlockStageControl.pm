@@ -549,6 +549,45 @@ sub _compile_block_stage_control {
 
         if ($stmt->{kind} eq 'expr_or_catch') {
             my $expr = $stmt->{expr};
+            if ($expr->{kind} eq 'method_call' && $expr->{method} eq 'match') {
+                my $actual = scalar @{ $expr->{args} };
+                compile_error("match(...) with 'or catch' expects exactly 1 pattern arg")
+                  if $actual != 1;
+
+                my ($src_code, $src_type, $src_prelude, $src_cleanups) = compile_expr_with_temp_scope(
+                    ctx  => $ctx,
+                    expr => $expr->{recv},
+                );
+                emit_expr_temp_prelude($out, $indent, $src_prelude);
+                my ($pattern_code, $pattern_type, $pattern_prelude, $pattern_cleanups) = compile_expr_with_temp_scope(
+                    ctx  => $ctx,
+                    expr => $expr->{args}[0],
+                );
+                emit_expr_temp_prelude($out, $indent, $pattern_prelude);
+                my @match_cleanups = (@$pattern_cleanups, @$src_cleanups);
+                my $match_cleanup_count = push_active_temp_cleanups($ctx, \@match_cleanups);
+                compile_error("match source must be string") if $src_type ne 'string';
+                compile_error("match pattern must be string") if $pattern_type ne 'string';
+
+                my $tmp = '__metac_or_stmt_match' . $ctx->{tmp_counter}++;
+                emit_line($out, $indent, "ResultStringList $tmp = metac_match_string($src_code, $pattern_code);");
+                emit_line($out, $indent, "if ($tmp.is_error) {");
+                _emit_or_catch_handler_then_fail(
+                    ctx               => $ctx,
+                    out               => $out,
+                    indent            => $indent + 2,
+                    current_fn_return => $current_fn_return,
+                    handler           => $stmt->{handler},
+                    err_name          => $stmt->{err_name},
+                    message_expr      => "$tmp.message",
+                );
+                emit_line($out, $indent, "}");
+                emit_line($out, $indent, "metac_free_result_string_list($tmp);");
+                emit_expr_temp_cleanups($out, $indent, \@match_cleanups);
+                pop_active_temp_cleanups($ctx, $match_cleanup_count);
+                return 1;
+            }
+
             compile_error("or catch statement currently supports fallible function calls")
               if $expr->{kind} ne 'call';
 

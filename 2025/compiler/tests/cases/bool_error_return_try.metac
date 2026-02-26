@@ -1,3 +1,7 @@
+@Test({
+   "exit" : 0,
+   "stdout" : "Result: 1\n"
+})
 function main() {
   const ok = run()?
   if ok {

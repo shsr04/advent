@@ -1,3 +1,6 @@
+@Test({
+   "compile_err" : "Method 'insert(...)' is fallible on unconstrained matrix; handle it with '?'"
+})
 function main() {
   const result = run()?
   log("Result: ${result}")

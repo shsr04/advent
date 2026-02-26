@@ -1,0 +1,13 @@
+function choose(flag: boolean): int {
+  if flag {
+    return 1
+  }
+}
+
+@Test({
+   "exit" : 0,
+   "stdout" : ""
+})
+function main(): int {
+  return 0
+}

@@ -1,0 +1,6 @@
+@Test({
+   "compile_err" : "range(*,3) constant 'n' initialized out of range"
+})
+function main() {
+  const n: number with range(*,3) = 5
+}

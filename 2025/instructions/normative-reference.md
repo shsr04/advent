@@ -133,7 +133,7 @@ Whenever a constraint is applied to a type, a new type is created which constrai
 A constraint applies only to a given set of types.
 
 The built-in constraints are the following:
-- `size(n: number)`
+- `size(n: int)`
   - Applies to: string, array
   - Constrains the domain to types of length `n`
 - `range(min: number, max: number)`
@@ -148,9 +148,9 @@ The built-in constraints are the following:
 - `wrap`
   - Applies to: number
   - Causes wrap-around behaviour when the value goes out of range
-- `dim(n: number)`
+- `dim(n: int)`
   - Applies to: matrix
-- `matrixSize(n: number[] with size(<dimensions>))`
+- `matrixSize(n: int[] with size(<dimensions>))`
   - Applies to: matrix
 
 A type *cannot* have multiple occurrences of the same constraint.
@@ -255,22 +255,47 @@ The evaluation order is from left to right. If an operand has been evaluated suc
 
 ### 5.4 Sequence-based operations
 
-The following operations are available on sequence-based types `S: <type>[]`:
-- `S[<index-expr: number>]: <type> [| error]`
+The following operations are available on sequence-based types `S: <type>[] with size(<size>)`:
+- `S[<index-expr: int>]: <type> [| error]`
   - Returns the element at `<index-expr>`.
   - Fallible: exactly if `S` has no constraint determining its size, therefore making `<index-expr>` possibly out of bounds.
-- `<type>.index(): number`
+- `<type>.index(): int with range(0,<size>-1)`
   - Returns the index of the element originating from a sequence.
   - This operation is not available if the value cannot be traced back to a source sequence.
+- `S.size(): int with exact(<size>)`
+  - Returns the number of elements in the sequence.
+- `S.append(<arg: type | S>): S`
+  - Returns the sequence, with the given element(s) appended after the end.
+- `S.prepend(<arg: type | S>): S`
+  - Returns the sequence, with the given element(s) prepended before the start.
+- `S.head(): <type> [| error]`
+  - Returns the first element of the sequence.
+  - Fallible: exactly if `S` has no constraint ensuring `S.size() > 0`.
+- `S.last(): <type> [| error]`
+  - Returns the last element of the sequence.
+  - Fallible: exactly if `S` has no constraint ensuring `S.size() > 0`.
 - `S.map(<mapper>): S [| error]`
   - Returns the sequence, where each element `x` has been replaced by the result of `<mapper>(x)`.
   - Fallible: exactly if `<mapper>` is fallible.
 - `S.filter(<filter>): S [| error]`
   - Returns the sequence, where an element `x` is dropped exactly if `<filter>(x) == false`.
   - Fallible: exactly if `<filter>` is fallible.
-- `<target>.reduce(<initial: T>, <reducer>): <result: T> [| error]`
+- `S.any(<predicate>): boolean [| error]`
+  - Returns true exactly if any element satisfies `<predicate>`.
+  - Fallible: exactly if `<predicate>` is fallible.
+- `S.all(<predicate>): boolean [| error]`
+  - Returns true exactly if all elements satisfy `<predicate>`.
+  - Fallible: exactly if `<predicate>` is fallible.
+- `S.reduce(<initial: type>, <reducer>): <result: type> [| error]`
   - Returns the result, obtained by applying `<reducer>` to each of the elements and accumulating them into a single value. The initial value is given by `<initial>`.
   - Fallible: exactly if `<reducer>` is fallible.
+- `S.scan(<initial: type>, <scanner>): S [| error]`
+  - Returns the sequence of results of successively applying `<scanner>` to the elements and accumulating them. The initial value is given by `<initial>`.
+  - Fallible: exactly if `<scanner>` is fallible.
+- `S.reverse(): S`
+  - Returns the sequence in reverse order.
+- `S.chunk(<size: number>): S[]`
+  - Returns the sequence, divided into chunks of size at most `size`. If the sequence cannot be split evenly, the last chunk contains the remaining elements.
 - ...
 
 ### 5.5 Lexical operations
@@ -294,7 +319,7 @@ The following operations are available on matrix types `M: matrix(<type>) with d
 - `<type>.neighbours(): <type>[]`
   - Returns the neighbours of the given member.
   - This operation is not available if the member cannot be traced back to a source matrix.
-- `<type>.index(): number[] with size(<dim>)`
+- `<type>.index(): int[] with size(<dim>)`
   - Returns the coordinates of the member.
   - This operation is not available if the member cannot be traced back to a source matrix.
 

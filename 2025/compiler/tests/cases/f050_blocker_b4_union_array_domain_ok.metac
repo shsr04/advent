@@ -2,6 +2,10 @@ function identity(v: (number | string)[]): (number | string)[] {
   return v
 }
 
+@Test({
+   "exit" : 0,
+   "stdout" : ""
+})
 function main(): number {
   const xs: (number | string)[] = []
   const ys: (number | string)[] = identity(xs)

@@ -1,1 +1,0 @@
-parseNumber(...) is fallible; use parseNumber(...)? or map(parseNumber)?

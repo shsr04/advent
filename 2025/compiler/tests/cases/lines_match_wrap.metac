@@ -1,3 +1,8 @@
+@Test({
+   "exit" : 0,
+   "stdin" : "L2\nR5\nL1\n",
+   "stdout" : "Result: 2\n"
+})
 function main() {
   const result = solve()?
   log("Result: ${result}")

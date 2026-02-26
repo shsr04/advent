@@ -1,3 +1,6 @@
+@Test({
+   "compile_err" : "assert(...) first arg must be a single-parameter lambda predicate"
+})
 function main() {
   const result = solve()?
   log("Result: ${result}")

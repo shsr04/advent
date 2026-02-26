@@ -1,3 +1,7 @@
+@Test({
+   "exit" : 0,
+   "stdout" : "1-0-1\n"
+})
 function main() {
   const flags: bool[] with size(3) = [true, false, true]
   if flags.size() == 3 {

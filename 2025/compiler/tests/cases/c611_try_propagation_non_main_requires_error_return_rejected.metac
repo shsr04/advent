@@ -1,0 +1,12 @@
+function helper(): int {
+  const parts = "x".match("[")?
+  return parts.size()
+}
+
+@Test({
+   "exit" : 2,
+   "stdout" : ""
+})
+function main(): int {
+  return helper()
+}

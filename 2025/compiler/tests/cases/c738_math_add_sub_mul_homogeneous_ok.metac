@@ -1,0 +1,22 @@
+@Test({
+   "exit" : 0,
+   "stdout" : ""
+})
+function main(): int {
+  const ai: int = 7
+  const bi: int = 3
+  const si: int = ai + bi
+  const di: int = ai - bi
+  const mi: int = ai * bi
+
+  const af: float = 7.0
+  const bf: float = 3.0
+  const sf: float = af + bf
+  const df: float = af - bf
+  const mf: float = af * bf
+
+  if si == 10 && di == 4 && mi == 21 && sf > 9.9 && df > 3.9 && mf > 20.9 {
+    return 0
+  }
+  return 1
+}

@@ -1,3 +1,6 @@
+@Test({
+   "compile_err" : "Unsupported interpolation expression type: bool | number"
+})
 function main() {
   const result = run()
   log("Result: ${result}")

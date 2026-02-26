@@ -1,0 +1,6 @@
+@Test({
+   "compile_err" : "Duplicate constraint term: size"
+})
+function main() {
+  const s: string with size(1) + size(2) = "a"
+}

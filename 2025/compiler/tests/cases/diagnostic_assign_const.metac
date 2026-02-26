@@ -1,3 +1,6 @@
+@Test({
+   "compile_err" : "Cannot assign to immutable variable 'x'"
+})
 function main() {
   const result = solve()?
   log("Result: ${result}")

@@ -1,0 +1,12 @@
+@Test({
+   "exit" : 0,
+   "stdout" : ""
+})
+function main(): int {
+  const a: number with range(0, 10) = 5
+  const b: number with range(1, 10) = a
+  if b == 5 {
+    return 0
+  }
+  return 1
+}

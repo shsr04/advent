@@ -1,0 +1,12 @@
+@Test({
+   "exit" : 0,
+   "stdout" : ""
+})
+function main(): int {
+  const values: int[] = [1, 2, 3, 4, 5]
+  const even = values.filter((x) => x == 2 || x == 4)
+  if even.size() == 2 {
+    return 0
+  }
+  return 1
+}
