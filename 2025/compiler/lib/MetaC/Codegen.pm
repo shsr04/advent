@@ -17,7 +17,7 @@ use MetaC::Support qw(
     emit_line
     trim
 );
-use MetaC::Parser qw(collect_functions parse_function_params parse_capture_groups infer_group_type parse_function_body parse_expr);
+use MetaC::Parser qw(parse_capture_groups infer_group_type parse_expr);
 use MetaC::CodegenType qw(
     param_c_type
     render_c_params

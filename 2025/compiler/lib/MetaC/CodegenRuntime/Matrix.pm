@@ -72,6 +72,32 @@ static int metac_matrix_number_coords_valid(const MatrixNumber *matrix, NumberLi
   return 1;
 }
 
+static int64_t metac_matrix_number_size(MatrixNumber matrix, int64_t axis) {
+  size_t dims = (size_t)matrix.dimensions;
+  if (axis < 0 || (size_t)axis >= dims) {
+    return 0;
+  }
+  size_t axis_idx = (size_t)axis;
+  if (matrix.has_size_spec && matrix.size_spec != NULL && matrix.size_spec[axis_idx] > 0) {
+    return matrix.size_spec[axis_idx];
+  }
+  if (matrix.entry_count == 0 || matrix.coords == NULL) {
+    return 0;
+  }
+
+  int64_t max_coord = -1;
+  for (size_t i = 0; i < matrix.entry_count; i++) {
+    int64_t coord = matrix.coords[i * dims + axis_idx];
+    if (coord > max_coord) {
+      max_coord = coord;
+    }
+  }
+  if (max_coord < 0) {
+    return 0;
+  }
+  return (max_coord == INT64_MAX) ? INT64_MAX : (max_coord + 1);
+}
+
 static int metac_matrix_number_coords_equal(const MatrixNumber *matrix, size_t entry_idx, NumberList coords) {
   size_t dims = (size_t)matrix->dimensions;
   size_t offset = entry_idx * dims;

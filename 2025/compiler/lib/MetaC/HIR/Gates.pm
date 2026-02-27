@@ -53,8 +53,9 @@ sub dump_vnf_hir {
         for my $region (@{ $fn->{regions} }) {
             push @out, "  region:$region->{id}";
             for my $step (@{ $region->{steps} }) {
-                my $sk = $step->{stmt}{kind} // '';
-                my $ln = $step->{provenance}{line} // 0;
+                my $payload = $step->{payload} // {};
+                my $sk = $payload->{stmt_kind} // '';
+                my $ln = $payload->{line} // ($step->{provenance}{line} // 0);
                 push @out, "    step:$step->{id}:$step->{kind}:$sk:line=$ln";
             }
             my @exit_lines;
@@ -162,6 +163,19 @@ sub _gate_cfg {
         compile_error("Gate-CFG/F047-Gate-CFG: function '$fn->{name}' entry region not found")
           if !exists $region_map->{ $fn->{entry_region} };
 
+        my $schedule = $fn->{region_schedule};
+        if (defined $schedule) {
+            compile_error("Gate-CFG/F047-Gate-CFG: function '$fn->{name}' region_schedule must be array")
+              if ref($schedule) ne 'ARRAY';
+            my %seen_sched;
+            for my $rid (@$schedule) {
+                compile_error("Gate-CFG/F047-Gate-CFG: function '$fn->{name}' schedule references unknown region '$rid'")
+                  if !exists $region_map->{$rid};
+                compile_error("Gate-CFG/F047-Gate-CFG: function '$fn->{name}' schedule duplicates region '$rid'")
+                  if $seen_sched{$rid}++;
+            }
+        }
+
         for my $edge (@{ $fn->{edges} }) {
             compile_error("Gate-CFG/F047-Gate-CFG: unknown edge source '$edge->{from_region}'")
               if !exists $region_map->{ $edge->{from_region} };
@@ -211,7 +225,30 @@ sub _gate_type {
                 next;
             }
         }
+        my $schedule = $fn->{region_schedule};
+        compile_error("Gate-Type/F047-Gate-Type: function '$fn->{name}' missing region schedule")
+          if !defined($schedule) || ref($schedule) ne 'ARRAY';
+        compile_error("Gate-Type/F047-Gate-Type: function '$fn->{name}' has empty region schedule")
+          if $fn->{name} ne 'main' && !@$schedule;
     }
+}
+
+sub _step_payload_stmt {
+    my ($step, $fn_name, $gate) = @_;
+    my $payload = $step->{payload};
+    compile_error("$gate: missing step payload in '$fn_name'")
+      if !defined($payload) || ref($payload) ne 'HASH';
+    compile_error("$gate: step payload node_kind must be Stmt in '$fn_name'")
+      if ($payload->{node_kind} // '') ne 'Stmt';
+    compile_error("$gate: step payload fields must be hash in '$fn_name'")
+      if !defined($payload->{fields}) || ref($payload->{fields}) ne 'HASH';
+    return $payload;
+}
+
+sub _payload_field {
+    my ($payload, $name) = @_;
+    my $fields = $payload->{fields} // {};
+    return $fields->{$name};
 }
 
 sub _walk_expr {
@@ -255,20 +292,21 @@ sub _gate_effect {
     my ($hir) = @_;
     for my $fn (@{ $hir->{functions} }) {
         for my $region (@{ $fn->{regions} }) {
-            my $has_try_stmt = 0;
+            my $exit_kind = $region->{exit}{kind} // '';
+            next if $exit_kind ne 'TryExit';
+
+            compile_error("Gate-Effect/F047-Gate-Effect: TryExit missing fallible expression in '$fn->{name}'")
+              if !defined($region->{exit}{fallible_expr}) || ref($region->{exit}{fallible_expr}) ne 'HASH';
+            compile_error("Gate-Effect/F047-Gate-Effect: TryExit region has no steps in '$fn->{name}'")
+              if !@{ $region->{steps} // [] };
+
+            my $has_eval_step = 0;
             for my $step (@{ $region->{steps} }) {
-                my $stmt = $step->{stmt};
-                compile_error("Gate-Effect/F047-Gate-Effect: missing statement payload in '$fn->{name}'")
-                  if !defined($stmt) || ref($stmt) ne 'HASH';
-                my $k = $stmt->{kind} // '';
-                $has_try_stmt = 1 if $k eq 'const_try_expr' || $k eq 'const_try_tail_expr' || $k eq 'expr_stmt_try';
+                _step_payload_stmt($step, $fn->{name}, 'Gate-Effect/F047-Gate-Effect');
+                $has_eval_step = 1 if ($step->{kind} // '') eq 'Eval';
             }
-            if ($has_try_stmt) {
-                my $exit_kind = $region->{exit}{kind} // '';
-                my $embedded_block = @{ $region->{steps} } > 1 ? 1 : 0;
-                compile_error("Gate-Effect/F047-Gate-Effect: try statement not normalized to TryExit in '$fn->{name}'")
-                  if $exit_kind ne 'TryExit' && !$embedded_block;
-            }
+            compile_error("Gate-Effect/F047-Gate-Effect: TryExit region must contain Eval step in '$fn->{name}'")
+              if !$has_eval_step;
         }
     }
 }
@@ -294,21 +332,29 @@ sub _merge_pred_facts {
 }
 
 sub _apply_step_transfer {
-    my ($facts_in, $steps) = @_;
+    my ($facts_in, $steps, $fn_name) = @_;
     my @facts = @$facts_in;
     for my $step (@$steps) {
-        my $stmt = $step->{stmt};
-        my $kind = $stmt->{kind} // '';
-        if ($kind eq 'let' || $kind eq 'const') {
-            my $type = $stmt->{type} // 'inferred';
-            push @facts, "type:$stmt->{name}:$type";
+        my $payload = _step_payload_stmt($step, $fn_name, 'Gate-Type/F047-Gate-Type');
+        my $kind = $step->{kind} // '';
+
+        if ($kind eq 'Declare') {
+            my $name = _payload_field($payload, 'name');
+            next if !defined($name) || $name eq '';
+            my $type = _payload_field($payload, 'type');
+            $type = 'inferred' if !defined($type) || $type eq '';
+            push @facts, "type:$name:$type";
             next;
         }
-        if ($kind eq 'assign' || $kind eq 'typed_assign') {
-            my %keep = map { $_ => 1 } grep { $_ !~ /^type:\Q$stmt->{name}\E:/ } @facts;
+
+        if ($kind eq 'Assign') {
+            my $name = _payload_field($payload, 'name');
+            next if !defined($name) || $name eq '';
+            my %keep = map { $_ => 1 } grep { $_ !~ /^type:\Q$name\E:/ } @facts;
             @facts = sort keys %keep;
-            if ($kind eq 'typed_assign') {
-                push @facts, "type:$stmt->{name}:" . ($stmt->{type} // 'inferred');
+            my $typed = _payload_field($payload, 'type');
+            if (defined($typed) && $typed ne '') {
+                push @facts, "type:$name:$typed";
             }
             next;
         }
@@ -323,7 +369,48 @@ sub _exit_tag_facts {
     return { return => [ @$facts, 'cfg:return' ] } if $exit_kind eq 'Return';
     return { propagate => [ @$facts, 'cfg:error-propagate' ] } if $exit_kind eq 'PropagateError';
     return { ok => [ @$facts ], err => [ @$facts ] } if $exit_kind eq 'TryExit';
-    return { then => [ @$facts ], else => [ @$facts ], join => [ @$facts ] } if $exit_kind eq 'IfExit';
+    if ($exit_kind eq 'IfExit') {
+        my @then = @$facts;
+        my @else = @$facts;
+        my $cond = $exit->{cond_value};
+        if (defined($cond) && ref($cond) eq 'HASH' && ($cond->{kind} // '') eq 'binop') {
+            my $op = $cond->{op} // '';
+            if ($op eq '==' || $op eq '!=') {
+                my ($size_expr, $num_expr);
+                if (defined($cond->{left}) && defined($cond->{right})
+                    && ref($cond->{left}) eq 'HASH' && ref($cond->{right}) eq 'HASH')
+                {
+                    if (($cond->{left}{kind} // '') eq 'method_call' && ($cond->{right}{kind} // '') eq 'num') {
+                        $size_expr = $cond->{left};
+                        $num_expr = $cond->{right};
+                    } elsif (($cond->{right}{kind} // '') eq 'method_call' && ($cond->{left}{kind} // '') eq 'num') {
+                        $size_expr = $cond->{right};
+                        $num_expr = $cond->{left};
+                    }
+                }
+                if (defined $size_expr && defined $num_expr) {
+                    my $method = $size_expr->{method} // '';
+                    my $args = $size_expr->{args} // [];
+                    my $recv = $size_expr->{recv};
+                    if (($method eq 'size' || $method eq 'count')
+                        && ref($args) eq 'ARRAY' && !@$args
+                        && defined($recv) && ref($recv) eq 'HASH' && ($recv->{kind} // '') eq 'ident')
+                    {
+                        my $name = $recv->{name} // '';
+                        if ($name ne '') {
+                            my $len_fact = "len_var:$name:" . int($num_expr->{value});
+                            if ($op eq '==') {
+                                push @then, $len_fact;
+                            } else {
+                                push @else, $len_fact;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return { then => \@then, else => \@else, join => [ @$facts ] };
+    }
     return {
         body => [ @$facts ],
         continue => [ @$facts ],
@@ -415,7 +502,7 @@ sub _compute_fact_flow_for_function {
                 $changed = 1;
             }
 
-            my $after_steps = _apply_step_transfer(\@merged, $region->{steps});
+            my $after_steps = _apply_step_transfer(\@merged, $region->{steps}, $fn->{name});
             my $out_by_exit = _exit_tag_facts($region->{exit}, $after_steps);
             for my $tag (sort keys %$out_by_exit) {
                 my $key = $rid . ':' . $tag;

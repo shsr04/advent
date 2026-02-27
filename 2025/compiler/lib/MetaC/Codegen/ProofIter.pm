@@ -2,91 +2,6 @@ package MetaC::Codegen;
 use strict;
 use warnings;
 
-sub expr_ast_equal {
-    my ($a, $b) = @_;
-    return 0 if !defined $a || !defined $b;
-    return 0 if $a->{kind} ne $b->{kind};
-
-    if ($a->{kind} eq 'num') {
-        return $a->{value} eq $b->{value};
-    }
-    if ($a->{kind} eq 'ident') {
-        return $a->{name} eq $b->{name};
-    }
-    if ($a->{kind} eq 'bool') {
-        return $a->{value} == $b->{value};
-    }
-    if ($a->{kind} eq 'str') {
-        my $ar = defined($a->{raw}) ? $a->{raw} : $a->{value};
-        my $br = defined($b->{raw}) ? $b->{raw} : $b->{value};
-        return $ar eq $br;
-    }
-    if ($a->{kind} eq 'unary') {
-        return 0 if $a->{op} ne $b->{op};
-        return expr_ast_equal($a->{expr}, $b->{expr});
-    }
-    if ($a->{kind} eq 'binop') {
-        return 0 if $a->{op} ne $b->{op};
-        return 0 if !expr_ast_equal($a->{left}, $b->{left});
-        return expr_ast_equal($a->{right}, $b->{right});
-    }
-    if ($a->{kind} eq 'method_call') {
-        return 0 if $a->{method} ne $b->{method};
-        return 0 if !expr_ast_equal($a->{recv}, $b->{recv});
-        my $an = scalar @{ $a->{args} };
-        my $bn = scalar @{ $b->{args} };
-        return 0 if $an != $bn;
-        for (my $i = 0; $i < $an; $i++) {
-            return 0 if !expr_ast_equal($a->{args}[$i], $b->{args}[$i]);
-        }
-        return 1;
-    }
-    if ($a->{kind} eq 'call') {
-        return 0 if $a->{name} ne $b->{name};
-        my $an = scalar @{ $a->{args} };
-        my $bn = scalar @{ $b->{args} };
-        return 0 if $an != $bn;
-        for (my $i = 0; $i < $an; $i++) {
-            return 0 if !expr_ast_equal($a->{args}[$i], $b->{args}[$i]);
-        }
-        return 1;
-    }
-
-    return 0;
-}
-
-
-sub expr_is_size_of_container {
-    my ($expr, $recv_code, $recv_type, $ctx) = @_;
-    if ($expr->{kind} eq 'method_call'
-        && ($expr->{method} eq 'size' || $expr->{method} eq 'count')
-        && scalar(@{ $expr->{args} }) == 0)
-    {
-        my ($inner_code, $inner_type) = compile_expr($expr->{recv}, $ctx);
-        return 0 if $inner_type ne $recv_type;
-        return $inner_code eq $recv_code;
-    }
-    if ($expr->{kind} eq 'ident') {
-        my $info = lookup_var($ctx, $expr->{name});
-        return 0 if !defined $info;
-        return 0 if !defined $info->{size_of_recv_code};
-        return 0 if !defined $info->{size_of_recv_type};
-        return 0 if $info->{size_of_recv_type} ne $recv_type;
-        return $info->{size_of_recv_code} eq $recv_code;
-    }
-    return 0;
-}
-
-
-sub expr_is_size_minus_const {
-    my ($expr, $recv_code, $recv_type, $ctx, $min_const) = @_;
-    return 0 if $expr->{kind} ne 'binop' || $expr->{op} ne '-';
-    return 0 if $expr->{right}{kind} ne 'num';
-    return 0 if int($expr->{right}{value}) < $min_const;
-    return expr_is_size_of_container($expr->{left}, $recv_code, $recv_type, $ctx);
-}
-
-
 sub prove_non_negative_expr {
     my ($expr, $ctx) = @_;
     if ($expr->{kind} eq 'num') {
@@ -96,6 +11,10 @@ sub prove_non_negative_expr {
         my $info = lookup_var($ctx, $expr->{name});
         return 0 if !defined $info;
         return 1 if defined $info->{size_of_recv_code};
+        if (defined($info->{constraints})) {
+            my ($min, undef) = constraint_range_bounds($info->{constraints});
+            return 1 if defined($min) && int($min) >= 0;
+        }
         return 0 if !defined $info->{range_min_expr};
         return prove_non_negative_expr($info->{range_min_expr}, $ctx);
     }
@@ -113,8 +32,17 @@ sub prove_non_negative_expr {
     if ($expr->{kind} eq 'binop' && $expr->{op} eq '-') {
         if ($expr->{left}{kind} eq 'ident') {
             my $info = lookup_var($ctx, $expr->{left}{name});
-            if (defined $info && defined $info->{range_min_expr}) {
-                return 1 if expr_ast_equal($expr->{right}, $info->{range_min_expr});
+            if (defined $info) {
+                if (defined $info->{range_min_fact_key}) {
+                    my $rhs_key;
+                    eval { $rhs_key = expr_fact_key($expr->{right}, $ctx); 1; };
+                    return 1 if defined($rhs_key) && $rhs_key eq $info->{range_min_fact_key};
+                }
+                if (defined $info->{range_min_expr}) {
+                    return 1 if ($info->{range_min_expr}{kind} // '') eq 'num'
+                      && ($expr->{right}{kind} // '') eq 'num'
+                      && int($expr->{right}{value}) <= int($info->{range_min_expr}{value});
+                }
             }
         }
         return 0;
@@ -128,8 +56,44 @@ sub prove_index_lt_container_size {
     if ($idx_expr->{kind} eq 'ident') {
         my $info = lookup_var($ctx, $idx_expr->{name});
         return 0 if !defined $info;
+        if (defined($info->{range_max_size_recv_code}) && defined($info->{range_max_size_recv_type}) && defined($info->{range_max_size_minus_const})) {
+            return 0 if $info->{range_max_size_recv_code} ne $recv_code;
+            return 0 if $info->{range_max_size_recv_type} ne $recv_type;
+            return int($info->{range_max_size_minus_const}) >= 1 ? 1 : 0;
+        }
+        if (defined($info->{constraints})) {
+            my (undef, $max) = constraint_range_bounds($info->{constraints});
+            if (defined $max && $recv_type ne 'string') {
+                my $recv_ident = undef;
+                if ($recv_code =~ /^[A-Za-z_][A-Za-z0-9_]*$/) {
+                    $recv_ident = $recv_code;
+                }
+                if (defined $recv_ident) {
+                    my $recv_key = expr_fact_key({ kind => 'ident', name => $recv_ident }, $ctx);
+                    my $known_len = lookup_list_len_fact($ctx, $recv_key);
+                    return 1 if defined($known_len) && int($max) < int($known_len);
+                }
+            }
+        }
         return 0 if !defined $info->{range_max_expr};
-        return expr_is_size_minus_const($info->{range_max_expr}, $recv_code, $recv_type, $ctx, 1);
+        my $max_expr = $info->{range_max_expr};
+        if (($max_expr->{kind} // '') eq 'binop'
+            && ($max_expr->{op} // '') eq '-'
+            && defined($max_expr->{right}) && ref($max_expr->{right}) eq 'HASH'
+            && ($max_expr->{right}{kind} // '') eq 'num'
+            && int($max_expr->{right}{value}) >= 1)
+        {
+            my $left = $max_expr->{left};
+            if (defined($left) && ref($left) eq 'HASH'
+                && ($left->{kind} // '') eq 'method_call'
+                && (($left->{method} // '') eq 'size' || ($left->{method} // '') eq 'count')
+                && scalar(@{ $left->{args} // [] }) == 0)
+            {
+                my ($inner_code, $inner_type) = compile_expr($left->{recv}, $ctx);
+                return 1 if $inner_code eq $recv_code && $inner_type eq $recv_type;
+            }
+        }
+        return 0;
     }
     if ($idx_expr->{kind} eq 'binop' && $idx_expr->{op} eq '-') {
         return 0 if !prove_index_lt_container_size($idx_expr->{left}, $recv_code, $recv_type, $ctx);

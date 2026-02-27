@@ -6,7 +6,7 @@ function sumThree(xs: int[]): int {
 }
 
 @Test({
-   "compile_err" : "Unsupported parameter type binding: number_list"
+   "compile_err" : "Unsupported method call 'head' on type 'number_list'"
 })
 function main(): int {
   return sumThree([1, 2, 3])

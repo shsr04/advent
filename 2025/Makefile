@@ -2,7 +2,8 @@ SHELL := /bin/bash
 
 CC := clang
 CFLAGS ?= -std=c23 -O3 -Wall -Wextra -Wpedantic
-PERL := perl
+MEM_LIMIT := 2147483648
+PERL := prlimit -v=$(MEM_LIMIT) perl
 
 METAC_SOURCES := $(sort $(wildcard day*/day*.metac))
 COMPILER_SOURCES := compiler/metac.pl $(sort $(wildcard compiler/lib/MetaC/*.pm))

@@ -16,7 +16,20 @@ function sumProblems(): number|error {
     }
   }
   
-  extractColumn(grid,0).log()
+  let numbers: int[] = []
+  let operator = ""
+  
+  for const x in seq(0, grid.size(1)) {
+    const column = extractColumn(grid, x).log()
+    if numbers.size() == 0 {
+      operator = column.last()
+      numbers = seq(0, column.size()).map(x => 0)
+    }
+      
+    if isSeparator(column) {
+      log("Separator: ${x}")
+    }
+  }
   
   return sum
 }
@@ -30,4 +43,8 @@ function extractColumn(grid: matrix(string) with dim(2), column: number): string
     }
   }
   return extracted
+}
+
+function isSeparator(column: string[]): boolean {
+  return column.all((x) => x.isBlank())
 }

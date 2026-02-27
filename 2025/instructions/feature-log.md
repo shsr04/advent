@@ -59,6 +59,7 @@ Track all language features here. Add items as we iterate.
 45. `F-045` Optional extension: effect-system abstraction for fallibility - `draft`
 46. `F-046` Loop rewind statement (`rewind`) for iterable recomputation - `implemented`
 47. `F-047` Compiler architecture split (`parser -> IR -> correctness gates -> codegen`) - `draft`
+48. `F-051` HIR-native cutover completion (typed steps, canonical calls, direct backend emission) - `ready`
 
 ## Feature Record Template
 
@@ -573,3 +574,33 @@ Use this block for each feature:
     - `B2` closed: non-`number|string` matrix return ABI/codegen path accepted (covered by `f050_blocker_b2_matrix_bool_return_ok`).
     - `B3` closed: matrix parameter ABI accepts non-`number|string` element domains (covered by `f050_blocker_b3_matrix_bool_param_ok`).
     - `B4` closed: generic array domains like `(number | string)[]` accepted across declaration/return/call paths (covered by `f050_blocker_b4_union_array_domain_ok`).
+
+### F-051 `HIR-Native Cutover Completion`
+- Status: ready
+- Spec file: `instructions/hir-native-cutover-f051.md` (planned)
+- Correctness classes: C0/C1/C2/C3/C4
+- Key guarantees:
+  - replace `step->{stmt}` with typed HIR step payloads only (no parser AST objects in HIR).
+  - replace `top_level` traversal hacks with explicit region scheduling/ordering in HIR.
+  - make lowering emit canonical `CallExpr(kind=user|builtin|intrinsic, op_id, args, result_type)` directly.
+  - build a data-driven intrinsic registry (signature, effects, ownership, C-lowering templates), then delete method switch trees.
+  - delete `compile_block` + `BlockStage*` pipeline from the HIR path and add a true HIR step/exit emitter.
+  - rewrite gates to validate typed HIR/facts only, not statement-kind strings.
+  - move proof/bounds reasoning to gate-time fact solving, then remove AST-shaped proof helpers.
+  - remove dead compile functions and parser imports from codegen root once cutover is complete.
+  - make backend consume HIR directly (no pre-materialized template string per function).
+- Blocking questions:
+  - final typed HIR schema boundaries for statements/expressions/effects/ownership facts.
+  - migration sequencing to preserve deterministic output and avoid mixed-model regressions during cutover.
+- Notes/evidence:
+  - requested as a single consolidated feature request to complete F-047/F-048/F-049 architectural intent and eliminate remaining legacy lowering surfaces.
+  - Progress tracker (started 2026-02-26):
+    - `completed` [1/9]: replace `step->{stmt}` with typed HIR step payloads only (2026-02-27: lowering now emits `step.payload = { node_kind: Stmt, stmt_kind, line, fields }`; HIR gates/resolve/materialization consume payload adapters; no direct `step->{stmt}` remains; regression suite green `191 passed, 0 failed`).
+    - `completed` [2/9]: replace `top_level` traversal hacks with explicit region scheduling/ordering in HIR (2026-02-27: materializer now requires `region_schedule`, fallback entry-region walk removed, `step->{top_level}` removed from lowering/HIR passes, regression suite green `191 passed, 0 failed`).
+    - `completed` [3/9]: lowering/resolve now emit canonical call metadata (`canonical_call: CallExpr`) for HIR call sites, materialization enforces canonical+resolved call contracts for call-like expressions, and codegen routes HIR `call`/`method_call` through canonical call lowering first while preserving diagnostics (`ResolveCalls.pm`, `MaterializeC.pm`, `Codegen/Expr.pm`, `Codegen/MethodMetadata.pm`). HIR typed-node encoding/decoding is centralized (`MetaC::HIR::TypedNodes`). Verification: `make test` with Makefile `prlimit` gate is green (`191 passed, 0 failed`) on 2026-02-27. Note: parser-local helper expressions (`parse_expr`-generated, outside HIR) retain a constrained legacy fallback path; completing that cutover is tracked under [5/9] (HIR-native emission path) and [8/9] (legacy parser/codegen surface removal), so no separate [10/x] subtask is added at this time.
+    - `completed` [4/9]: shared intrinsic registry (`MetaC::IntrinsicRegistry`) now carries method signatures/fallibility/op-id plus data-driven C-lowering templates for intrinsic methods; codegen method-call lowering now resolves straightforward intrinsics via registry templates (replacing large direct switch branches), and synthetic try-chain canonical contracts use registry op-id helpers (`Codegen/ExprMethodCall.pm`, `Codegen/BlockStageTry.pm`). Remaining method logic in `ExprMethodCall.pm` is limited to receiver-sensitive/lambda-heavy handlers (matrix methods, `filter/any/all/reduce/sortBy/push`) rather than generic template branches. Verification: `make test` with Makefile `prlimit` gate is green (`191 passed, 0 failed`) on 2026-02-27.
+    - `completed` [5/9]: HIR materialization now emits by scheduled regions with explicit step+exit handling instead of flattening only top-level steps; statement emission uses deterministic kind-based dispatch (`_emit_hir_stmt_direct`) rather than `compile_block`-style stage probing in the HIR path, and region exits are consumed through an explicit emitter hook (`_emit_hir_exit`) for return/error-propagation compatibility (`HIR/MaterializeC.pm`). Verification: `make test` with Makefile `prlimit` gate is green (`191 passed, 0 failed`) on 2026-02-27.
+    - `completed` [6/9]: HIR gates now validate typed step payload structure (`node_kind: Stmt`, typed `fields`) and perform effect/fact-flow checks from typed step categories (`step.kind`) plus payload fields, removing statement-kind string branching from gate logic (`HIR/Gates.pm`; `Gate-Effect` and fact transfer updated). Statement-kind strings remain only in deterministic dump output for trace readability, not verification decisions. Verification: `make test` with Makefile `prlimit` gate is green (`191 passed, 0 failed`) on 2026-02-27.
+    - `completed` [7/9]: proof/bounds reasoning is now fact/contract-oriented: gate-time fact flow derives branch-sensitive list-length facts (`len_var:<name>:<n>`), materialization seeds region `facts_in` into codegen fact scopes, loop binding records explicit upper-bound contracts (`size/count - k` via receiver metadata) and lower-bound fact keys, and index-proof evaluation in `ProofIter.pm` no longer depends on generic AST deep-equality helpers. Verification: `make test` with Makefile `prlimit` gate is green (`191 passed, 0 failed`) on 2026-02-27.
+    - `completed` [8/9]: dead compile surfaces and parser coupling were removed from codegen root for the cutover path: `Codegen.pm` dropped unused parser imports (`collect_functions`, `parse_function_params`, `parse_function_body`), and legacy unused direct function-builder entrypoints were pruned from `Codegen/Compile.pm` (retaining HIR-used context/prototype/entry wrappers). Verification after pruning remains green (`191 passed, 0 failed`) on 2026-02-27.
+    - `completed` [9/9]: backend now consumes HIR directly at codegen time by emitting each function from normalized HIR on demand (`BackendC` -> `emit_function_c_from_hir`), and the standalone materialization pass was removed from the compile pipeline (`HIR.pm`). This eliminates required dependence on pre-populated `backend_c_template` fields while preserving deterministic output/diagnostics (`HIR/BackendC.pm`, `HIR/MaterializeC.pm`, `HIR.pm`). Verification: `make test` with Makefile `prlimit` gate is green (`191 passed, 0 failed`) on 2026-02-27.

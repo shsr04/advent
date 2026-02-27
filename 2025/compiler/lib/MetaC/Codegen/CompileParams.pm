@@ -104,6 +104,75 @@ sub emit_param_bindings {
             next;
         }
 
+        if ($param->{type} eq 'number_list') {
+            emit_line($out, $indent, "const NumberList $name = $in_name;");
+            emit_size_constraint_check(
+                ctx         => $ctx,
+                constraints => $constraints,
+                target_expr => $name,
+                target_type => 'number_list',
+                out         => $out,
+                indent      => $indent,
+                where       => "parameter '$name'",
+            );
+            declare_var(
+                $ctx,
+                $name,
+                {
+                    type      => 'number_list',
+                    immutable => 1,
+                    c_name    => $name,
+                }
+            );
+            next;
+        }
+
+        if ($param->{type} eq 'number_list_list') {
+            emit_line($out, $indent, "const NumberListList $name = $in_name;");
+            emit_size_constraint_check(
+                ctx         => $ctx,
+                constraints => $constraints,
+                target_expr => $name,
+                target_type => 'number_list_list',
+                out         => $out,
+                indent      => $indent,
+                where       => "parameter '$name'",
+            );
+            declare_var(
+                $ctx,
+                $name,
+                {
+                    type      => 'number_list_list',
+                    immutable => 1,
+                    c_name    => $name,
+                }
+            );
+            next;
+        }
+
+        if ($param->{type} eq 'string_list') {
+            emit_line($out, $indent, "const StringList $name = $in_name;");
+            emit_size_constraint_check(
+                ctx         => $ctx,
+                constraints => $constraints,
+                target_expr => $name,
+                target_type => 'string_list',
+                out         => $out,
+                indent      => $indent,
+                where       => "parameter '$name'",
+            );
+            declare_var(
+                $ctx,
+                $name,
+                {
+                    type      => 'string_list',
+                    immutable => 1,
+                    c_name    => $name,
+                }
+            );
+            next;
+        }
+
         if (is_array_type($param->{type})) {
             emit_line($out, $indent, "const AnyList $name = $in_name;");
             emit_size_constraint_check(

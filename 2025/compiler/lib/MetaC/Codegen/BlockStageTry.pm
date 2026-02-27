@@ -1,6 +1,17 @@
 package MetaC::Codegen;
 use strict;
 use warnings;
+use MetaC::IntrinsicRegistry qw(intrinsic_method_op_id);
+
+sub _emit_stmt_direct {
+    my ($stmt, $ctx, $out, $indent, $current_fn_return) = @_;
+    set_error_line($stmt->{line});
+    return if _compile_block_stage_decls($stmt, $ctx, $out, $indent, $current_fn_return);
+    return if _compile_block_stage_try($stmt, $ctx, $out, $indent, $current_fn_return);
+    return if _compile_block_stage_assign_loops($stmt, $ctx, $out, $indent, $current_fn_return);
+    return if _compile_block_stage_control($stmt, $ctx, $out, $indent, $current_fn_return);
+    compile_error("Unsupported statement kind: $stmt->{kind}");
+}
 
 sub _compile_block_stage_try {
     my ($stmt, $ctx, $out, $indent, $current_fn_return) = @_;
@@ -12,7 +23,7 @@ sub _compile_block_stage_try {
                 name => $first_target,
                 expr => $stmt->{first},
             };
-            compile_block([ $first_stmt ], $ctx, $out, $indent, $current_fn_return);
+            _emit_stmt_direct($first_stmt, $ctx, $out, $indent, $current_fn_return);
             $prev_name = $first_target;
 
             for (my $i = 0; $i < @{ $stmt->{steps} }; $i++) {
@@ -20,19 +31,35 @@ sub _compile_block_stage_try {
                 my $is_last = ($i == @{ $stmt->{steps} } - 1);
                 my $target = $is_last ? $stmt->{name} : ('__metac_chain' . $ctx->{tmp_counter}++);
                 my $method_expr = {
-                    kind   => 'method_call',
-                    recv   => { kind => 'ident', name => $prev_name },
-                    method => $step->{name},
-                    args   => $step->{args},
+                    kind          => 'method_call',
+                    recv          => { kind => 'ident', name => $prev_name },
+                    method        => $step->{name},
+                    args          => $step->{args},
+                    resolved_call => {
+                        schema      => 'f050-call-contract-v1',
+                        call_kind   => 'intrinsic_method',
+                        op_id       => intrinsic_method_op_id($step->{name}),
+                        method_name => $step->{name},
+                        arity       => scalar(@{ $step->{args} // [] }),
+                    },
+                    canonical_call => {
+                        node_kind   => 'CallExpr',
+                        kind        => 'intrinsic',
+                        call_kind   => 'intrinsic_method',
+                        op_id       => intrinsic_method_op_id($step->{name}),
+                        arity       => scalar(@{ $step->{args} // [] }),
+                        result_type => 'unknown',
+                    },
                 };
                 my $step_stmt = {
                     kind => 'const_try_expr',
                     name => $target,
                     expr => $method_expr,
                 };
-                compile_block([ $step_stmt ], $ctx, $out, $indent, $current_fn_return);
+                _emit_stmt_direct($step_stmt, $ctx, $out, $indent, $current_fn_return);
                 $prev_name = $target;
             }
+            clear_error_line();
             return 1;
         }
 

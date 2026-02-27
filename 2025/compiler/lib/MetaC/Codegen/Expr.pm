@@ -1,6 +1,7 @@
 package MetaC::Codegen;
 use strict;
 use warnings;
+use MetaC::IntrinsicRegistry qw(intrinsic_method_op_id);
 
 sub _declare_union_member_bindings {
     my ($ctx, $bindings) = @_;
@@ -50,6 +51,61 @@ sub _is_empty_list_comparable_type {
     return 1 if $type eq 'indexed_number_list';
     return 1 if is_matrix_member_list_type($type);
     return 0;
+}
+
+sub _ensure_canonical_call_contract {
+    my ($expr, $ctx) = @_;
+    return if defined($expr->{canonical_call}) && ref($expr->{canonical_call}) eq 'HASH';
+
+    if (($expr->{kind} // '') eq 'method_call') {
+        my $method = $expr->{method} // '';
+        return if $method eq '';
+        my $arity = scalar @{ $expr->{args} // [] };
+        $expr->{resolved_call} = {
+            schema           => 'f050-call-contract-v1',
+            call_kind        => 'intrinsic_method',
+            op_id            => intrinsic_method_op_id($method),
+            method_name      => $method,
+            arity            => $arity,
+            result_type_hint => 'unknown',
+        };
+        $expr->{canonical_call} = {
+            node_kind   => 'CallExpr',
+            kind        => 'intrinsic',
+            call_kind   => 'intrinsic_method',
+            op_id       => intrinsic_method_op_id($method),
+            arity       => $arity,
+            result_type => 'unknown',
+        };
+        return;
+    }
+
+    if (($expr->{kind} // '') eq 'call') {
+        my $name = $expr->{name} // '';
+        return if $name eq '';
+        my $arity = scalar @{ $expr->{args} // [] };
+        my $functions = $ctx->{functions} // {};
+        my $call_kind = exists($functions->{$name}) ? 'user' : 'builtin';
+        my $op_id = $call_kind eq 'user' ? "call.user.$name.v1" : "call.builtin.$name.v1";
+        $expr->{resolved_call} = {
+            schema           => 'f050-call-contract-v1',
+            call_kind        => $call_kind,
+            op_id            => $op_id,
+            target_name      => $name,
+            arity            => $arity,
+            result_type_hint => 'unknown',
+        };
+        $expr->{canonical_call} = {
+            node_kind   => 'CallExpr',
+            kind        => $call_kind,
+            call_kind   => $call_kind,
+            op_id       => $op_id,
+            target_name => $name,
+            arity       => $arity,
+            result_type => 'unknown',
+        };
+        return;
+    }
 }
 
 sub compile_expr {
@@ -132,17 +188,71 @@ sub compile_expr {
         compile_error("Postfix '?' is only supported after hoisting in statement lowering");
     }
     if ($expr->{kind} eq 'method_call') {
-        my ($recv_code, $recv_type) = compile_expr($expr->{recv}, $ctx);
-        my $method = $expr->{method};
-        my $actual = scalar @{ $expr->{args} };
-        my ($method_code, $method_type) = compile_expr_method_call($expr, $ctx, $recv_code, $recv_type, $method, $actual);
-        return maybe_materialize_owned_expr_result(
-            ctx       => $ctx,
-            expr_code => $method_code,
-            expr_type => $method_type,
-        );
+        _ensure_canonical_call_contract($expr, $ctx);
+        if (!defined($expr->{canonical_call}) || ref($expr->{canonical_call}) ne 'HASH') {
+            compile_error("Internal HIR error: method_call missing canonical_call")
+              if defined($expr->{resolved_call}) && ref($expr->{resolved_call}) eq 'HASH';
+            my ($recv_code, $recv_type) = compile_expr($expr->{recv}, $ctx);
+            my $actual = scalar @{ $expr->{args} // [] };
+            my ($method_code, $method_type) = compile_expr_intrinsic_call($expr, $ctx, $recv_code, $recv_type, $actual);
+            return maybe_materialize_owned_expr_result(
+                ctx       => $ctx,
+                expr_code => $method_code,
+                expr_type => $method_type,
+            );
+        }
+        my %canon = %{ $expr->{canonical_call} };
+        my $canonical_kind = $canon{kind} // '';
+        $canon{kind} = 'call_expr';
+        $canon{call_kind} = $canon{call_kind}
+          // ($canonical_kind eq 'intrinsic' ? 'intrinsic_method' : $canonical_kind);
+        $canon{recv} = $expr->{recv};
+        $canon{args} = $expr->{args};
+        $canon{resolved_call} = $expr->{resolved_call} if defined $expr->{resolved_call};
+        return compile_expr(\%canon, $ctx);
+    }
+    if ($expr->{kind} eq 'call_expr') {
+        if (($expr->{call_kind} // '') eq 'intrinsic_method') {
+            my ($recv_code, $recv_type) = compile_expr($expr->{recv}, $ctx);
+            my $actual = scalar @{ $expr->{args} // [] };
+            my ($method_code, $method_type) = compile_expr_intrinsic_call($expr, $ctx, $recv_code, $recv_type, $actual);
+            return maybe_materialize_owned_expr_result(
+                ctx       => $ctx,
+                expr_code => $method_code,
+                expr_type => $method_type,
+            );
+        }
+        if (($expr->{call_kind} // '') eq 'user' || ($expr->{call_kind} // '') eq 'builtin') {
+            my %legacy = %$expr;
+            $legacy{kind} = 'call';
+            $legacy{name} = $expr->{target_name} if defined $expr->{target_name};
+            delete $legacy{node_kind};
+            delete $legacy{call_kind};
+            $legacy{_allow_legacy_call} = 1;
+            return compile_expr(\%legacy, $ctx);
+        }
+        compile_error("Unsupported call_expr kind: " . ($expr->{call_kind} // ''));
     }
     if ($expr->{kind} eq 'call') {
+        my $legacy_mode = $expr->{_allow_legacy_call} // 0;
+        delete $expr->{_allow_legacy_call};
+        if (!$legacy_mode) {
+            _ensure_canonical_call_contract($expr, $ctx);
+            if (defined($expr->{canonical_call}) && ref($expr->{canonical_call}) eq 'HASH') {
+                my %canon = %{ $expr->{canonical_call} };
+                my $canonical_kind = $canon{kind} // '';
+                $canon{kind} = 'call_expr';
+                $canon{call_kind} = $canon{call_kind}
+                  // ($canonical_kind eq 'intrinsic' ? 'intrinsic_method' : $canonical_kind);
+                $canon{target_name} = $expr->{name} if defined $expr->{name};
+                $canon{args} = $expr->{args};
+                $canon{resolved_call} = $expr->{resolved_call} if defined $expr->{resolved_call};
+                return compile_expr(\%canon, $ctx);
+            }
+            compile_error("Internal HIR error: call missing canonical_call")
+              if defined($expr->{resolved_call}) && ref($expr->{resolved_call}) eq 'HASH';
+        }
+
         if ($expr->{name} eq 'error') {
             my $actual = scalar @{ $expr->{args} };
             compile_error("error(...) expects exactly 1 arg, got $actual")

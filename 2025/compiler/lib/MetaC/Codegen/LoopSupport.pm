@@ -262,6 +262,34 @@ sub emit_loop_body_with_binding {
     if ($var_type eq 'number' && defined $range_min_expr && defined $range_max_expr) {
         $var_info{range_min_expr} = $range_min_expr;
         $var_info{range_max_expr} = $range_max_expr;
+        my $min_key;
+        eval { $min_key = expr_fact_key($range_min_expr, $ctx); 1; };
+        $var_info{range_min_fact_key} = $min_key if defined $min_key;
+
+        if (($range_max_expr->{kind} // '') eq 'binop' && ($range_max_expr->{op} // '') eq '-'
+            && defined($range_max_expr->{left}) && ref($range_max_expr->{left}) eq 'HASH'
+            && defined($range_max_expr->{right}) && ref($range_max_expr->{right}) eq 'HASH'
+            && ($range_max_expr->{right}{kind} // '') eq 'num')
+        {
+            my $left = $range_max_expr->{left};
+            my $minus_const = int($range_max_expr->{right}{value});
+            if (($left->{kind} // '') eq 'method_call'
+                && (($left->{method} // '') eq 'size' || ($left->{method} // '') eq 'count')
+                && scalar(@{ $left->{args} // [] }) == 0)
+            {
+                my ($recv_code, $recv_type) = compile_expr($left->{recv}, $ctx);
+                $var_info{range_max_size_recv_code} = $recv_code;
+                $var_info{range_max_size_recv_type} = $recv_type;
+                $var_info{range_max_size_minus_const} = $minus_const;
+            } elsif (($left->{kind} // '') eq 'ident') {
+                my $bound_info = lookup_var($ctx, $left->{name});
+                if (defined($bound_info) && defined($bound_info->{size_of_recv_code}) && defined($bound_info->{size_of_recv_type})) {
+                    $var_info{range_max_size_recv_code} = $bound_info->{size_of_recv_code};
+                    $var_info{range_max_size_recv_type} = $bound_info->{size_of_recv_type};
+                    $var_info{range_max_size_minus_const} = $minus_const;
+                }
+            }
+        }
     }
     if (is_matrix_member_type($var_type) && defined($member_matrix_code) && defined($member_matrix_type)) {
         $var_info{member_matrix_code} = $member_matrix_code;

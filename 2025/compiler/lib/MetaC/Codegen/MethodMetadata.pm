@@ -1,139 +1,10 @@
 package MetaC::Codegen;
 use strict;
 use warnings;
+use MetaC::IntrinsicRegistry qw(method_base_specs method_from_op_id);
 
 sub method_specs {
-    return {
-        size => {
-            receivers     => { string => 1, string_list => 1, number_list => 1, number_list_list => 1, bool_list => 1, indexed_number_list => 1 },
-            arity         => 0,
-            expr_callable => 1,
-            fallibility   => 'never',
-        },
-        chunk => {
-            receivers     => { string => 1 },
-            arity         => 1,
-            expr_callable => 1,
-            fallibility   => 'never',
-        },
-        chars => {
-            receivers     => { string => 1 },
-            arity         => 0,
-            expr_callable => 1,
-            fallibility   => 'never',
-        },
-        isBlank => {
-            receivers     => { string => 1 },
-            arity         => 0,
-            expr_callable => 1,
-            fallibility   => 'never',
-        },
-        split => {
-            receivers     => { string => 1 },
-            arity         => 1,
-            expr_callable => 0,
-            fallibility   => 'always',
-        },
-        match => {
-            receivers     => { string => 1 },
-            arity         => 1,
-            expr_callable => 0,
-            fallibility   => 'always',
-        },
-        slice => {
-            receivers     => { string_list => 1, number_list => 1 },
-            arity         => 1,
-            expr_callable => 1,
-            fallibility   => 'never',
-        },
-        max => {
-            receivers     => { string_list => 1, number_list => 1 },
-            arity         => 0,
-            expr_callable => 1,
-            fallibility   => 'never',
-        },
-        sort => {
-            receivers     => { number_list => 1 },
-            arity         => 0,
-            expr_callable => 1,
-            fallibility   => 'never',
-        },
-        sortBy => {
-            receivers     => { number_list_list => 1 },
-            arity         => 1,
-            expr_callable => 1,
-            fallibility   => 'never',
-        },
-        compareTo => {
-            receivers     => { number => 1, indexed_number => 1 },
-            arity         => 1,
-            expr_callable => 1,
-            fallibility   => 'never',
-        },
-        andThen => {
-            receivers     => { number => 1, indexed_number => 1 },
-            arity         => 1,
-            expr_callable => 1,
-            fallibility   => 'never',
-        },
-        index => {
-            receivers     => { indexed_number => 1 },
-            arity         => 0,
-            expr_callable => 1,
-            fallibility   => 'never',
-        },
-        log => {
-            receivers     => {
-                string              => 1,
-                number              => 1,
-                bool                => 1,
-                indexed_number      => 1,
-                string_list         => 1,
-                number_list         => 1,
-                bool_list           => 1,
-                indexed_number_list => 1,
-            },
-            arity         => 0,
-            expr_callable => 1,
-            fallibility   => 'never',
-        },
-        map => {
-            receivers     => { string_list => 1 },
-            arity         => 1,
-            expr_callable => 0,
-            fallibility   => 'mapper',
-        },
-        filter => {
-            receivers     => { string_list => 1, number_list => 1 },
-            arity         => 1,
-            expr_callable => 0,
-            fallibility   => 'never',
-        },
-        any => {
-            receivers     => { string_list => 1, number_list => 1, number_list_list => 1, bool_list => 1 },
-            arity         => 1,
-            expr_callable => 1,
-            fallibility   => 'never',
-        },
-        reduce => {
-            receivers     => { string_list => 1, number_list => 1 },
-            arity         => 2,
-            expr_callable => 1,
-            fallibility   => 'never',
-        },
-        assert => {
-            receivers     => { string_list => 1, number_list => 1 },
-            arity         => 2,
-            expr_callable => 0,
-            fallibility   => 'always',
-        },
-        push => {
-            receivers     => { string_list => 1, number_list => 1, number_list_list => 1, bool_list => 1 },
-            arity         => 1,
-            expr_callable => 1,
-            fallibility   => 'never',
-        },
-    };
+    return method_base_specs();
 }
 
 sub map_mapper_info {
@@ -186,6 +57,15 @@ sub map_mapper_info {
 sub method_fallibility_diagnostic {
     my ($expr, $recv_type, $ctx) = @_;
     my $method = $expr->{method};
+    if ((!defined($method) || $method eq '') && defined($expr->{resolved_call}) && ref($expr->{resolved_call}) eq 'HASH') {
+        $method = $expr->{resolved_call}{method_name}
+          if defined($expr->{resolved_call}{method_name}) && $expr->{resolved_call}{method_name} ne '';
+        if ((!defined($method) || $method eq '')) {
+            $method = method_from_op_id($expr->{resolved_call}{op_id} // '');
+        }
+    }
+    return undef if !defined($method) || $method eq '';
+
     if (is_matrix_type($recv_type) && $method eq 'insert') {
         my $meta = matrix_type_meta($recv_type);
         if (!$meta->{has_size}) {

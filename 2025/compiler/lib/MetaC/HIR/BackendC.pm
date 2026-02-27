@@ -4,6 +4,7 @@ use warnings;
 use Exporter 'import';
 
 use MetaC::Support qw(compile_error);
+use MetaC::HIR::MaterializeC qw(emit_function_c_from_hir);
 
 our @EXPORT_OK = qw(codegen_from_vnf_hir);
 
@@ -19,15 +20,6 @@ sub _emit_function_prototypes_from_hir {
     }
     my @ordered_names = sort grep { $_ ne 'main' } keys %by_name;
     return MetaC::Codegen::emit_function_prototypes(\@ordered_names, \%by_name);
-}
-
-sub _validate_backend_templates {
-    my ($functions) = @_;
-    for my $fn (@$functions) {
-        my $tpl = $fn->{backend_c_template};
-        compile_error("Backend/F049: missing materialized C template for '$fn->{name}'")
-          if !defined($tpl) || ref($tpl) ne '' || $tpl eq '';
-    }
 }
 
 sub _validate_backend_capabilities {
@@ -48,6 +40,19 @@ sub _validate_backend_capabilities {
     }
 }
 
+sub _collect_function_sigs {
+    my ($functions) = @_;
+    my %sigs;
+    for my $fn (@$functions) {
+        next if $fn->{name} eq 'main';
+        $sigs{ $fn->{name} } = {
+            return_type => $fn->{return_type},
+            params      => $fn->{params},
+        };
+    }
+    return \%sigs;
+}
+
 sub _ordered_functions {
     my ($functions) = @_;
     my %by_name = map { $_->{name} => $_ } @$functions;
@@ -64,7 +69,7 @@ sub codegen_from_vnf_hir {
 
     my @functions = @{ $hir->{functions} // [] };
     _validate_backend_capabilities(\@functions);
-    _validate_backend_templates(\@functions);
+    my $function_sigs = _collect_function_sigs(\@functions);
 
     my $non_runtime = '';
     $non_runtime .= _emit_function_prototypes_from_hir(\@functions);
@@ -72,7 +77,10 @@ sub codegen_from_vnf_hir {
 
     my $ordered = _ordered_functions(\@functions);
     for my $fn (@$ordered) {
-        $non_runtime .= $fn->{backend_c_template};
+        $non_runtime .= emit_function_c_from_hir(
+            fn            => $fn,
+            function_sigs => $function_sigs,
+        );
         $non_runtime .= "\n" if $fn->{name} ne 'main';
     }
 

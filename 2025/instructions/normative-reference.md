@@ -87,6 +87,20 @@ When a function does not specify a return type, it returns no value. The excepti
 A function without a return type *can* use the `return` statement to exit early.
 A function with a return type *must* return a conformant value in all of its execution paths.
 
+### 1.1 Fluent function invocation
+
+A function with at least 1 parameter *can* be invoked *either* by function-style invocation *or* by method-style invocation.
+- Function-style invocation has the form: `<name>(<arg1>, <arg2>, ...)`
+- Method-style invocation has the form: `<arg1>.<name>(<arg2>, ...)`
+
+Both forms are functionally equivalent.
+
+This implies that the program *can* define a custom function and then call it fluently, using method-style invocation.
+For example:
+- Define function: `function f(x: number, y: number): number { ... }`
+- Call with method-style invocation: `x.f(y)`
+  - Or even with literal values: `0.f(1)` (equivalent to `f(0,1)`)
+
 ### 2. Types
 
 A type *consists of* a value domain and a set of operations.
@@ -264,9 +278,9 @@ The following operations are available on sequence-based types `S: <type>[] with
   - This operation is not available if the value cannot be traced back to a source sequence.
 - `S.size(): int with exact(<size>)`
   - Returns the number of elements in the sequence.
-- `S.append(<arg: type | S>): S`
+- `S.append(<arg: type | type[]>): <type>[] with size(<new-size>)`
   - Returns the sequence, with the given element(s) appended after the end.
-- `S.prepend(<arg: type | S>): S`
+- `S.prepend(<arg: type | type[]>): <type>[] with size(<new-size>)`
   - Returns the sequence, with the given element(s) prepended before the start.
 - `S.head(): <type> [| error]`
   - Returns the first element of the sequence.
@@ -294,7 +308,7 @@ The following operations are available on sequence-based types `S: <type>[] with
   - Fallible: exactly if `<scanner>` is fallible.
 - `S.reverse(): S`
   - Returns the sequence in reverse order.
-- `S.chunk(<size: number>): S[]`
+- `S.chunk(<size: number>): <type>[][]`
   - Returns the sequence, divided into chunks of size at most `size`. If the sequence cannot be split evenly, the last chunk contains the remaining elements.
 - ...
 
@@ -322,4 +336,9 @@ The following operations are available on matrix types `M: matrix(<type>) with d
 - `<type>.index(): int[] with size(<dim>)`
   - Returns the coordinates of the member.
   - This operation is not available if the member cannot be traced back to a source matrix.
-
+- `M.insert(<value: type>, <index: int[] with size(<dim>)>): M [| error]`
+  - Inserts the value at the given index, modifying the matrix in place. Returns the matrix for chaining.
+  - Fallible: exactly if `<sizes>` cannot be inferred, thus making the matrix unconstrained.
+- `M.size(<n: int with range(0, <dim-1>)>): int [| error]`
+  - Returns the actual size of the `<n>`th dimension of the matrix, starting with 0.
+  - Fallible: exactly if `<dim>` cannot be inferred, thus making `<n>` possibly out of bounds.

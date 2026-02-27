@@ -1,0 +1,7 @@
+@Test({
+   "compile_err" : "Method 'size(...)' requires compile-time axis proof in range(0, 2)"
+})
+function main(): int {
+  let grid: matrix(number) with dim(3) + matrixSize([2, 3, 4]) = []
+  return grid.size(3)
+}

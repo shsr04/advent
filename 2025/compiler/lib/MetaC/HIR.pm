@@ -6,7 +6,7 @@ use Exporter 'import';
 use MetaC::HIR::Lowering qw(lower_source_to_vnf_hir);
 use MetaC::HIR::Gates qw(verify_vnf_hir dump_vnf_hir);
 use MetaC::HIR::ABI qw(normalize_hir_abi);
-use MetaC::HIR::MaterializeC qw(materialize_c_templates);
+use MetaC::HIR::ResolveCalls qw(resolve_hir_calls);
 use MetaC::HIR::BackendC qw(codegen_from_vnf_hir);
 
 our @EXPORT_OK = qw(
@@ -52,7 +52,7 @@ sub compile_source_via_vnf_hir {
         },
         sub {
             my ($s) = @_;
-            $s->{hir} = materialize_c_templates($s->{hir});
+            $s->{hir} = resolve_hir_calls($s->{hir});
             return $s;
         },
         sub {

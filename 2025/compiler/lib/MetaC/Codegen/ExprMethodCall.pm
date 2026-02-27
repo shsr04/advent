@@ -1,9 +1,90 @@
 package MetaC::Codegen;
 use strict;
 use warnings;
+use MetaC::IntrinsicRegistry qw(method_from_op_id intrinsic_method_codegen_template);
 
-sub compile_expr_method_call {
-    my ($expr, $ctx, $recv_code, $recv_type, $method, $actual) = @_;
+sub _matrix_size_axis_has_compiletime_proof {
+    my (%args) = @_;
+    my $axis_expr = $args{axis_expr};
+    my $ctx = $args{ctx};
+    my $max_axis = int($args{max_axis});
+
+    if (($axis_expr->{kind} // '') eq 'num') {
+        my $axis = int($axis_expr->{value});
+        return ($axis >= 0 && $axis <= $max_axis) ? 1 : 0;
+    }
+
+    if (($axis_expr->{kind} // '') eq 'ident') {
+        my $info = lookup_var($ctx, $axis_expr->{name});
+        return 0 if !defined $info;
+        return 0 if ($info->{type} // '') ne 'number';
+        my ($min, $max) = constraint_range_bounds($info->{constraints});
+        return 0 if !defined($min) || !defined($max);
+        return ($min >= 0 && $max <= $max_axis) ? 1 : 0;
+    }
+
+    return 0;
+}
+
+sub _resolved_method_name {
+    my ($expr) = @_;
+    my $resolved = $expr->{resolved_call};
+    if (defined($resolved) && ref($resolved) eq 'HASH') {
+        return $resolved->{method_name}
+          if defined($resolved->{method_name}) && $resolved->{method_name} ne '';
+        my $from_op = method_from_op_id($resolved->{op_id} // '');
+        return $from_op if defined $from_op;
+    }
+    return $expr->{method};
+}
+
+sub _compile_registry_method_template {
+    my (%args) = @_;
+    my $expr = $args{expr};
+    my $ctx = $args{ctx};
+    my $recv_code = $args{recv_code};
+    my $recv_type = $args{recv_type};
+    my $method = $args{method};
+    my $actual = int($args{actual});
+
+    my $spec = intrinsic_method_codegen_template($method, $recv_type);
+    return undef if !defined $spec;
+
+    my $arity = int($spec->{arity} // 0);
+    if ($actual != $arity) {
+        my $sig = $arity == 0 ? "$method()" : "$method(...)";
+        compile_error("Method '$sig' expects $arity arg" . ($arity == 1 ? '' : 's') . ", got $actual");
+    }
+
+    my $template = $spec->{expr_template};
+    my ($arg0_code, $arg0_type, $arg0_loaded);
+    if ($template =~ /%ARG0/ || $template =~ /%ARG0_NUM%/) {
+        ($arg0_code, $arg0_type) = compile_expr($expr->{args}[0], $ctx);
+        $arg0_loaded = 1;
+    }
+
+    if ($template =~ /%ARG0_NUM%/) {
+        my $num = number_like_to_c_expr($arg0_code, $arg0_type, "Method '$method(...)'");
+        $template =~ s/%ARG0_NUM%/$num/g;
+    }
+    if ($template =~ /%ARG0%/) {
+        compile_error("Internal codegen contract error: missing arg0 for '$method'")
+          if !$arg0_loaded;
+        $template =~ s/%ARG0%/$arg0_code/g;
+    }
+    if ($template =~ /%RECV_NUM%/) {
+        my $recv_num = number_like_to_c_expr($recv_code, $recv_type, "Method '$method(...)'");
+        $template =~ s/%RECV_NUM%/$recv_num/g;
+    }
+    $template =~ s/%RECV%/$recv_code/g;
+    return ($template, $spec->{result_type});
+}
+
+sub compile_expr_intrinsic_call {
+    my ($expr, $ctx, $recv_code, $recv_type, $actual) = @_;
+    my $method = _resolved_method_name($expr);
+    compile_error("Unsupported intrinsic method call contract")
+      if !defined($method) || $method eq '';
     my $fallibility_error = method_fallibility_diagnostic($expr, $recv_type, $ctx);
     compile_error($fallibility_error) if defined $fallibility_error;
 
@@ -60,6 +141,33 @@ sub compile_expr_method_call {
         compile_error("matrix neighbours are unsupported for element type '$meta->{elem}'");
     }
 
+    if (is_matrix_type($recv_type) && $method eq 'size') {
+        compile_error("Method 'size(...)' expects 1 arg, got $actual")
+          if $actual != 1;
+        my $meta = matrix_type_meta($recv_type);
+
+        my $max_axis = $meta->{dim} - 1;
+        my $axis_expr = $expr->{args}[0];
+        my ($axis_code, $axis_type) = compile_expr($axis_expr, $ctx);
+        my $axis_num = number_like_to_c_expr($axis_code, $axis_type, "Method 'size(...)'");
+        compile_error("Method 'size(...)' requires compile-time axis proof in range(0, $max_axis)")
+          if !_matrix_size_axis_has_compiletime_proof(
+            axis_expr => $axis_expr,
+            ctx       => $ctx,
+            max_axis  => $max_axis,
+          );
+        if ($meta->{elem} eq 'number') {
+            return ("metac_matrix_number_size($recv_code, $axis_num)", 'number');
+        }
+        if ($meta->{elem} eq 'string') {
+            return ("metac_matrix_string_size($recv_code, $axis_num)", 'number');
+        }
+        if ($meta->{has_size}) {
+            return ("((int64_t)($recv_code).size_spec[(size_t)($axis_num)])", 'number');
+        }
+        return ("0", 'number');
+    }
+
     if (is_matrix_member_type($recv_type) && $method eq 'index') {
         compile_error("Method 'index()' expects 0 args, got $actual")
           if $actual != 0;
@@ -80,43 +188,16 @@ sub compile_expr_method_call {
         compile_error("Method 'neighbours()' is unsupported for matrix element type '$meta->{elem}'");
     }
 
-    if ($recv_type eq 'string' && $method eq 'size') {
-        compile_error("Method 'size()' expects 0 args, got $actual")
-          if $actual != 0;
-        return ("metac_strlen($recv_code)", 'number');
-    }
+    my ($templated_code, $templated_type) = _compile_registry_method_template(
+        expr      => $expr,
+        ctx       => $ctx,
+        recv_code => $recv_code,
+        recv_type => $recv_type,
+        method    => $method,
+        actual    => $actual,
+    );
+    return ($templated_code, $templated_type) if defined $templated_code;
 
-    if ($recv_type eq 'string' && $method eq 'chunk') {
-        compile_error("Method 'chunk(...)' expects 1 arg, got $actual")
-          if $actual != 1;
-        my ($arg_code, $arg_type) = compile_expr($expr->{args}[0], $ctx);
-        my $arg_num = number_like_to_c_expr($arg_code, $arg_type, "Method 'chunk(...)'");
-        return ("metac_chunk_string($recv_code, $arg_num)", 'string_list');
-    }
-
-    if ($recv_type eq 'string' && $method eq 'chars') {
-        compile_error("Method 'chars()' expects 0 args, got $actual")
-          if $actual != 0;
-        return ("metac_chars_string($recv_code)", 'string_list');
-    }
-
-    if ($recv_type eq 'string' && $method eq 'isBlank') {
-        compile_error("Method 'isBlank()' expects 0 args, got $actual")
-          if $actual != 0;
-        return ("metac_is_blank($recv_code)", 'bool');
-    }
-
-    if ($recv_type eq 'string' && $method eq 'split') {
-        compile_error("Method 'split(...)' is fallible; handle it with '?'");
-    }
-
-    if (($recv_type eq 'string_list' || $recv_type eq 'number_list' || $recv_type eq 'number_list_list' || $recv_type eq 'bool_list' || $recv_type eq 'indexed_number_list')
-        && ($method eq 'size' || $method eq 'count'))
-    {
-        compile_error("Method '$method()' expects 0 args, got $actual")
-          if $actual != 0;
-        return ("((int64_t)$recv_code.count)", 'number');
-    }
     if (is_matrix_member_list_type($recv_type) && ($method eq 'size' || $method eq 'count')) {
         compile_error("Method '$method()' expects 0 args, got $actual")
           if $actual != 0;
@@ -222,33 +303,73 @@ sub compile_expr_method_call {
         return ($result, 'bool');
     }
 
-    if (($recv_type eq 'string_list' || $recv_type eq 'number_list') && $method eq 'slice') {
-        compile_error("Method 'slice(...)' expects 1 arg, got $actual")
+    if (($recv_type eq 'string_list' || $recv_type eq 'number_list' || $recv_type eq 'number_list_list' || $recv_type eq 'bool_list')
+        && $method eq 'all')
+    {
+        compile_error("Method 'all(...)' expects 1 arg, got $actual")
           if $actual != 1;
-        my ($arg_code, $arg_type) = compile_expr($expr->{args}[0], $ctx);
-        my $arg_num = number_like_to_c_expr($arg_code, $arg_type, "Method 'slice(...)'");
-        if ($recv_type eq 'string_list') {
-            return ("metac_slice_string_list($recv_code, $arg_num)", 'string_list');
+        my $predicate = $expr->{args}[0];
+        compile_error("all(...) predicate must be a single-parameter lambda, e.g. x => x > 0")
+          if $predicate->{kind} ne 'lambda1';
+        compile_error("Method 'all(...)' currently requires statement-backed expression context")
+          if !expr_temp_scope_active($ctx);
+
+        my ($recv_c_type, $item_type, $item_decl_template);
+        if ($recv_type eq 'number_list') {
+            $recv_c_type = 'NumberList';
+            $item_type = 'number';
+            $item_decl_template = 'const int64_t %ITEM% = %RECV%.items[%IDX%];';
+        } elsif ($recv_type eq 'string_list') {
+            $recv_c_type = 'StringList';
+            $item_type = 'string';
+            $item_decl_template = 'const char *%ITEM% = %RECV%.items[%IDX%];';
+        } elsif ($recv_type eq 'bool_list') {
+            $recv_c_type = 'BoolList';
+            $item_type = 'bool';
+            $item_decl_template = 'const int %ITEM% = %RECV%.items[%IDX%];';
+        } else {
+            $recv_c_type = 'NumberListList';
+            $item_type = 'number_list';
+            $item_decl_template = 'const NumberList %ITEM% = %RECV%.items[%IDX%];';
         }
-        return ("metac_slice_number_list($recv_code, $arg_num)", 'number_list');
-    }
 
-    if ($recv_type eq 'number_list' && $method eq 'max') {
-        compile_error("Method 'max()' expects 0 args, got $actual")
-          if $actual != 0;
-        return ("metac_list_max_number($recv_code)", 'indexed_number');
-    }
+        my $scope = $ctx->{expr_temp_scopes}[-1];
+        my $recv_tmp = '__metac_all_recv' . $ctx->{tmp_counter}++;
+        my $idx = '__metac_all_i' . $ctx->{tmp_counter}++;
+        my $item = '__metac_all_item' . $ctx->{tmp_counter}++;
+        my $result = '__metac_all_res' . $ctx->{tmp_counter}++;
+        my $item_decl = $item_decl_template;
+        $item_decl =~ s/%ITEM%/$item/g;
+        $item_decl =~ s/%RECV%/$recv_tmp/g;
+        $item_decl =~ s/%IDX%/$idx/g;
 
-    if ($recv_type eq 'string_list' && $method eq 'max') {
-        compile_error("Method 'max()' expects 0 args, got $actual")
-          if $actual != 0;
-        return ("metac_list_max_string_number($recv_code)", 'indexed_number');
-    }
+        new_scope($ctx);
+        my %param_info = (
+            type      => $item_type,
+            immutable => 1,
+            c_name    => $item,
+        );
+        declare_var($ctx, $predicate->{param}, \%param_info);
+        if ($recv_type eq 'number_list_list' && $expr->{recv}{kind} eq 'ident') {
+            my $recv_info = lookup_var($ctx, $expr->{recv}{name});
+            if (defined($recv_info) && defined($recv_info->{item_len_proof})) {
+                my $param_key = expr_fact_key({ kind => 'ident', name => $predicate->{param} }, $ctx);
+                set_list_len_fact($ctx, $param_key, $recv_info->{item_len_proof});
+            }
+        }
+        my ($pred_code, $pred_type) = compile_expr($predicate->{body}, $ctx);
+        pop_scope($ctx);
+        compile_error("all(...) predicate must evaluate to bool")
+          if $pred_type ne 'bool';
 
-    if ($recv_type eq 'number_list' && $method eq 'sort') {
-        compile_error("Method 'sort()' expects 0 args, got $actual")
-          if $actual != 0;
-        return ("metac_sort_number_list($recv_code)", 'indexed_number_list');
+        push @{ $scope->{prelude} }, "int $result = 1;";
+        push @{ $scope->{prelude} }, "$recv_c_type $recv_tmp = $recv_code;";
+        push @{ $scope->{prelude} }, "for (size_t $idx = 0; $idx < $recv_tmp.count; $idx++) {";
+        push @{ $scope->{prelude} }, "  $item_decl";
+        push @{ $scope->{prelude} }, "  if (!($pred_code)) { $result = 0; break; }";
+        push @{ $scope->{prelude} }, "}";
+
+        return ($result, 'bool');
     }
 
     if ($recv_type eq 'number_list_list' && $method eq 'sortBy') {
@@ -261,30 +382,6 @@ sub compile_expr_method_call {
             ctx      => $ctx,
         );
         return ("metac_sort_number_list_list_by($recv_code, $helper_name)", 'number_list_list');
-    }
-
-    if (($recv_type eq 'number' || $recv_type eq 'indexed_number') && $method eq 'compareTo') {
-        compile_error("Method 'compareTo(...)' expects 1 arg, got $actual")
-          if $actual != 1;
-        my ($arg_code, $arg_type) = compile_expr($expr->{args}[0], $ctx);
-        my $left = number_like_to_c_expr($recv_code, $recv_type, "Method 'compareTo(...)'");
-        my $right = number_like_to_c_expr($arg_code, $arg_type, "Method 'compareTo(...)'");
-        return ("(($left < $right) ? -1 : (($left > $right) ? 1 : 0))", 'number');
-    }
-
-    if (($recv_type eq 'number' || $recv_type eq 'indexed_number') && $method eq 'andThen') {
-        compile_error("Method 'andThen(...)' expects 1 arg, got $actual")
-          if $actual != 1;
-        my ($arg_code, $arg_type) = compile_expr($expr->{args}[0], $ctx);
-        my $left = number_like_to_c_expr($recv_code, $recv_type, "Method 'andThen(...)'");
-        my $right = number_like_to_c_expr($arg_code, $arg_type, "Method 'andThen(...)'");
-        return ("(($left != 0) ? $left : $right)", 'number');
-    }
-
-    if ($recv_type eq 'indexed_number' && $method eq 'index') {
-        compile_error("Method 'index()' expects 0 args, got $actual")
-          if $actual != 0;
-        return ("(($recv_code).index)", 'number');
     }
 
     if (($recv_type eq 'string' || $recv_type eq 'number' || $recv_type eq 'bool') && $method eq 'index') {
@@ -306,39 +403,13 @@ sub compile_expr_method_call {
         );
     }
 
-    if ($method eq 'log') {
+    if ($method eq 'log' && is_matrix_type($recv_type)) {
         compile_error("Method 'log()' expects 0 args, got $actual")
           if $actual != 0;
-        if ($recv_type eq 'number') {
-            return ("metac_log_number($recv_code)", 'number');
-        }
-        if ($recv_type eq 'string') {
-            return ("metac_log_string($recv_code)", 'string');
-        }
-        if ($recv_type eq 'bool') {
-            return ("metac_log_bool($recv_code)", 'bool');
-        }
-        if ($recv_type eq 'indexed_number') {
-            return ("metac_log_indexed_number($recv_code)", 'indexed_number');
-        }
-        if ($recv_type eq 'string_list') {
-            return ("metac_log_string_list($recv_code)", 'string_list');
-        }
-        if ($recv_type eq 'number_list') {
-            return ("metac_log_number_list($recv_code)", 'number_list');
-        }
-        if ($recv_type eq 'bool_list') {
-            return ("metac_log_bool_list($recv_code)", 'bool_list');
-        }
-        if ($recv_type eq 'indexed_number_list') {
-            return ("metac_log_indexed_number_list($recv_code)", 'indexed_number_list');
-        }
-        if (is_matrix_type($recv_type)) {
-            my $meta = matrix_type_meta($recv_type);
-            return ("metac_log_matrix_number($recv_code)", $recv_type) if $meta->{elem} eq 'number';
-            return ("metac_log_matrix_string($recv_code)", $recv_type) if $meta->{elem} eq 'string';
-            compile_error("Method 'log()' is unsupported for matrix element type '$meta->{elem}'");
-        }
+        my $meta = matrix_type_meta($recv_type);
+        return ("metac_log_matrix_number($recv_code)", $recv_type) if $meta->{elem} eq 'number';
+        return ("metac_log_matrix_string($recv_code)", $recv_type) if $meta->{elem} eq 'string';
+        compile_error("Method 'log()' is unsupported for matrix element type '$meta->{elem}'");
     }
 
     if (($recv_type eq 'number_list' || $recv_type eq 'number_list_list' || $recv_type eq 'string_list' || $recv_type eq 'bool_list') && $method eq 'push') {

@@ -6,6 +6,7 @@ use Exporter 'import';
 use MetaC::Support qw(compile_error);
 use MetaC::Parser qw(collect_functions parse_function_params parse_function_body);
 use MetaC::TypeSpec qw(normalize_type_annotation);
+use MetaC::HIR::TypedNodes qw(stmt_to_payload step_payload_to_stmt);
 
 our @EXPORT_OK = qw(lower_source_to_vnf_hir);
 
@@ -82,7 +83,7 @@ sub _step_from_stmt {
     return {
         id         => _next_id($alloc, 'step'),
         kind       => _step_kind_from_stmt_kind($stmt->{kind} // ''),
-        stmt       => $stmt,
+        payload    => stmt_to_payload($stmt),
         provenance => { line => $stmt->{line} },
     };
 }
@@ -266,7 +267,8 @@ sub _inject_structured_exit_regions {
         $i++;
         next if !@{ $region->{steps} };
 
-        my $stmt = $region->{steps}[0]{stmt};
+        my $stmt = step_payload_to_stmt($region->{steps}[0]{payload});
+        next if !defined $stmt;
         my $kind = $stmt->{kind} // '';
         my $next = ($region->{exit}{kind} // '') eq 'Goto' ? $region->{exit}{target_region} : undef;
         my @extra;
@@ -286,11 +288,13 @@ sub _inject_structured_exit_regions {
 sub _regions_for_statement_chain {
     my ($stmts, $alloc, $base_line) = @_;
     my @regions;
+    my @region_schedule;
 
     for my $i (0 .. $#$stmts) {
         my $stmt = $stmts->[$i];
         my $rid = _next_id($alloc, 'region');
         my $next_rid = '__PENDING__';
+        push @region_schedule, $rid;
 
         my $exit;
         if (($stmt->{kind} // '') eq 'return') {
@@ -328,14 +332,18 @@ sub _regions_for_statement_chain {
     }
 
     _inject_structured_exit_regions(\@regions, $alloc);
-    return \@regions;
+    return {
+        regions => \@regions,
+        schedule => \@region_schedule,
+    };
 }
 
 sub _lower_function_hir {
     my ($fn, $alloc) = @_;
     my $fid = _next_id($alloc, 'fn');
     my $stmts = parse_function_body($fn);
-    my $regions = _regions_for_statement_chain($stmts, $alloc, $fn->{body_start_line_no});
+    my $lowered = _regions_for_statement_chain($stmts, $alloc, $fn->{body_start_line_no});
+    my $regions = $lowered->{regions};
     my $edges = _edges_from_regions($regions, $alloc);
     my $entry_facts = _entry_facts_from_params($fn->{parsed_params}, $alloc, $fn->{header_line_no});
 
@@ -345,10 +353,10 @@ sub _lower_function_hir {
         params       => $fn->{parsed_params},
         return_type  => $fn->{return_type},
         regions      => $regions,
+        region_schedule => $lowered->{schedule},
         edges        => $edges,
         entry_region => $regions->[0]{id},
         entry_facts  => $entry_facts,
-        source_stmts => $stmts,
         provenance   => { line => $fn->{header_line_no} },
     };
 }

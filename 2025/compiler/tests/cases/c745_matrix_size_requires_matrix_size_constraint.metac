@@ -1,0 +1,14 @@
+@Test({
+   "exit" : 3,
+   "stdout" : ""
+})
+function main() {
+  const value = run()?
+  return value
+}
+
+function run(): int | error {
+  let grid: matrix(number) with dim(2) = []
+  grid.insert(9, [2, 0])?
+  return grid.size(0)
+}

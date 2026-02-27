@@ -1,0 +1,9 @@
+@Test({
+   "exit" : 6,
+   "stdout" : ""
+})
+function main(): int {
+  let grid: matrix(number) with dim(3) + matrixSize([2, 3, 4]) = []
+  const axis: int with range(0, 2) = 2
+  return grid.size(0) + grid.size(axis)
+}
