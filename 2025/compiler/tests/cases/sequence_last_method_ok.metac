@@ -1,0 +1,18 @@
+@Test({
+   "exit" : 0,
+   "stdout" : ""
+})
+function main(): int {
+  const numbers: int[] with size(3) = [4, 5, 6]
+  const words: string[] with size(2) = ["north", "south"]
+  const flags: bool[] with size(2) = [false, true]
+
+  const n = numbers.last()
+  const w = words.last()
+  const b = flags.last()
+
+  if n == 6 && w == "south" && b {
+    return 0
+  }
+  return 1
+}

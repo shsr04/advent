@@ -282,21 +282,6 @@ sub parse_block {
                 };
                 next;
             }
-            my $split = parse_call_invocation_text($rhs, 'split');
-            if (defined $split && $split->{rest} eq '?') {
-                compile_error("split(...) with '?' expects exactly 2 args")
-                  if scalar(@{ $split->{args} }) != 2;
-                push @stmts, {
-                    kind        => 'const_split_try',
-                    name        => $name,
-                    source_expr => parse_expr($split->{args}[0]),
-                    delim_expr  => parse_expr($split->{args}[1]),
-                    line        => $line_no,
-                };
-                $$idx_ref++;
-                next;
-            }
-
             my $segments = split_try_chain_segments($rhs);
             if (@$segments > 1) {
                 my $first = $segments->[0];

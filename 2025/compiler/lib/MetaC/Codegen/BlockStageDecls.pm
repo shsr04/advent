@@ -45,6 +45,34 @@ sub _infer_number_list_list_item_len_proof_from_expr {
     return undef;
 }
 
+sub _set_decl_list_len_fact_if_proven {
+    my ($ctx, $var_name, $decl_type, $constraints, $expr) = @_;
+    return if $decl_type ne 'number_list'
+      && $decl_type ne 'number_list_list'
+      && $decl_type ne 'string_list'
+      && $decl_type ne 'bool_list';
+    my $len;
+    $len = constraint_size_exact($constraints) if defined $constraints;
+    if (!defined $len
+        && defined($expr)
+        && ($expr->{kind} // '') eq 'method_call'
+        && ($expr->{method} // '') eq 'insert'
+        && defined($expr->{recv})
+        && expr_is_stable_for_facts($expr->{recv}, $ctx))
+    {
+        my $recv_key = eval { expr_fact_key($expr->{recv}, $ctx) };
+        $len = lookup_list_len_fact($ctx, $recv_key) if defined $recv_key;
+        if (!defined $len && ($expr->{recv}{kind} // '') eq 'ident') {
+            my $recv_info = lookup_var($ctx, $expr->{recv}{name});
+            $len = constraint_size_exact($recv_info->{constraints})
+              if defined($recv_info) && defined($recv_info->{constraints});
+        }
+    }
+    return if !defined $len;
+    my $new_key = expr_fact_key({ kind => 'ident', name => $var_name }, $ctx);
+    set_list_len_fact($ctx, $new_key, int($len));
+}
+
 sub _compile_block_stage_decls {
     my ($stmt, $ctx, $out, $indent, $current_fn_return) = @_;
         if ($stmt->{kind} eq 'let') {
@@ -210,6 +238,7 @@ sub _compile_block_stage_decls {
                 $decl_info{item_len_proof} = $proof if defined $proof;
             }
             declare_var($ctx, $stmt->{name}, \%decl_info);
+            _set_decl_list_len_fact_if_proven($ctx, $stmt->{name}, $decl_type, $constraints, $stmt->{expr});
             maybe_register_owned_cleanup_for_decl(
                 ctx       => $ctx,
                 var_name  => $stmt->{name},
@@ -250,29 +279,6 @@ sub _compile_block_stage_decls {
         }
 
         if ($stmt->{kind} eq 'const') {
-            if ($stmt->{expr}{kind} eq 'method_call' && $stmt->{expr}{method} eq 'map') {
-                emit_map_assignment(
-                    name             => $stmt->{name},
-                    expr             => $stmt->{expr},
-                    ctx              => $ctx,
-                    out              => $out,
-                    indent           => $indent,
-                    propagate_errors => 0,
-                );
-                return 1;
-            }
-            if ($stmt->{expr}{kind} eq 'method_call' && $stmt->{expr}{method} eq 'filter') {
-                emit_filter_assignment(
-                    name             => $stmt->{name},
-                    expr             => $stmt->{expr},
-                    ctx              => $ctx,
-                    out              => $out,
-                    indent           => $indent,
-                    propagate_errors => 0,
-                );
-                return 1;
-            }
-
             my ($expr_code, $expr_type, $expr_prelude, $expr_temp_cleanups) = compile_expr_with_temp_scope(
                 ctx                     => $ctx,
                 expr                    => $stmt->{expr},
@@ -362,6 +368,7 @@ sub _compile_block_stage_decls {
                 $stmt->{name},
                 \%const_info
             );
+            _set_decl_list_len_fact_if_proven($ctx, $stmt->{name}, $expr_type, undef, $stmt->{expr});
             maybe_register_owned_cleanup_for_decl(
                 ctx       => $ctx,
                 var_name  => $stmt->{name},
@@ -529,6 +536,7 @@ sub _compile_block_stage_decls {
                 $decl_info{item_len_proof} = $proof if defined $proof;
             }
             declare_var($ctx, $stmt->{name}, \%decl_info);
+            _set_decl_list_len_fact_if_proven($ctx, $stmt->{name}, $decl_type, $constraints, $stmt->{expr});
             maybe_register_owned_cleanup_for_decl(
                 ctx       => $ctx,
                 var_name  => $stmt->{name},

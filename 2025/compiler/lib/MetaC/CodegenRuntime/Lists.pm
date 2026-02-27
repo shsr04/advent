@@ -397,6 +397,59 @@ static int64_t metac_bool_list_push(BoolList *list, int value) {
   return (int64_t)next;
 }
 
+static NumberList metac_number_list_insert_or_die(NumberList list, int64_t value, int64_t index) {
+  if (index < 0 || (size_t)index >= list.count || list.items == NULL) {
+    fprintf(stderr, "insert() index out of bounds on number list\n");
+    exit(1);
+  }
+  list.items[(size_t)index] = value;
+  return list;
+}
+
+static NumberListList metac_number_list_list_insert_or_die(NumberListList list, NumberList value, int64_t index) {
+  if (index < 0 || (size_t)index >= list.count || list.items == NULL) {
+    fprintf(stderr, "insert() index out of bounds on number-list-list\n");
+    exit(1);
+  }
+  list.items[(size_t)index] = value;
+  return list;
+}
+
+static StringList metac_string_list_insert_or_die(StringList list, const char *value, int64_t index) {
+  if (index < 0 || (size_t)index >= list.count || list.items == NULL) {
+    fprintf(stderr, "insert() index out of bounds on string list\n");
+    exit(1);
+  }
+  list.items[(size_t)index] = value == NULL ? "" : value;
+  return list;
+}
+
+static BoolList metac_bool_list_insert_or_die(BoolList list, int value, int64_t index) {
+  if (index < 0 || (size_t)index >= list.count || list.items == NULL) {
+    fprintf(stderr, "insert() index out of bounds on bool list\n");
+    exit(1);
+  }
+  list.items[(size_t)index] = value ? 1 : 0;
+  return list;
+}
+
+static NumberList metac_seq_number_list(int64_t start, int64_t end) {
+  NumberList out;
+  out.count = 0;
+  out.items = NULL;
+  if (start > end) {
+    return out;
+  }
+
+  for (int64_t cur = start;; cur++) {
+    metac_number_list_push(&out, cur);
+    if (cur == end) {
+      break;
+    }
+  }
+  return out;
+}
+
 static IndexedNumber metac_list_max_number(NumberList list) {
   IndexedNumber out;
   out.value = 0;
@@ -527,6 +580,46 @@ static int64_t metac_last_index_string_list(StringList list) {
 
 static int64_t metac_last_index_number_list(NumberList list) {
   return metac_last_index_from_count(list.count);
+}
+
+static const char *metac_string_list_last_or_die(StringList list) {
+  if (list.count == 0 || list.items == NULL) {
+    fprintf(stderr, "last() on empty string list\n");
+    exit(1);
+  }
+  return list.items[list.count - 1] == NULL ? "" : list.items[list.count - 1];
+}
+
+static int64_t metac_number_list_last_or_die(NumberList list) {
+  if (list.count == 0 || list.items == NULL) {
+    fprintf(stderr, "last() on empty number list\n");
+    exit(1);
+  }
+  return list.items[list.count - 1];
+}
+
+static NumberList metac_number_list_list_last_or_die(NumberListList list) {
+  if (list.count == 0 || list.items == NULL) {
+    fprintf(stderr, "last() on empty number-list-list\n");
+    exit(1);
+  }
+  return list.items[list.count - 1];
+}
+
+static int metac_bool_list_last_or_die(BoolList list) {
+  if (list.count == 0 || list.items == NULL) {
+    fprintf(stderr, "last() on empty bool list\n");
+    exit(1);
+  }
+  return list.items[list.count - 1] ? 1 : 0;
+}
+
+static IndexedNumber metac_indexed_number_list_last_or_die(IndexedNumberList list) {
+  if (list.count == 0 || list.items == NULL) {
+    fprintf(stderr, "last() on empty indexed number list\n");
+    exit(1);
+  }
+  return list.items[list.count - 1];
 }
 C_RUNTIME_LISTS
 }

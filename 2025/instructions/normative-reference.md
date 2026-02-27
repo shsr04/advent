@@ -72,8 +72,9 @@ This section *specifies* the syntactic structure of a parseable MetaC program.
 - FunctionCall := Name ArgList ErrorHandler?
 - ErrorHandler := `?` | `or` (Expr | ErrorHandlerBlock)
 - ErrorHandlerBlock := `catch` `(` LambdaArgSeq? `)` Scope
-- Lambda := `(` LambdaArgSeq? `)` `=>` (Scope | Expr)
-- LambdaArgSeq := Name | Name `,` LambdaArgSeq
+- Lambda := (LambdaArg | `(` LambdaArgSeq? `)`) `=>` (Scope | Expr)
+- LambdaArgSeq := LambdaArg | LambdaArg `,` LambdaArgSeq
+- LambdaArg := Name
 
 ## Semantic contexts
 
@@ -237,6 +238,14 @@ The program must not perform invalid operations, as *specified* in this section.
 
 The program must not produce a runtime error for operations which are not explicitly marked as fallible by having an `error`-containing return type.
 
+The following general-purpose symbols and operations are available:
+- `STDIN: string`
+  - Reads the entire content from the stdin channel and returns it as a string.
+  - Infallible. If stdin is not available, returns an empty string.
+- `seq(start: int, end: int): int[]`
+  - Returns the sequence of numbers from `start` to `end`, inclusively.
+  - If `start > end`, returns an empty sequence.
+
 ### 5.1 Comparison operations
 
 A comparison operation *can* only occur between two operands which share at least one basic type. Two operands are equal if they contain exactly the same values. Otherwise, they are not equal.
@@ -270,14 +279,17 @@ The evaluation order is from left to right. If an operand has been evaluated suc
 ### 5.4 Sequence-based operations
 
 The following operations are available on sequence-based types `S: <type>[] with size(<size>)`:
-- `S[<index-expr: int>]: <type> [| error]`
-  - Returns the element at `<index-expr>`.
-  - Fallible: exactly if `S` has no constraint determining its size, therefore making `<index-expr>` possibly out of bounds.
+- `S[<index: int>]: <type> [| error]`
+  - Returns the element at `<index>`.
+  - Fallible: exactly if `S` has no constraint determining its size, therefore making `<index>` possibly out of bounds.
 - `<type>.index(): int with range(0,<size>-1)`
   - Returns the index of the element originating from a sequence.
   - This operation is not available if the value cannot be traced back to a source sequence.
 - `S.size(): int with exact(<size>)`
   - Returns the number of elements in the sequence.
+- `S.insert(<value: type>, <index: int>): S [| error]`
+  - Returns the sequence, with the value inserted in-place at `<index>`.
+  - Fallible: exactly if `S` has no constraint determining its size, therefore making `<index>` possibly out of bounds.
 - `S.append(<arg: type | type[]>): <type>[] with size(<new-size>)`
   - Returns the sequence, with the given element(s) appended after the end.
 - `S.prepend(<arg: type | type[]>): <type>[] with size(<new-size>)`
@@ -291,7 +303,7 @@ The following operations are available on sequence-based types `S: <type>[] with
 - `S.map(<mapper>): S [| error]`
   - Returns the sequence, where each element `x` has been replaced by the result of `<mapper>(x)`.
   - Fallible: exactly if `<mapper>` is fallible.
-- `S.filter(<filter>): S [| error]`
+- `S.filter(<filter>): <type>[] [| error]`
   - Returns the sequence, where an element `x` is dropped exactly if `<filter>(x) == false`.
   - Fallible: exactly if `<filter>` is fallible.
 - `S.any(<predicate>): boolean [| error]`

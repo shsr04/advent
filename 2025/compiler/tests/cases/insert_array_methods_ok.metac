@@ -1,0 +1,16 @@
+@Test({
+   "exit" : 0,
+   "stdout" : ""
+})
+function main(): int {
+  let nums: int[] with size(3) = [1, 2, 3]
+  nums.insert(9, 1)
+
+  const words: string[] with size(2) = ["a", "b"]
+  const words2 = words.insert("z", 0)
+
+  if nums[1] == 9 && words2[0] == "z" && words2[1] == "b" {
+    return 0
+  }
+  return 1
+}

@@ -1,0 +1,14 @@
+@Test({
+   "exit" : 0,
+   "stdout" : ""
+})
+function main(): int {
+  let seen = 0
+  for const i in seq(3, 1) {
+    seen = seen + i
+  }
+  if seen == 0 {
+    return 0
+  }
+  return 1
+}

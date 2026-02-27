@@ -412,7 +412,19 @@ sub _compile_block_stage_control {
                   if $recv_info->{immutable};
 
                 my $recv_type = $recv_info->{type};
-                compile_error("Method 'insert(...)' statement receiver must be matrix(...), got $recv_type")
+                if ($recv_type eq 'number_list' || $recv_type eq 'number_list_list' || $recv_type eq 'string_list' || $recv_type eq 'bool_list') {
+                    my ($expr_code, undef, $expr_prelude, $expr_cleanups) = compile_expr_with_temp_scope(
+                        ctx  => $ctx,
+                        expr => $stmt->{expr},
+                    );
+                    emit_expr_temp_prelude($out, $indent, $expr_prelude);
+                    my $expr_cleanup_count = push_active_temp_cleanups($ctx, $expr_cleanups);
+                    emit_line($out, $indent, "$recv_info->{c_name} = $expr_code;");
+                    emit_expr_temp_cleanups($out, $indent, $expr_cleanups);
+                    pop_active_temp_cleanups($ctx, $expr_cleanup_count);
+                    return 1;
+                }
+                compile_error("Method 'insert(...)' statement receiver must be matrix(...) or list, got $recv_type")
                   if !is_matrix_type($recv_type);
                 my $meta = matrix_type_meta($recv_type);
 

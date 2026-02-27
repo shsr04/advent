@@ -101,7 +101,7 @@ sub _emit_hir_stmt_direct {
     my $fn_name = $args{fn_name};
     my $kind = $stmt->{kind} // '';
 
-    my %decl_kinds = map { $_ => 1 } qw(let const const_typed const_try_expr const_try_tail_expr const_split_try const_or_catch);
+    my %decl_kinds = map { $_ => 1 } qw(let const const_typed const_try_expr const_try_tail_expr const_or_catch);
     my %try_kinds = map { $_ => 1 } qw(const_try_chain destructure_split_or destructure_list);
     my %assign_loop_kinds = map { $_ => 1 } qw(let_producer typed_assign assign assign_op incdec for_lines for_each for_each_try while break continue rewind destructure_match);
     my %control_kinds = map { $_ => 1 } qw(if return expr_stmt expr_stmt_try expr_or_catch raw);

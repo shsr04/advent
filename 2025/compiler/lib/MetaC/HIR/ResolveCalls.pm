@@ -78,7 +78,16 @@ sub _infer_method_result_hint {
     return 'number' if $method eq 'compareTo' || $method eq 'andThen' || $method eq 'push';
     return 'bool' if $method eq 'any' || $method eq 'all';
     return 'indexed_number' if $method eq 'max';
+    if ($method eq 'last') {
+        return 'string' if ($recv_type // '') eq 'string_list';
+        return 'number' if ($recv_type // '') eq 'number_list';
+        return 'number_list' if ($recv_type // '') eq 'number_list_list';
+        return 'bool' if ($recv_type // '') eq 'bool_list';
+        return 'indexed_number' if ($recv_type // '') eq 'indexed_number_list';
+        return undef;
+    }
     return 'indexed_number_list' if $method eq 'sort';
+    return $recv_type if $method eq 'map';
     return $recv_type if $method eq 'slice' || $method eq 'filter' || $method eq 'sortBy' || $method eq 'insert' || $method eq 'log';
     return undef if !defined $recv_type;
 

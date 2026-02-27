@@ -101,6 +101,51 @@ sub compile_expr_intrinsic_call {
         compile_error("matrix members are unsupported for element type '$meta->{elem}'");
     }
 
+    if (($recv_type eq 'number_list' || $recv_type eq 'number_list_list' || $recv_type eq 'string_list' || $recv_type eq 'bool_list')
+        && $method eq 'insert')
+    {
+        compile_error("Method 'insert(...)' expects 2 args, got $actual")
+          if $actual != 2;
+        my ($value_code, $value_type) = compile_expr($expr->{args}[0], $ctx);
+        my ($idx_code, $idx_type) = compile_expr($expr->{args}[1], $ctx);
+        my $idx_num = number_like_to_c_expr($idx_code, $idx_type, "Method 'insert(...)' index");
+
+        my $in_bounds = prove_container_index_in_bounds($recv_code, $recv_type, $expr->{args}[1], $ctx);
+        if (!$in_bounds && $expr->{recv}{kind} eq 'ident' && $expr->{args}[1]{kind} eq 'num') {
+            my $idx_const = int($expr->{args}[1]{value});
+            if ($idx_const >= 0) {
+                my $recv_key = expr_fact_key($expr->{recv}, $ctx);
+                my $known_len = lookup_list_len_fact($ctx, $recv_key);
+                if (!defined $known_len) {
+                    my $recv_info = lookup_var($ctx, $expr->{recv}{name});
+                    $known_len = constraint_size_exact($recv_info->{constraints})
+                      if defined($recv_info) && defined($recv_info->{constraints});
+                }
+                $in_bounds = 1 if defined($known_len) && $idx_const < $known_len;
+            }
+        }
+        compile_error("Method 'insert(...)' on '$recv_type' requires compile-time in-bounds proof")
+          if !$in_bounds;
+
+        if ($recv_type eq 'number_list') {
+            my $value_num = number_like_to_c_expr($value_code, $value_type, "Method 'insert(...)'");
+            return ("metac_number_list_insert_or_die($recv_code, $value_num, $idx_num)", 'number_list');
+        }
+        if ($recv_type eq 'number_list_list') {
+            compile_error("Method 'insert(...)' on number-list-list expects number[] value, got $value_type")
+              if $value_type ne 'number_list';
+            return ("metac_number_list_list_insert_or_die($recv_code, $value_code, $idx_num)", 'number_list_list');
+        }
+        if ($recv_type eq 'string_list') {
+            compile_error("Method 'insert(...)' on string list expects string value, got $value_type")
+              if $value_type ne 'string';
+            return ("metac_string_list_insert_or_die($recv_code, $value_code, $idx_num)", 'string_list');
+        }
+        compile_error("Method 'insert(...)' on bool list expects bool value, got $value_type")
+          if $value_type ne 'bool';
+        return ("metac_bool_list_insert_or_die($recv_code, $value_code, $idx_num)", 'bool_list');
+    }
+
     if (is_matrix_type($recv_type) && $method eq 'insert') {
         compile_error("Method 'insert(...)' expects 2 args, got $actual")
           if $actual != 2;
@@ -204,6 +249,109 @@ sub compile_expr_intrinsic_call {
         return ("((int64_t)$recv_code.count)", 'number');
     }
 
+    if (($recv_type eq 'string_list' || $recv_type eq 'number_list' || $recv_type eq 'bool_list')
+        && $method eq 'map')
+    {
+        compile_error("Method 'map(...)' expects 1 arg, got $actual")
+          if $actual != 1;
+        my $mapper = map_mapper_info($expr, $ctx, $recv_type);
+        compile_error("Method 'map(...)' currently requires statement-backed expression context")
+          if !expr_temp_scope_active($ctx);
+        compile_error("Method 'map(...)' is fallible for mapper '$mapper->{name}'; handle it with '?' (or an explicit error handler)")
+          if $mapper->{return_mode} eq 'number_or_error' || $mapper->{return_mode} eq 'same_or_error';
+
+        my ($recv_c_type, $item_type, $item_decl_template);
+        if ($recv_type eq 'number_list') {
+            $recv_c_type = 'NumberList';
+            $item_type = 'number';
+            $item_decl_template = 'const int64_t %ITEM% = %RECV%.items[%IDX%];';
+        } elsif ($recv_type eq 'bool_list') {
+            $recv_c_type = 'BoolList';
+            $item_type = 'bool';
+            $item_decl_template = 'const int %ITEM% = %RECV%.items[%IDX%];';
+        } else {
+            $recv_c_type = 'StringList';
+            $item_type = 'string';
+            $item_decl_template = 'const char *%ITEM% = %RECV%.items[%IDX%];';
+        }
+
+        my ($out_c_type, $push_call_template);
+        if ($mapper->{output_list_type} eq 'number_list') {
+            $out_c_type = 'NumberList';
+            $push_call_template = 'metac_number_list_push(&%OUT%, %VALUE%);';
+        } elsif ($mapper->{output_list_type} eq 'bool_list') {
+            $out_c_type = 'BoolList';
+            $push_call_template = 'metac_bool_list_push(&%OUT%, %VALUE%);';
+        } else {
+            $out_c_type = 'StringList';
+            $push_call_template = 'metac_string_list_push(&%OUT%, %VALUE%);';
+        }
+
+        my $scope = $ctx->{expr_temp_scopes}[-1];
+        my $recv_tmp = '__metac_map_recv' . $ctx->{tmp_counter}++;
+        my $count = '__metac_map_count' . $ctx->{tmp_counter}++;
+        my $idx = '__metac_map_i' . $ctx->{tmp_counter}++;
+        my $item = '__metac_map_item' . $ctx->{tmp_counter}++;
+        my $out_list = '__metac_map_out' . $ctx->{tmp_counter}++;
+        my $item_decl = $item_decl_template;
+        $item_decl =~ s/%ITEM%/$item/g;
+        $item_decl =~ s/%RECV%/$recv_tmp/g;
+        $item_decl =~ s/%IDX%/$idx/g;
+
+        my $mapped_expr_code;
+        my $mapped_expr_type;
+        if ($mapper->{kind} eq 'lambda') {
+            my $lambda = $expr->{args}[0];
+            new_scope($ctx);
+            declare_var(
+                $ctx,
+                $lambda->{param},
+                {
+                    type      => $item_type,
+                    immutable => 1,
+                    c_name    => $item,
+                }
+            );
+            ($mapped_expr_code, $mapped_expr_type) = compile_expr($lambda->{body}, $ctx);
+            pop_scope($ctx);
+            compile_error("map(...) lambda must return $mapper->{output_type}")
+              if $mapped_expr_type ne $mapper->{output_type};
+        } else {
+            $mapped_expr_code = "$mapper->{name}($item)";
+            $mapped_expr_type = $mapper->{output_type};
+        }
+
+        push @{ $scope->{prelude} }, "$recv_c_type $recv_tmp = $recv_code;";
+        push @{ $scope->{prelude} }, "size_t $count = $recv_tmp.count;";
+        push @{ $scope->{prelude} }, "$out_c_type $out_list;";
+        push @{ $scope->{prelude} }, "$out_list.count = 0;";
+        push @{ $scope->{prelude} }, "$out_list.items = NULL;";
+        push @{ $scope->{prelude} }, "for (size_t $idx = 0; $idx < $count; $idx++) {";
+        push @{ $scope->{prelude} }, "  $item_decl";
+        if ($mapper->{output_list_type} eq 'number_list') {
+            my $push_line = $push_call_template;
+            $push_line =~ s/%OUT%/$out_list/g;
+            $push_line =~ s/%VALUE%/$mapped_expr_code/g;
+            push @{ $scope->{prelude} }, "  $push_line";
+        } elsif ($mapper->{output_list_type} eq 'bool_list') {
+            my $push_line = $push_call_template;
+            $push_line =~ s/%OUT%/$out_list/g;
+            $push_line =~ s/%VALUE%/\(\($mapped_expr_code\) \? 1 : 0\)/g;
+            push @{ $scope->{prelude} }, "  $push_line";
+        } else {
+            my $push_line = $push_call_template;
+            $push_line =~ s/%OUT%/$out_list/g;
+            $push_line =~ s/%VALUE%/$mapped_expr_code/g;
+            push @{ $scope->{prelude} }, "  $push_line";
+        }
+        push @{ $scope->{prelude} }, "}";
+
+        return ($out_list, $mapper->{output_list_type});
+    }
+    if ($method eq 'map') {
+        compile_error("map(...) receiver must be string_list, number_list, or bool_list, got $recv_type");
+    }
+
     if (($recv_type eq 'string_list' || $recv_type eq 'number_list' || is_matrix_member_list_type($recv_type))
         && $method eq 'filter')
     {
@@ -232,6 +380,9 @@ sub compile_expr_intrinsic_call {
             return ("metac_filter_matrix_string_member_list($recv_code, $helper_name)", $recv_type);
         }
         compile_error("Method 'filter(...)' is unsupported for matrix member element type '$member_meta->{elem}'");
+    }
+    if ($method eq 'filter') {
+        compile_error("filter(...) receiver must be string_list, number_list, or matrix member list, got $recv_type");
     }
 
     if (($recv_type eq 'string_list' || $recv_type eq 'number_list' || $recv_type eq 'number_list_list' || $recv_type eq 'bool_list')

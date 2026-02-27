@@ -214,25 +214,6 @@ sub emit_for_each_from_iterable_expr {
             range_max_expr    => $iter->{end_expr},
         );
         emit_line($out, $indent + 2, "}");
-        emit_line($out, $indent, "} else {");
-        emit_line($out, $indent + 2, "for (int64_t $idx_var = $start_var; $idx_var >= $end_var; $idx_var--) {");
-        for my $pred_code (@$pred_codes) {
-            emit_line($out, $indent + 4, "if (!($pred_code)) { continue; }");
-        }
-        emit_loop_body_with_binding(
-            ctx               => $ctx,
-            out               => $out,
-            indent            => $indent + 4,
-            current_fn_return => $current_fn_return,
-            body              => $stmt->{body},
-            var_name          => $stmt->{var},
-            var_type          => 'number',
-            var_c_expr        => $idx_var,
-            var_index_c_expr  => $idx_var,
-            range_min_expr    => $iter->{start_expr},
-            range_max_expr    => $iter->{end_expr},
-        );
-        emit_line($out, $indent + 2, "}");
         emit_line($out, $indent, "}");
         pop @{ $ctx->{rewind_labels} } if $has_rewind;
         return;

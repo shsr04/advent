@@ -60,6 +60,7 @@ Track all language features here. Add items as we iterate.
 46. `F-046` Loop rewind statement (`rewind`) for iterable recomputation - `implemented`
 47. `F-047` Compiler architecture split (`parser -> IR -> correctness gates -> codegen`) - `draft`
 48. `F-051` HIR-native cutover completion (typed steps, canonical calls, direct backend emission) - `ready`
+49. `F-052` Remove legacy lowerings in `BlockStageDecls` - `draft`
 
 ## Feature Record Template
 
@@ -314,6 +315,14 @@ Use this block for each feature:
 - Key guarantees: generated C now includes only runtime helper functions actually referenced by compiled program code plus transitive runtime dependencies
 - Blocking questions: optional future extension to strip unused runtime typedef/includes where safe
 - Notes/evidence: runtime dependency pruning implemented in `compiler/lib/MetaC/CodegenRuntime.pm` and wired in `compiler/lib/MetaC/Codegen.pm`; full regression suite remains green (`make test`); day3b C no longer emits unused-runtime helper warnings like `metac_log_string_list`
+
+### F-052 `Remove Legacy Lowerings in BlockStageDecls`
+- Status: implemented
+- Spec file: n/a (task-driven refactor)
+- Correctness classes: C0/C1/C3
+- Key guarantees: declaration lowering uses canonical intrinsic call lowering paths; no duplicated statement-only legacy lowering branches for sequence operations
+- Blocking questions: migration strategy for ownership/cleanup behavior currently coupled to legacy lowering helpers
+- Notes/evidence: legacy declaration/try lowering cleanup completed across `compiler/lib/MetaC/Codegen/BlockStageDecls.pm` and `compiler/lib/MetaC/Codegen/BlockStageDeclsTry.pm`; sequence operation alignment work includes list `insert(...)` receiver support with statement + expression lowering parity and compile-time bounds proof behavior wired through `compiler/lib/MetaC/Codegen/ExprMethodCall.pm`, `compiler/lib/MetaC/Codegen/BlockStageControl.pm`, `compiler/lib/MetaC/Codegen/Expr.pm`, and `compiler/lib/MetaC/CodegenRuntime/Lists.pm`. Regression coverage added in `insert_array_methods_ok` and `diagnostic_array_insert_requires_index_proof`; full suite green (`196 passed, 0 failed`).
 
 ## Normative Gap Closure Plan (Future)
 

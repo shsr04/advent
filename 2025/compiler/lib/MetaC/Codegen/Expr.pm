@@ -161,6 +161,11 @@ sub compile_expr {
             if ($idx_const >= 0) {
                 my $recv_key = expr_fact_key($expr->{recv}, $ctx);
                 my $known_len = lookup_list_len_fact($ctx, $recv_key);
+                if (!defined $known_len) {
+                    my $recv_info = lookup_var($ctx, $expr->{recv}{name});
+                    $known_len = constraint_size_exact($recv_info->{constraints})
+                      if defined($recv_info) && defined($recv_info->{constraints});
+                }
                 $in_bounds = 1 if defined($known_len) && $idx_const < $known_len;
             }
         }
@@ -277,6 +282,16 @@ sub compile_expr {
                 my $a_num = number_like_to_c_expr($a_code, $a_type, "Builtin '$expr->{name}'");
                 my $b_num = number_like_to_c_expr($b_code, $b_type, "Builtin '$expr->{name}'");
                 return ("metac_$expr->{name}($a_num, $b_num)", 'number');
+            }
+            if ($expr->{name} eq 'seq') {
+                my $actual = scalar @{ $expr->{args} };
+                compile_error("Builtin 'seq' expects 2 args, got $actual")
+                  if $actual != 2;
+                my ($start_code, $start_type) = compile_expr($expr->{args}[0], $ctx);
+                my ($end_code, $end_type) = compile_expr($expr->{args}[1], $ctx);
+                my $start_num = number_like_to_c_expr($start_code, $start_type, "Builtin 'seq' start");
+                my $end_num = number_like_to_c_expr($end_code, $end_type, "Builtin 'seq' end");
+                return ("metac_seq_number_list($start_num, $end_num)", 'number_list');
             }
             if ($expr->{name} eq 'last') {
                 my $actual = scalar @{ $expr->{args} };
