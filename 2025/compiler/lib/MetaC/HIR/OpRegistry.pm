@@ -21,11 +21,13 @@ our @EXPORT_OK = qw(
     user_method_style_allowed
     builtin_is_known
     builtin_op_id
+    builtin_result_type
     builtin_result_type_hint
     builtin_param_contract
     method_is_known
     method_receiver_supported
     method_op_id
+    method_result_type
     method_result_type_hint
     method_fallibility_hint
     method_callback_contract
@@ -263,7 +265,7 @@ sub builtin_op_id {
     return _builtin_spec($name)->{op_id};
 }
 
-sub builtin_result_type_hint {
+sub builtin_result_type {
     my ($name, $args, $infer_arg_type) = @_;
     my $spec = _builtin_spec($name);
     my $policy = $spec->{result_policy} // 'unknown';
@@ -275,6 +277,10 @@ sub builtin_result_type_hint {
         return $infer_arg_type->($args->[0]);
     }
     return undef;
+}
+
+sub builtin_result_type_hint {
+    return builtin_result_type(@_);
 }
 
 sub _resolve_builtin_param_symbol {
@@ -400,7 +406,7 @@ sub _matrix_neighbours_result_type {
     return undef;
 }
 
-sub method_result_type_hint {
+sub method_result_type {
     my ($method, $recv_type) = @_;
     my $spec = _method_spec($method);
     my $policy = $spec->{result_policy} // 'unknown';
@@ -412,6 +418,10 @@ sub method_result_type_hint {
     return _index_result_type($recv_type) if $policy eq 'index_by_receiver';
     return _matrix_neighbours_result_type($recv_type) if $policy eq 'matrix_neighbours';
     return undef;
+}
+
+sub method_result_type_hint {
+    return method_result_type(@_);
 }
 
 sub method_fallibility_hint {

@@ -10,12 +10,12 @@ use MetaC::HIR::OpRegistry qw(
     user_method_style_allowed
     builtin_is_known
     builtin_op_id
-    builtin_result_type_hint
+    builtin_result_type
     builtin_param_contract
     method_is_known
     method_receiver_supported
     method_op_id
-    method_result_type_hint
+    method_result_type
     method_fallibility_hint
     method_callback_contract
     method_param_contract
@@ -350,13 +350,16 @@ sub _canonical_call_expr {
     my $kind = $contract->{call_kind} // '';
     my $canonical_kind = $kind eq 'intrinsic_method' ? 'intrinsic' : $kind;
     my $call_kind = $kind eq 'intrinsic_method' ? 'intrinsic_method' : $canonical_kind;
+    my $result_type = $contract->{result_type};
+    compile_error("ResolveCalls/F050-Result-Type: unresolved call result type for op '$contract->{op_id}'")
+      if !defined($result_type) || $result_type eq '' || $result_type eq 'unknown';
     my $call = {
         node_kind   => 'CallExpr',
         kind        => $canonical_kind,
         call_kind   => $call_kind,
         op_id       => $contract->{op_id},
         arity       => int($contract->{arity} // 0),
-        result_type => $contract->{result_type_hint} // 'unknown',
+        result_type => $result_type,
     };
     $call->{target_name} = $contract->{target_name} if defined $contract->{target_name};
     $call->{receiver_type_hint} = $contract->{receiver_type_hint}
@@ -364,13 +367,13 @@ sub _canonical_call_expr {
     return $call;
 }
 
-sub _call_result_hint {
+sub _call_result_type {
     my ($expr, $env, $sigs, $seen) = @_;
     my $name = $expr->{name} // '';
     if (exists $sigs->{$name}) {
         return $sigs->{$name}{return_type};
     }
-    return builtin_result_type_hint(
+    return builtin_result_type(
         $name,
         $expr->{args},
         sub {
@@ -387,6 +390,9 @@ sub _user_call_contract {
     my $sigs = $args{sigs};
     my $sig = $sigs->{$name};
     return undef if !defined($sig) || ref($sig) ne 'HASH';
+    my $result_type = $sig->{return_type};
+    compile_error("ResolveCalls/F050-Result-Type: function '$name' has unresolved return type")
+      if !defined($result_type) || $result_type eq '' || $result_type eq 'unknown';
 
     my $param_types = [ map { $_->{type} } @{ $sig->{params} // [] } ];
     return {
@@ -395,7 +401,7 @@ sub _user_call_contract {
         op_id            => user_call_op_id(),
         target_name      => $name,
         arity            => scalar(@$arg_type_hints),
-        result_type_hint => $sig->{return_type} // 'unknown',
+        result_type      => $result_type,
         param_policy     => 'fixed',
         param_arity      => scalar(@$param_types),
         arg_type_hints   => $arg_type_hints,
@@ -459,20 +465,24 @@ sub _infer_expr_type_hint {
     if ($kind eq 'call') {
         my $resolved = $expr->{resolved_call};
         if (defined $resolved && ref($resolved) eq 'HASH') {
-            my $hint = $resolved->{result_type_hint};
-            return $hint if defined($hint) && $hint ne '' && $hint ne 'unknown';
+            my $resolved_type = $resolved->{result_type};
+            compile_error("ResolveCalls/F050-Result-Type: resolved call missing strict result_type")
+              if !defined($resolved_type) || $resolved_type eq '';
+            return $resolved_type if defined($resolved_type) && $resolved_type ne '' && $resolved_type ne 'unknown';
         }
-        return _call_result_hint($expr, $env, $sigs, $seen);
+        return _call_result_type($expr, $env, $sigs, $seen);
     }
 
     if ($kind eq 'method_call') {
         my $resolved = $expr->{resolved_call};
         if (defined $resolved && ref($resolved) eq 'HASH') {
-            my $hint = $resolved->{result_type_hint};
-            return $hint if defined($hint) && $hint ne '' && $hint ne 'unknown';
+            my $resolved_type = $resolved->{result_type};
+            compile_error("ResolveCalls/F050-Result-Type: resolved method call missing strict result_type")
+              if !defined($resolved_type) || $resolved_type eq '';
+            return $resolved_type if defined($resolved_type) && $resolved_type ne '' && $resolved_type ne 'unknown';
         }
         my $recv_t = _infer_expr_type_hint($expr->{recv}, $env, $sigs, $seen);
-        return method_result_type_hint($expr->{method} // '', $recv_t);
+        return method_result_type($expr->{method} // '', $recv_t);
     }
 
     return undef;
@@ -559,6 +569,9 @@ sub _resolve_expr {
             env       => $env,
             sigs      => $sigs,
         );
+        my $resolved_result_type = method_result_type($method, $recv_type);
+        compile_error("ResolveCalls/F050-Result-Type: method '$method' has unresolved result type for receiver '$recv_type'")
+          if !defined($resolved_result_type) || $resolved_result_type eq '' || $resolved_result_type eq 'unknown';
 
         my $contract = {
             schema              => 'f050-call-contract-v1',
@@ -567,7 +580,7 @@ sub _resolve_expr {
             method_name         => $method,
             arity               => scalar(@{ $expr->{args} // [] }),
             receiver_type_hint  => defined($recv_type) ? $recv_type : 'unknown',
-            result_type_hint    => method_result_type_hint($method, $recv_type) // 'unknown',
+            result_type         => $resolved_result_type,
             fallibility         => method_fallibility_hint($method, $recv_type),
             arg_type_hints      => \@arg_hints,
         };
@@ -602,14 +615,16 @@ sub _resolve_expr {
             my $param_contract = builtin_param_contract($name);
             compile_error("ResolveCalls/F050-Param-Policy: builtin '$name' has invalid parameter policy")
               if !defined($param_contract) || ref($param_contract) ne 'HASH';
-            my $return_hint = _call_result_hint($expr, $env, $sigs, {});
+            my $result_type = _call_result_type($expr, $env, $sigs, {});
+            compile_error("ResolveCalls/F050-Result-Type: builtin '$name' result type is unresolved")
+              if !defined($result_type) || $result_type eq '' || $result_type eq 'unknown';
             $contract = {
                 schema           => 'f050-call-contract-v1',
                 call_kind        => 'builtin',
                 op_id            => builtin_op_id($name),
                 target_name      => $name,
                 arity            => scalar(@{ $expr->{args} // [] }),
-                result_type_hint => defined($return_hint) ? $return_hint : 'unknown',
+                result_type      => $result_type,
                 param_policy     => $param_contract->{policy} // 'unknown',
                 param_arity      => int($param_contract->{arity} // 0),
                 arg_type_hints   => \@arg_hints,

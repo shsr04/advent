@@ -7,12 +7,14 @@ use MetaC::Support qw(compile_error);
 use MetaC::HIR::Lowering qw(lower_source_to_vnf_hir);
 use MetaC::HIR::Gates qw(verify_vnf_hir dump_vnf_hir);
 use MetaC::HIR::ResolveCalls qw(resolve_hir_calls);
+use MetaC::HIR::SemanticChecks qw(enforce_hir_semantics);
 use MetaC::HIR::BackendEcho qw(emit_echo_from_vnf_hir);
 
 our @EXPORT_OK = qw(
     compile_source_via_vnf_hir
     lower_source_to_vnf_hir
     verify_vnf_hir
+    enforce_hir_semantics
     emit_echo_from_vnf_hir
     dump_vnf_hir
 );
@@ -48,6 +50,11 @@ sub compile_source_via_vnf_hir {
         sub {
             my ($s) = @_;
             $s->{hir} = verify_vnf_hir($s->{hir});
+            return $s;
+        },
+        sub {
+            my ($s) = @_;
+            $s->{hir} = enforce_hir_semantics($s->{hir});
             return $s;
         },
         sub {

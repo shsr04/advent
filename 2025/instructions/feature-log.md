@@ -61,6 +61,7 @@ Track all language features here. Add items as we iterate.
 47. `F-047` Compiler architecture split (`parser -> IR -> correctness gates -> codegen`) - `draft`
 48. `F-051` HIR-native cutover completion (typed steps, canonical calls, direct backend emission) - `ready`
 49. `F-052` Remove legacy lowerings in `BlockStageDecls` - `draft`
+50. `F-053` HIR semantic enforcement closure (type + entailment + fallibility) - `implemented`
 
 ## Feature Record Template
 
@@ -617,3 +618,43 @@ Use this block for each feature:
     - `completed` [7/9]: proof/bounds reasoning is now fact/contract-oriented: gate-time fact flow derives branch-sensitive list-length facts (`len_var:<name>:<n>`), materialization seeds region `facts_in` into codegen fact scopes, loop binding records explicit upper-bound contracts (`size/count - k` via receiver metadata) and lower-bound fact keys, and index-proof evaluation in `ProofIter.pm` no longer depends on generic AST deep-equality helpers. Verification: `make test` with Makefile `prlimit` gate is green (`191 passed, 0 failed`) on 2026-02-27.
     - `completed` [8/9]: dead compile surfaces and parser coupling were removed from codegen root for the cutover path: `Codegen.pm` dropped unused parser imports (`collect_functions`, `parse_function_params`, `parse_function_body`), and legacy unused direct function-builder entrypoints were pruned from `Codegen/Compile.pm` (retaining HIR-used context/prototype/entry wrappers). Verification after pruning remains green (`191 passed, 0 failed`) on 2026-02-27.
     - `in_progress` [9/9]: backend emits per-function from normalized HIR on demand (`BackendC` -> `emit_function_c_from_hir`) and no longer requires pre-populated `backend_c_template` fields. However, emission still flows through the materialization adapter and legacy stage handlers; direct HIR-native backend emission without legacy lowering surfaces remains outstanding. Baseline verification on 2026-03-02: `196 passed, 0 failed`.
+
+### F-053 `HIR Semantic Enforcement Closure (Type + Entailment + Fallibility)`
+- Status: implemented
+- Spec file: `instructions/hir-semantic-enforcement-f053.md` (planned)
+- Correctness classes: C1/C2/C3/C4
+- Key guarantees:
+  - type enforcement in HIR validates operator signatures, assignment compatibility, union-operation restrictions, and conversion legality according to `instructions/normative-reference.md` sections `2`, `2.1`, `2.3`, `5.1`, `5.2`, and `5.3`.
+  - entailment enforcement in HIR provides path-sensitive proof obligations for nullable/union narrowing, size/index bounds safety, and mutable-variable narrowing invalidation according to sections `2.4` and `5.4`.
+  - fallibility enforcement in HIR guarantees that all fallible expressions are either handled (`?` / `or catch`) or rejected, with diagnostics aligned to section `4` and operation-level fallibility rules in section `5`.
+  - call-contract validation already implemented in `ResolveCalls` remains the shared front-door, but this feature extends enforcement to non-call expressions and fact/flow obligations.
+- Blocking questions:
+  - strict `int` vs `float` arithmetic/division enforcement from section `5.2` is still constrained by current type normalization in `compiler/lib/MetaC/TypeSpec.pm` (`int`/`float` collapse to `number`).
+  - entailment proof consumers are implemented for nullable narrowing, literal/list-length/index checks, and size/count facts, but not yet for full matrix-size proof obligations.
+- Notes/evidence:
+  - Implemented HIR semantic pass split by concern:
+    - expression/type/fallibility core: `compiler/lib/MetaC/HIR/SemanticChecksExpr.pm`
+    - statement/flow/orchestration layer: `compiler/lib/MetaC/HIR/SemanticChecks.pm`
+  - Pipeline integration: `compiler/lib/MetaC/HIR.pm:55-63` now runs `enforce_hir_semantics(...)` before `resolve_hir_calls(...)` so semantic obligations fail fast at HIR level.
+  - Type enforcement coverage (examples):
+    - operator and condition checks in `_validate_expr` (`SemanticChecksExpr.pm:372-430`) and `_validate_stmt` (`SemanticChecks.pm:241-317`).
+    - assignment/declaration compatibility and mutability checks in `_validate_stmt` (`SemanticChecks.pm:115-158`).
+    - comparison shared-type/ordered-type checks in `_validate_expr` (`SemanticChecksExpr.pm:387-397`) aligned with normref `5.1`.
+  - Entailment/proof coverage (examples):
+    - nullable narrowing + size/count fact derivation in `_derive_if_narrowing` (`SemanticChecks.pm:27-88`).
+    - list destructure proof requirements in `_list_length_proved` + `_validate_stmt` (`SemanticChecks.pm:90-101`, `:160-167`).
+    - index bounds proof via facts/literals in `_index_has_bounds_proof` (`SemanticChecksExpr.pm:291-316`).
+  - Fallibility enforcement coverage (examples):
+    - mandatory handling checks for `call`, `method_call`, and `index` in `_validate_expr` (`SemanticChecksExpr.pm:402-429`).
+    - `?`/`or catch` applicability checks in `_validate_expr` + `_validate_stmt` (`SemanticChecksExpr.pm:415-420`, `SemanticChecks.pm:195-233`).
+    - contextual callback fallibility inference through op-registry callback contracts in `_method_contextual_fallible` (`SemanticChecksExpr.pm:251-289`) with registry-backed fallback hints (`:333-345`).
+  - Strict call-result typing closure:
+    - resolved call contracts now store required `result_type` (not `result_type_hint`) and fail when unresolved in `compiler/lib/MetaC/HIR/ResolveCalls.pm:347-368`, `:386-410`, `:572-584`, and `:618-632`.
+    - expression inference consumes strict `resolved_call.result_type` in `compiler/lib/MetaC/HIR/SemanticChecksExpr.pm:195-223`.
+    - op registry now exposes strict APIs `builtin_result_type` / `method_result_type` with compatibility aliases retained only as wrappers in `compiler/lib/MetaC/HIR/OpRegistry.pm:268-284` and `:409-425`.
+  - Verification evidence:
+    - targeted F-053 harness run: `/tmp/f053-verify/report.md` and `/tmp/f053-verify/report.json` (`9 passed, 0 failed`, generated 2026-03-02).
+    - syntax checks green:
+      - `perl -I compiler/lib -c compiler/lib/MetaC/HIR/SemanticChecksExpr.pm`
+      - `perl -I compiler/lib -c compiler/lib/MetaC/HIR/SemanticChecks.pm`
+      - `perl -I compiler/lib -c compiler/lib/MetaC/HIR.pm`
