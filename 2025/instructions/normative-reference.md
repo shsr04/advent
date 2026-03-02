@@ -256,15 +256,17 @@ The following general-purpose symbols and operations are available:
   - Returns the maximum of the given values.
 - `min(a: number, b: number): number`
   - Returns the minimum of the given values.
+- `assert(actual: <type>, expected: <type | predicate>, message: string): <type> | error`
+  - Asserts that `actual` matches the expected value or predicate. If they match, returns the actual value for chaining. Otherwise, returns an error with the given message.
 
 ### 5.1 Comparison operations
 
 A comparison operation *can* only occur between two operands which share at least one basic type. Two operands are equal if they contain exactly the same values. Otherwise, they are not equal.
 
 When ordering elements of the same type, the following comparison operations are available:
-- `<type>.compareTo(<other: type>): ComparisonResult`
+- `<type>.compareTo(other: type): ComparisonResult`
   - Returns an opaque type which indicates if the target value is `less than`, `equal` or `greater than` the `<other>` value.
-- `ComparisonResult.andThen(<next: ComparisonResult>): ComparisonResult`
+- `ComparisonResult.andThen(next: ComparisonResult): ComparisonResult`
   - Returns the subsequent comparison result, which is applied only if the preceding comparison produced an `equal` result. This allows chaining comparisons for staged execution.
 
 The built-in types use the following default comparison operation:
@@ -311,12 +313,12 @@ The following operations are available on sequence-based types `S: <type>[] with
   - This operation is not available if the value cannot be traced back to a source sequence.
 - `S.size(): int with exact(<size>)`
   - Returns the number of elements in the sequence.
-- `S.insert(<value: type>, <index: int>): S [| error]`
-  - Returns the sequence, with the value inserted in-place at `<index>`.
-  - Fallible: exactly if `S` has no constraint determining its size, therefore making `<index>` possibly out of bounds.
-- `S.append(<arg: type | type[]>): <type>[] with size(<new-size>)`
+- `S.insert(value: <type>, index: int): S [| error]`
+  - Returns the sequence, with the value inserted in-place at `index`.
+  - Fallible: exactly if `S` has no constraint determining its size, therefore making `index` possibly out of bounds.
+- `S.append(arg: <type | type[]>): <type>[] with size(<new-size>)`
   - Returns the sequence, with the given element(s) appended after the end.
-- `S.prepend(<arg: type | type[]>): <type>[] with size(<new-size>)`
+- `S.prepend(arg: <type | type[]>): <type>[] with size(<new-size>)`
   - Returns the sequence, with the given element(s) prepended before the start.
 - `S.head(): <type> [| error]`
   - Returns the first element of the sequence.
@@ -337,11 +339,11 @@ The following operations are available on sequence-based types `S: <type>[] with
 - `S.all(<predicate>): boolean [| error]`
   - Returns true exactly if all elements satisfy `<predicate>`.
   - Fallible: exactly if `<predicate>` is fallible.
-- `S.reduce(<initial: type>, <reducer>): <result: type> [| error]`
-  - Returns the result, obtained by applying `<reducer>` to each of the elements and accumulating them into a single value. The initial value is given by `<initial>`.
+- `S.reduce(initial: <type>, <reducer>): <type> [| error]`
+  - Returns the result, obtained by applying `<reducer>` to each of the elements and accumulating them into a single value. The initial value is given by `initial`.
   - Fallible: exactly if `<reducer>` is fallible.
-- `S.scan(<initial: type>, <scanner>): S [| error]`
-  - Returns the sequence of results of successively applying `<scanner>` to the elements and accumulating them. The initial value is given by `<initial>`.
+- `S.scan(initial: <type>, <scanner>): S [| error]`
+  - Returns the sequence of results of successively applying `<scanner>` to the elements and accumulating them. The initial value is given by `initial`.
   - Fallible: exactly if `<scanner>` is fallible.
 - `S.reverse(): S`
   - Returns the sequence in reverse order.
@@ -350,10 +352,10 @@ The following operations are available on sequence-based types `S: <type>[] with
 - `S.sortBy(<comparator: (x,y) => ComparisonResult>): S [| error]`
   - Returns the sequence, sorted using the `<comparator>` function. For each application of `<comparator>`, if the `ComparisonResult` is `less than` or `equal`, then `x` is placed before `y`. Otherwise, `y` is placed before `x`.
   - Fallible: exactly if `<comparator>` is fallible.
-- `S.slice(<from: int>): <type>[] with size(<new-size>) [| error]`
-  - Returns the subsequence starting at index `<from>`.
-  - Fallible: exactly if `S` has no constraint determining its size, therefore making `<from>` possibly out of bounds.
-- `S.chunk(<size: number>): <type>[][]`
+- `S.slice(from: int): <type>[] with size(<new-size>) [| error]`
+  - Returns the subsequence starting at index `from`.
+  - Fallible: exactly if `S` has no constraint determining its size, therefore making `from` possibly out of bounds.
+- `S.chunk(size: number): <type>[][]`
   - Returns the sequence, divided into chunks of size at most `size`. If the sequence cannot be split evenly, the last chunk contains the remaining elements.
 - ...
 
@@ -365,8 +367,8 @@ The following operations are available on character sequences `S: string`:
 - `S.match(<regex>): string[] | error`
   - Returns the list of captured values of the matched Regular Expression. If no capture groups are given, returns a single-element list of the entire matched string.
   - Fallible: fails when the supplied RegEx is invalid.
-- `S.split(<delimiter: string>): string[]`
-  - Returns the parts of the string, obtained by splitting at `<delimiter>`.
+- `S.split(delimiter: string): string[]`
+  - Returns the parts of the string, obtained by splitting at `delimiter`.
 - `S.isBlank(): boolean`
   - Returns true exactly if the string consists entirely of whitespace.
 
@@ -381,9 +383,9 @@ The following operations are available on matrix types `M: matrix(<type>) with d
 - `<type>.index(): int[] with size(<dim>)`
   - Returns the coordinates of the member.
   - This operation is not available if the member cannot be traced back to a source matrix.
-- `M.insert(<value: type>, <index: int[] with size(<dim>)>): M [| error]`
+- `M.insert(value: <type>, index: int[] with size(<dim>)): M [| error]`
   - Inserts the value at the given index, modifying the matrix in place. Returns the matrix for chaining.
   - Fallible: exactly if `<sizes>` cannot be inferred, thus making the matrix unconstrained.
-- `M.size(<n: int with range(0, <dim-1>)>): int [| error]`
+- `M.size(n: int with range(0, <dim-1>)): int [| error]`
   - Returns the actual size of the `<n>`th dimension of the matrix, starting with 0.
-  - Fallible: exactly if `<dim>` cannot be inferred, thus making `<n>` possibly out of bounds.
+  - Fallible: exactly if `<dim>` cannot be inferred, thus making `n` possibly out of bounds.

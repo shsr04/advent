@@ -150,6 +150,14 @@ sub _validate_stmt_seq {
     }
 }
 
+sub _stmt_seq_terminal_return {
+    my ($stmts) = @_;
+    return 0 if !defined($stmts) || ref($stmts) ne 'ARRAY' || !@$stmts;
+    my $last = $stmts->[-1];
+    return 0 if !defined($last) || ref($last) ne 'HASH';
+    return (($last->{kind} // '') eq 'return') ? 1 : 0;
+}
+
 sub _validate_stmt {
     my ($stmt, $ctx) = @_;
     return if !defined($stmt) || ref($stmt) ne 'HASH';
@@ -304,6 +312,71 @@ sub _validate_stmt {
         return;
     }
 
+    if ($kind eq 'const_try_chain') {
+        my $name = $stmt->{name} // '';
+        my $first = $stmt->{first};
+        _validate_expr($first, $ctx, 1);
+        compile_error("Semantic/F053-Fallibility: try-expression requires fallible expression")
+          if !_expr_is_fallible($first, $ctx);
+        my $cur_t = _infer_expr_type($first, $ctx);
+        my $ok_t = _type_without_error_union_member($cur_t);
+        compile_error("Semantic/F053-Type: try-assignment requires an error-union expression")
+          if !defined($ok_t);
+
+        for my $step (@{ $stmt->{steps} // [] }) {
+            next if !defined($step) || ref($step) ne 'HASH';
+            my $recv_name = '__chain_recv';
+            my %tmp = %$ctx;
+            $tmp{types} = _clone_hash($ctx->{types});
+            $tmp{mut} = _clone_hash($ctx->{mut});
+            $tmp{numeric_kinds} = _clone_hash($ctx->{numeric_kinds});
+            $tmp{facts} = _clone_hash($ctx->{facts});
+            $tmp{types}{$recv_name} = $ok_t;
+            $tmp{mut}{$recv_name} = 0;
+            my $call = {
+                kind   => 'method_call',
+                method => ($step->{name} // ''),
+                recv   => { kind => 'ident', name => $recv_name },
+                args   => $step->{args} // [],
+            };
+            _validate_expr($call, \%tmp, 1);
+            my $step_t = _infer_expr_type($call, \%tmp);
+            my $next_t = _type_without_error_union_member($step_t);
+            $next_t = $step_t if !defined($next_t);
+            compile_error("Semantic/F053-Type: chain step type is unresolved")
+              if !defined($next_t) || $next_t eq '';
+            $ok_t = $next_t;
+        }
+
+        _clear_symbol_facts($ctx, $name);
+        for my $step (@{ $stmt->{steps} // [] }) {
+            next if !defined($step) || ref($step) ne 'HASH';
+            next if ($step->{name} // '') ne 'assert';
+            my $pred = $step->{args}[0];
+            next if !defined($pred) || ref($pred) ne 'HASH' || ($pred->{kind} // '') ne 'lambda1';
+            my $param = $pred->{param} // '';
+            my $body = $pred->{body};
+            next if !defined($body) || ref($body) ne 'HASH' || ($body->{kind} // '') ne 'binop' || ($body->{op} // '') ne '==';
+            my ($lhs, $rhs) = ($body->{left}, $body->{right});
+            next if !defined($lhs) || !defined($rhs) || ref($lhs) ne 'HASH' || ref($rhs) ne 'HASH';
+            next if ($lhs->{kind} // '') ne 'method_call' || ($lhs->{method} // '') ne 'size';
+            next if !defined($lhs->{recv}) || ref($lhs->{recv}) ne 'HASH' || ($lhs->{recv}{kind} // '') ne 'ident' || ($lhs->{recv}{name} // '') ne $param;
+            next if ($rhs->{kind} // '') ne 'num' || !defined($rhs->{value}) || $rhs->{value} !~ /^-?\d+$/;
+            my $n = int($rhs->{value});
+            $ctx->{facts}{"len_var:$name:$n"} = 1 if $n >= 0;
+        }
+
+        $ctx->{types}{$name} = $ok_t if $name ne '';
+        $ctx->{mut}{$name} = 0 if $name ne '';
+        my $nk = _numeric_kind_for_type($ok_t);
+        if (defined($nk) && $nk ne '') {
+            $ctx->{numeric_kinds}{$name} = $nk if $name ne '';
+        } else {
+            delete $ctx->{numeric_kinds}{$name} if $name ne '';
+        }
+        return;
+    }
+
     if ($kind eq 'const_or_catch' || $kind eq 'expr_or_catch') {
         my $expr = $stmt->{expr};
         _validate_expr($expr, $ctx, 1);
@@ -374,6 +447,22 @@ sub _validate_stmt {
 
         _validate_stmt_seq($stmt->{then_body}, \%then_ctx);
         _validate_stmt_seq($stmt->{else_body} // [], \%else_ctx);
+        my $then_returns = _stmt_seq_terminal_return($stmt->{then_body});
+        my $else_returns = _stmt_seq_terminal_return($stmt->{else_body} // []);
+        if ($then_returns && !$else_returns) {
+            $ctx->{types} = $else_ctx{types};
+            $ctx->{mut} = $else_ctx{mut};
+            $ctx->{numeric_kinds} = $else_ctx{numeric_kinds};
+            $ctx->{facts} = $else_ctx{facts};
+            return;
+        }
+        if ($else_returns && !$then_returns) {
+            $ctx->{types} = $then_ctx{types};
+            $ctx->{mut} = $then_ctx{mut};
+            $ctx->{numeric_kinds} = $then_ctx{numeric_kinds};
+            $ctx->{facts} = $then_ctx{facts};
+            return;
+        }
         return;
     }
 

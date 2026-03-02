@@ -703,32 +703,32 @@ Use this block for each feature:
       - Acceptance gate: targeted scalar/control tests compile and run without backend placeholder comments for covered kinds.
       - Deferred: collections, method calls, fallible-flow lowering.
     - `F-054-S3` Call-contract-driven call/method emission
-      - Status: planned
+      - Status: completed (2026-03-02)
       - Scope: mechanically emit `call`/`method_call` using resolved canonical call metadata (`op_id`, `call_kind`, arity), with no backend policy inference.
       - Acceptance gate: call-heavy targeted suite (user calls, builtins, fluent methods) passes.
       - Deferred: list/matrix runtime helper completeness.
     - `F-054-S4` Runtime glue split (mechanical helpers only)
-      - Status: planned
+      - Status: completed (2026-03-02)
       - Scope: add backend runtime prelude/helper registry required by emitted intrinsics (logging, strings, utf8, basic list storage), keeping helper selection usage-driven and non-semantic.
       - Acceptance gate: string/logging/utf8 targeted tests pass.
       - Deferred: full list/matrix/fallible helper set.
     - `F-054-S5` Sequence/list/matrix structural operations
-      - Status: planned
+      - Status: completed (2026-03-02)
       - Scope: mechanical emission + runtime helpers for list literals, push/size/index/destructure, seq/split/chars/chunk/reduce/filter/map scaffolding, and matrix core operations used by current tests.
       - Acceptance gate: collection/matrix targeted tests pass.
       - Deferred: error-flow integration and remaining edge cases.
     - `F-054-S6` Mechanical fallibility/try/or-catch lowering
-      - Status: planned
+      - Status: completed (2026-03-02)
       - Scope: emit error-channel structs/flags and region wiring for `TryExit`, `?`, and `or catch` strictly from HIR contracts; no backend fallibility decisions.
       - Acceptance gate: fallibility-focused targeted tests pass; upstream still owns unhandled-fallible diagnostics.
       - Deferred: conformance-wide hardening.
     - `F-054-S7` Semantic/backend boundary hardening
-      - Status: planned
+      - Status: completed (2026-03-02)
       - Scope: remove backend branches keyed to language policy; keep only structural node coverage checks and passthrough behavior on malformed HIR.
       - Acceptance gate: purity checks pass (`type_is_*` and similar policy helpers absent from backend/materialization surfaces); malformed-HIR passthrough fixtures pass.
       - Deferred: full-suite closure only.
     - `F-054-S8` Full conformance closure
-      - Status: planned
+      - Status: in_progress (2026-03-02)
       - Scope: close remaining emitter/runtime gaps revealed by regression corpus without reintroducing backend semantic enforcement.
       - Acceptance gate: `make test` reports all passing.
       - Deferred: none (feature closure).

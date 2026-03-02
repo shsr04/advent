@@ -72,6 +72,13 @@ sub _type_without_error_union_member {
     return _type_without_member($type, 'error');
 }
 
+sub _type_with_error_member {
+    my ($type) = @_;
+    return undef if !defined($type) || $type eq '';
+    return $type if _type_has_member($type, 'error');
+    return $type . ' | error';
+}
+
 sub _is_number_member {
     my ($m) = @_;
     if (defined($m) && is_sequence_member_type($m)) {
@@ -165,6 +172,8 @@ sub _clone_hash {
 sub _env_from_params {
     my ($fn) = @_;
     my (%types, %mut, %numeric_kinds);
+    $types{STDIN} = 'string';
+    $mut{STDIN} = 0;
     for my $p (@{ $fn->{params} // [] }) {
         next if !defined($p->{name}) || $p->{name} eq '';
         $types{$p->{name}} = $p->{type} if defined $p->{type};
@@ -377,8 +386,41 @@ sub _infer_expr_type {
         if ($kind eq 'method_call') {
             my $recv_t = _infer_expr_type($expr->{recv}, $ctx);
             return undef if !defined($recv_t) || $recv_t eq '';
+            my $method = $expr->{method} // '';
+            if ($method eq 'reduce') {
+                my $init_t = _infer_expr_type($expr->{args}[0], $ctx);
+                return $init_t if defined($init_t) && $init_t ne '';
+            }
+            if ($method eq 'scan') {
+                my $init_t = _infer_expr_type($expr->{args}[0], $ctx);
+                return sequence_type_for_element($init_t) if defined($init_t) && $init_t ne '';
+            }
+            if ($method eq 'filter') {
+                return $recv_t;
+            }
+            if ($method eq 'assert') {
+                return _type_with_error_member($recv_t);
+            }
+            if ($method eq 'map' && is_sequence_type($recv_t)) {
+                my $elem_t = sequence_element_type($recv_t);
+                my $cb = $expr->{args}[0];
+                my $cb_t = _callback_return_type($cb, [$elem_t], $ctx);
+                if (defined($cb_t) && $cb_t ne '') {
+                    my $base = _type_without_error_union_member($cb_t);
+                    $base = $cb_t if !defined($base);
+                    my $mapped = sequence_type_for_element($base);
+                    return _type_with_error_member($mapped) if _type_has_member($cb_t, 'error');
+                    return $mapped;
+                }
+            }
             my $method_t = method_result_type($expr->{method}, $recv_t);
-            return $method_t if defined($method_t) && $method_t ne '';
+            if (defined($method_t) && $method_t ne '') {
+                my $fall = method_fallibility_hint($method, $recv_t) // 'never';
+                return _type_with_error_member($method_t) if $fall eq 'always';
+                return _type_with_error_member($method_t) if $fall eq 'conditional' && _method_conditionally_fallible($expr, $ctx);
+                return _type_with_error_member($method_t) if $fall eq 'contextual' && _method_contextual_fallible($expr, $ctx);
+                return $method_t;
+            }
         }
     }
 
@@ -390,9 +432,28 @@ sub _callback_return_type {
     return undef if !defined($expr) || ref($expr) ne 'HASH';
     my $kind = $expr->{kind} // '';
     if ($kind eq 'ident') {
-        my $sig = $ctx->{sigs}{ $expr->{name} // '' };
-        return undef if !defined($sig);
-        return $sig->{return_type};
+        my $name = $expr->{name} // '';
+        my $sig = $ctx->{sigs}{$name};
+        return $sig->{return_type} if defined($sig);
+        if (builtin_is_known($name)) {
+            my %pt;
+            my @args;
+            for my $i (0 .. $#$param_types) {
+                my $n = "__cb_arg_$i";
+                $pt{$n} = $param_types->[$i];
+                push @args, { kind => 'ident', name => $n };
+            }
+            return builtin_result_type(
+                $name,
+                \@args,
+                sub {
+                    my ($arg_expr) = @_;
+                    return undef if !defined($arg_expr) || ref($arg_expr) ne 'HASH';
+                    return $pt{ $arg_expr->{name} // '' };
+                },
+            );
+        }
+        return undef;
     }
 
     return undef if $kind ne 'lambda1' && $kind ne 'lambda2';
@@ -519,7 +580,10 @@ sub _expr_is_fallible {
 
     return 0 if $kind ne 'call' && $kind ne 'method_call';
     my $hint = _infer_expr_type($expr, $ctx);
-    return 1 if _type_has_member($hint, 'error');
+    if (defined($hint) && $hint ne '') {
+        return 1 if is_union_type($hint) && union_contains_member($hint, 'error');
+        return 0 if $hint eq 'error';
+    }
     return 0 if $kind ne 'method_call';
 
     my $resolved = $expr->{resolved_call};
@@ -545,8 +609,10 @@ sub _validate_expr {
 
     if ($kind eq 'ident') {
         my $name = $expr->{name} // '';
-        compile_error("Semantic/F053-Type: unknown variable '$name'")
-          if $name ne '' && !exists $ctx->{types}{$name};
+        if ($name ne '' && !exists $ctx->{types}{$name}) {
+            return 'function_ref' if exists $ctx->{sigs}{$name} || builtin_is_known($name);
+            compile_error("Semantic/F053-Type: unknown variable '$name'");
+        }
         return _infer_expr_type($expr, $ctx);
     }
 

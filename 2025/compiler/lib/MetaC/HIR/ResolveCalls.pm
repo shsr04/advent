@@ -28,6 +28,7 @@ use MetaC::TypeSpec qw(
     is_supported_value_type
     is_supported_generic_union_return
     is_array_type
+    is_sequence_type
     is_matrix_member_type
     is_matrix_member_list_type
     sequence_element_type
@@ -66,6 +67,7 @@ sub _function_sigs {
 sub _env_from_params {
     my ($params) = @_;
     my %env;
+    $env{STDIN} = 'string';
     for my $p (@{ $params // [] }) {
         my $name = $p->{name};
         my $type = $p->{type};
@@ -125,8 +127,10 @@ sub _callback_type_valid {
 
 sub _matches_base_or_error {
     my ($actual, $base) = @_;
+    return 1 if defined($base) && $base eq 'any' && defined($actual) && $actual ne '';
     return 1 if defined($actual) && $actual eq $base;
     return 0 if !defined($actual) || !is_union_type($actual) || !union_contains_member($actual, 'error');
+    return 1 if defined($base) && $base eq 'any';
     my @rest = grep { $_ ne 'error' } @{ union_member_types($actual) };
     return @rest == 1 && $rest[0] eq $base ? 1 : 0;
 }
@@ -138,7 +142,7 @@ sub _resolve_callback_type_symbol {
     my $method = $args{method} // '';
     my $part = $args{part} // 'type';
     return undef if !defined($symbol) || $symbol eq '';
-    return $symbol if $symbol eq 'bool' || $symbol eq 'comparison_result';
+    return $symbol if $symbol eq 'bool' || $symbol eq 'comparison_result' || $symbol eq 'any';
     return $ctx->{$symbol} if exists $ctx->{$symbol};
     compile_error("ResolveCalls/F050-Callback-Signature: '$method' callback contract has unknown $part symbol '$symbol'");
 }
@@ -175,7 +179,7 @@ sub _verify_callback_signature {
     my $has_bad_param = scalar(grep { !_callback_type_valid($_) } @$param_types) > 0 ? 1 : 0;
 
     compile_error("ResolveCalls/F050-Callback-Signature: '$method' $role has invalid expected type contract")
-      if !$arity || @$param_types != $arity || $has_bad_param || !_callback_type_valid($return_base);
+      if !$arity || @$param_types != $arity || $has_bad_param || (!defined($return_base) || ($return_base ne 'any' && !_callback_type_valid($return_base)));
     compile_error("ResolveCalls/F050-Callback-Signature: '$method' $role must be provided")
       if !defined($expr) || ref($expr) ne 'HASH';
 
@@ -193,18 +197,50 @@ sub _verify_callback_signature {
     } elsif ($kind eq 'ident') {
         my $name = $expr->{name} // '';
         my $sig = $sigs->{$name};
-        compile_error("ResolveCalls/F050-Callback-Signature: unknown callback function '$name' for '$method' $role")
-          if !defined($sig) || ref($sig) ne 'HASH';
-        my $params = $sig->{params} // [];
-        compile_error("ResolveCalls/F050-Callback-Signature: callback function '$name' for '$method' $role expects $arity parameter(s)")
-          if ref($params) ne 'ARRAY' || @$params != $arity;
-        for my $i (0 .. $arity - 1) {
-            my $decl = $params->[$i]{type};
-            my $expect = $param_types->[$i];
-            compile_error("ResolveCalls/F050-Callback-Signature: callback function '$name' parameter " . ($i + 1) . " type must be '$expect'")
-              if !_callback_type_valid($decl) || $decl ne $expect;
+        if (defined($sig) && ref($sig) eq 'HASH') {
+            my $params = $sig->{params} // [];
+            compile_error("ResolveCalls/F050-Callback-Signature: callback function '$name' for '$method' $role expects $arity parameter(s)")
+              if ref($params) ne 'ARRAY' || @$params != $arity;
+            for my $i (0 .. $arity - 1) {
+                my $decl = $params->[$i]{type};
+                my $expect = $param_types->[$i];
+                compile_error("ResolveCalls/F050-Callback-Signature: callback function '$name' parameter " . ($i + 1) . " type must be '$expect'")
+                  if !_callback_type_valid($decl) || $decl ne $expect;
+            }
+            $return_t = $sig->{return_type};
+        } elsif (builtin_is_known($name)) {
+            my $param_contract = builtin_param_contract($name);
+            compile_error("ResolveCalls/F050-Callback-Signature: builtin callback '$name' has invalid parameter policy")
+              if !defined($param_contract) || ref($param_contract) ne 'HASH';
+            my $policy = $param_contract->{policy} // 'unknown';
+            my $decl_types = $param_contract->{param_types} // [];
+            compile_error("ResolveCalls/F050-Callback-Signature: builtin callback '$name' for '$method' $role expects fixed arity")
+              if $policy ne 'fixed' || ref($decl_types) ne 'ARRAY' || @$decl_types != $arity;
+            for my $i (0 .. $arity - 1) {
+                my $expect = $decl_types->[$i];
+                my $actual = $param_types->[$i];
+                compile_error("ResolveCalls/F050-Callback-Signature: builtin callback '$name' parameter " . ($i + 1) . " type mismatch")
+                  if !_method_param_type_compatible($actual, $expect);
+            }
+            my %pt;
+            my @args;
+            for my $i (0 .. $arity - 1) {
+                my $an = "__cb_arg_$i";
+                $pt{$an} = $param_types->[$i];
+                push @args, { kind => 'ident', name => $an };
+            }
+            $return_t = builtin_result_type(
+                $name,
+                \@args,
+                sub {
+                    my ($arg_expr) = @_;
+                    return undef if !defined($arg_expr) || ref($arg_expr) ne 'HASH';
+                    return $pt{ $arg_expr->{name} // '' };
+                },
+            );
+        } else {
+            compile_error("ResolveCalls/F050-Callback-Signature: unknown callback function '$name' for '$method' $role");
         }
-        $return_t = $sig->{return_type};
     } else {
         compile_error("ResolveCalls/F050-Callback-Signature: '$method' $role must be a lambda or named function reference");
     }
@@ -236,7 +272,7 @@ sub _verify_method_callback_contract {
     my $elem_t = sequence_element_type($recv_type);
     compile_error("ResolveCalls/F050-Callback-Signature: cannot infer sequence element type for '$method' receiver '$recv_type'")
       if !defined($elem_t) || !_callback_type_valid($elem_t);
-    my %ctx = (elem => $elem_t);
+    my %ctx = (elem => $elem_t, receiver => $recv_type);
 
     if (defined($contract->{initial_arg_index})) {
         my $initial_idx = int($contract->{initial_arg_index});
@@ -506,7 +542,54 @@ sub _infer_expr_type_hint {
             return $resolved_type if defined($resolved_type) && $resolved_type ne '' && $resolved_type ne 'unknown';
         }
         my $recv_t = _infer_expr_type_hint($expr->{recv}, $env, $sigs, $seen);
-        return method_result_type($expr->{method} // '', $recv_t);
+        my $method = $expr->{method} // '';
+        if ($method eq 'reduce') {
+            my $init_t = _infer_expr_type_hint($expr->{args}[0], $env, $sigs, $seen);
+            return $init_t if defined($init_t) && $init_t ne '';
+        }
+        if ($method eq 'scan') {
+            my $init_t = _infer_expr_type_hint($expr->{args}[0], $env, $sigs, $seen);
+            return sequence_type_for_element($init_t) if defined($init_t) && $init_t ne '';
+        }
+        if ($method eq 'filter') {
+            return $recv_t if defined($recv_t) && $recv_t ne '';
+        }
+        if ($method eq 'assert') {
+            return ($recv_t // '') eq '' ? undef : ($recv_t . ' | error');
+        }
+        if (($method eq 'map') && defined($recv_t) && is_sequence_type($recv_t)) {
+            my $elem_t = sequence_element_type($recv_t);
+            my $cb = $expr->{args}[0];
+            my $cb_ret;
+            if (defined($cb) && ref($cb) eq 'HASH' && (($cb->{kind} // '') eq 'ident')) {
+                my $name = $cb->{name} // '';
+                if (exists $sigs->{$name}) {
+                    $cb_ret = $sigs->{$name}{return_type};
+                } elsif (builtin_is_known($name)) {
+                    my %pt = ('__cb_arg_0' => $elem_t);
+                    my @args = ({ kind => 'ident', name => '__cb_arg_0' });
+                    $cb_ret = builtin_result_type(
+                        $name,
+                        \@args,
+                        sub {
+                            my ($arg_expr) = @_;
+                            return undef if !defined($arg_expr) || ref($arg_expr) ne 'HASH';
+                            return $pt{ $arg_expr->{name} // '' };
+                        },
+                    );
+                }
+            }
+            if (defined($cb_ret) && $cb_ret ne '') {
+                my $base = _single_non_error_member_from_error_union($cb_ret);
+                $base = $cb_ret if !defined($base);
+                my $mapped = sequence_type_for_element($base);
+                if (is_union_type($cb_ret) && union_contains_member($cb_ret, 'error')) {
+                    return $mapped . ' | error';
+                }
+                return $mapped;
+            }
+        }
+        return method_result_type($method, $recv_t);
     }
 
     return undef;
@@ -599,7 +682,7 @@ sub _resolve_expr {
             env       => $env,
             sigs      => $sigs,
         );
-        my $resolved_result_type = method_result_type($method, $recv_type);
+        my $resolved_result_type = _infer_expr_type_hint($expr, $env, $sigs, {});
         compile_error("ResolveCalls/F050-Result-Type: method '$method' has unresolved result type for receiver '$recv_type'")
           if !defined($resolved_result_type) || $resolved_result_type eq '' || $resolved_result_type eq 'unknown';
 
@@ -703,6 +786,30 @@ sub _register_binding_from_stmt {
         return;
     }
 
+    if ($kind eq 'const_try_chain') {
+        my $name = $stmt->{name};
+        return if !defined($name) || $name eq '';
+        my $cur = _infer_expr_type_hint($stmt->{first}, $env, $sigs, {});
+        my $ok = _single_non_error_member_from_error_union($cur);
+        $cur = defined($ok) ? $ok : $cur;
+        for my $step (@{ $stmt->{steps} // [] }) {
+            next if !defined($step) || ref($step) ne 'HASH';
+            my $tmp_env = _clone_env($env);
+            $tmp_env->{__chain_recv} = $cur if defined($cur) && $cur ne '';
+            my $call = {
+                kind   => 'method_call',
+                method => ($step->{name} // ''),
+                recv   => { kind => 'ident', name => '__chain_recv' },
+                args   => $step->{args} // [],
+            };
+            my $t = _infer_expr_type_hint($call, $tmp_env, $sigs, {});
+            my $next = _single_non_error_member_from_error_union($t);
+            $cur = defined($next) ? $next : $t if defined($t) && $t ne '';
+        }
+        $env->{$name} = $cur if defined($cur) && $cur ne '';
+        return;
+    }
+
     if ($kind eq 'destructure_list') {
         my $list_t = _infer_expr_type_hint($stmt->{expr}, $env, $sigs, {});
         my $item_t = sequence_element_type($list_t);
@@ -755,10 +862,40 @@ sub _resolve_stmt_tree {
             if (defined($chain_step->{args}) && ref($chain_step->{args}) eq 'ARRAY') {
                 for my $arg (@{ $chain_step->{args} }) {
                     _resolve_expr(expr => $arg, env => $env, sigs => $sigs, seen => $seen_expr)
-                      if ref($arg) eq 'HASH';
+              if ref($arg) eq 'HASH';
                 }
             }
         }
+    }
+
+    if (($stmt->{kind} // '') eq 'const_try_chain') {
+        my $cur = _infer_expr_type_hint($stmt->{first}, $env, $sigs, {});
+        my $ok = _single_non_error_member_from_error_union($cur);
+        $cur = defined($ok) ? $ok : $cur;
+        for my $chain_step (@{ $stmt->{steps} // [] }) {
+            next if ref($chain_step) ne 'HASH';
+            my $tmp_env = _clone_env($env);
+            $tmp_env->{__chain_recv} = $cur if defined($cur) && $cur ne '';
+            my $call = {
+                kind   => 'method_call',
+                method => ($chain_step->{name} // ''),
+                recv   => { kind => 'ident', name => '__chain_recv' },
+                args   => $chain_step->{args} // [],
+            };
+            _resolve_expr(
+                expr => $call,
+                env  => $tmp_env,
+                sigs => $sigs,
+                seen => {},
+            );
+            $chain_step->{resolved_call} = $call->{resolved_call} if exists $call->{resolved_call};
+            $chain_step->{canonical_call} = $call->{canonical_call} if exists $call->{canonical_call};
+            my $next_t = _infer_expr_type_hint($call, $tmp_env, $sigs, {});
+            my $next_ok = _single_non_error_member_from_error_union($next_t);
+            $cur = defined($next_ok) ? $next_ok : $next_t if defined($next_t) && $next_t ne '';
+        }
+        _register_binding_from_stmt(stmt => $stmt, env => $env, sigs => $sigs);
+        return;
     }
 
     if (($stmt->{kind} // '') eq 'for_each' || ($stmt->{kind} // '') eq 'for_each_try' || ($stmt->{kind} // '') eq 'for_lines') {
@@ -825,6 +962,11 @@ sub _resolve_function_calls {
                     seen_stmt => {},
                 );
                 $step->{payload} = stmt_to_payload($stmt);
+            }
+            my $exit = $region->{exit} // {};
+            for my $k (qw(cond_value iterable_expr fallible_expr value)) {
+                _resolve_expr(expr => $exit->{$k}, env => $env, sigs => $sigs, seen => {})
+                  if defined $exit->{$k} && ref($exit->{$k}) eq 'HASH';
             }
         }
     }
