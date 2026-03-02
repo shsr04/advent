@@ -3,7 +3,11 @@ use strict;
 use warnings;
 use Exporter 'import';
 
-use MetaC::Support qw(compile_error);
+use MetaC::Support qw(
+    compile_error
+    constraint_range_bounds
+    constraint_size_exact
+);
 use MetaC::HIR::TypedNodes qw(step_payload_to_stmt);
 use MetaC::HIR::SemanticChecksExpr qw(
     _clone_hash
@@ -11,8 +15,11 @@ use MetaC::HIR::SemanticChecksExpr qw(
     _expr_is_fallible
     _function_sigs
     _infer_expr_type
+    _infer_numeric_kind
     _is_bool_type
     _is_number_type
+    _numeric_kind_assignable
+    _numeric_kind_for_type
     _type_without_member
     _type_without_error_union_member
     _types_assignable
@@ -101,6 +108,40 @@ sub _list_length_proved {
     return $facts->{"len_var:$name:$need"} ? 1 : 0;
 }
 
+sub _constraints_integral_range {
+    my ($constraints) = @_;
+    my ($min, $max) = constraint_range_bounds($constraints);
+    return (undef, undef) if !defined($min) || !defined($max);
+    return (undef, undef) if $min !~ /^-?\d+$/ || $max !~ /^-?\d+$/;
+    return (int($min), int($max));
+}
+
+sub _clear_symbol_facts {
+    my ($ctx, $name) = @_;
+    return if !defined($name) || $name eq '';
+    my $facts = $ctx->{facts} // {};
+    for my $k (keys %$facts) {
+        delete $facts->{$k} if $k =~ /^(?:len_var|range_var):\Q$name\E:/;
+    }
+}
+
+sub _seed_constraint_facts {
+    my ($ctx, $name, $constraints) = @_;
+    return if !defined($name) || $name eq '';
+    my $facts = $ctx->{facts} // {};
+
+    my ($min, $max) = _constraints_integral_range($constraints);
+    if (defined($min) && defined($max)) {
+        $facts->{"range_var:$name:$min:$max"} = 1;
+    }
+
+    my $size = constraint_size_exact($constraints);
+    if (defined($size) && $size =~ /^-?\d+$/) {
+        my $n = int($size);
+        $facts->{"len_var:$name:$n"} = 1 if $n >= 0;
+    }
+}
+
 sub _validate_stmt_seq {
     my ($stmts, $ctx) = @_;
     for my $stmt (@{ $stmts // [] }) {
@@ -117,12 +158,28 @@ sub _validate_stmt {
         my $name = $stmt->{name} // '';
         my $expr_t = _validate_expr($stmt->{expr}, $ctx, 0);
         my $decl_t = $stmt->{type};
+        my $decl_k = $stmt->{declared_numeric_kind};
         if (defined($decl_t) && $decl_t ne '') {
             compile_error("Semantic/F053-Type: cannot assign '$expr_t' to declared type '$decl_t' for '$name'")
               if !$expr_t || !_types_assignable($expr_t, $decl_t);
         } else {
             $decl_t = $expr_t;
         }
+        if (!defined($decl_k) || $decl_k eq '') {
+            $decl_k = _numeric_kind_for_type($decl_t);
+        }
+        my $expr_k = _infer_numeric_kind($stmt->{expr}, $ctx);
+        if (defined($decl_k) && $decl_k ne '') {
+            compile_error("Semantic/F053-Type: cannot assign numeric kind '$expr_k' to declared numeric kind '$decl_k' for '$name'")
+              if !defined($expr_k) || !_numeric_kind_assignable($expr_k, $decl_k);
+            $ctx->{numeric_kinds}{$name} = $decl_k if $name ne '';
+        } elsif (defined($expr_k) && $expr_k ne '') {
+            $ctx->{numeric_kinds}{$name} = $expr_k if $name ne '';
+        } else {
+            delete $ctx->{numeric_kinds}{$name} if $name ne '';
+        }
+        _clear_symbol_facts($ctx, $name);
+        _seed_constraint_facts($ctx, $name, $stmt->{constraints});
         $ctx->{types}{$name} = $decl_t if $name ne '' && defined $decl_t;
         $ctx->{mut}{$name} = ($kind eq 'let') ? 1 : 0 if $name ne '';
         return;
@@ -138,6 +195,23 @@ sub _validate_stmt {
         my $target_t = (defined($stmt->{type}) && $stmt->{type} ne '') ? $stmt->{type} : $ctx->{types}{$name};
         compile_error("Semantic/F053-Type: cannot assign '$expr_t' to '$name' of type '$target_t'")
           if !$expr_t || !_types_assignable($expr_t, $target_t);
+        my $target_k = $stmt->{declared_numeric_kind};
+        $target_k = $ctx->{numeric_kinds}{$name}
+          if (!defined($target_k) || $target_k eq '') && exists $ctx->{numeric_kinds}{$name};
+        $target_k = _numeric_kind_for_type($target_t)
+          if !defined($target_k) || $target_k eq '';
+        my $expr_k = _infer_numeric_kind($stmt->{expr}, $ctx);
+        if (defined($target_k) && $target_k ne '') {
+            compile_error("Semantic/F053-Type: cannot assign numeric kind '$expr_k' to '$name' with numeric kind '$target_k'")
+              if !defined($expr_k) || !_numeric_kind_assignable($expr_k, $target_k);
+            $ctx->{numeric_kinds}{$name} = $target_k;
+        } elsif (defined($expr_k) && $expr_k ne '') {
+            $ctx->{numeric_kinds}{$name} = $expr_k;
+        } else {
+            delete $ctx->{numeric_kinds}{$name};
+        }
+        _clear_symbol_facts($ctx, $name);
+        _seed_constraint_facts($ctx, $name, $stmt->{constraints});
         $ctx->{types}{$name} = $target_t if defined $target_t;
         return;
     }
@@ -155,6 +229,7 @@ sub _validate_stmt {
             compile_error("Semantic/F053-Type: '+=' requires number rhs")
               if !_is_number_type($et);
         }
+        _clear_symbol_facts($ctx, $name);
         return;
     }
 
@@ -170,6 +245,13 @@ sub _validate_stmt {
             next if !defined($v) || $v eq '';
             $ctx->{types}{$v} = $elem_t;
             $ctx->{mut}{$v} = 0;
+            my $nk = _numeric_kind_for_type($elem_t);
+            if (defined($nk) && $nk ne '') {
+                $ctx->{numeric_kinds}{$v} = $nk;
+            } else {
+                delete $ctx->{numeric_kinds}{$v};
+            }
+            _clear_symbol_facts($ctx, $v);
         }
         return;
     }
@@ -180,6 +262,8 @@ sub _validate_stmt {
         my %hctx = %$ctx;
         $hctx{types} = _clone_hash($ctx->{types});
         $hctx{mut} = _clone_hash($ctx->{mut});
+        $hctx{numeric_kinds} = _clone_hash($ctx->{numeric_kinds});
+        $hctx{facts} = _clone_hash($ctx->{facts});
         if (defined($stmt->{err_name}) && $stmt->{err_name} ne '') {
             $hctx{types}{ $stmt->{err_name} } = 'error';
             $hctx{mut}{ $stmt->{err_name} } = 0;
@@ -189,6 +273,8 @@ sub _validate_stmt {
             next if !defined($v) || $v eq '';
             $ctx->{types}{$v} = 'string';
             $ctx->{mut}{$v} = 0;
+            delete $ctx->{numeric_kinds}{$v};
+            _clear_symbol_facts($ctx, $v);
         }
         return;
     }
@@ -206,6 +292,13 @@ sub _validate_stmt {
               if !defined($without_error);
             $ctx->{types}{$name} = $without_error if $name ne '';
             $ctx->{mut}{$name} = 0 if $name ne '';
+            my $nk = _numeric_kind_for_type($without_error);
+            if (defined($nk) && $nk ne '') {
+                $ctx->{numeric_kinds}{$name} = $nk;
+            } else {
+                delete $ctx->{numeric_kinds}{$name} if $name ne '';
+            }
+            _clear_symbol_facts($ctx, $name);
         }
         return;
     }
@@ -218,6 +311,8 @@ sub _validate_stmt {
         my %hctx = %$ctx;
         $hctx{types} = _clone_hash($ctx->{types});
         $hctx{mut} = _clone_hash($ctx->{mut});
+        $hctx{numeric_kinds} = _clone_hash($ctx->{numeric_kinds});
+        $hctx{facts} = _clone_hash($ctx->{facts});
         if (defined($stmt->{err_name}) && $stmt->{err_name} ne '') {
             $hctx{types}{ $stmt->{err_name} } = 'error';
             $hctx{mut}{ $stmt->{err_name} } = 0;
@@ -230,6 +325,13 @@ sub _validate_stmt {
             $ok = $t if !defined($ok);
             $ctx->{types}{$name} = $ok if $name ne '' && defined($ok);
             $ctx->{mut}{$name} = 0 if $name ne '';
+            my $nk = _numeric_kind_for_type($ok);
+            if (defined($nk) && $nk ne '') {
+                $ctx->{numeric_kinds}{$name} = $nk;
+            } else {
+                delete $ctx->{numeric_kinds}{$name} if $name ne '';
+            }
+            _clear_symbol_facts($ctx, $name);
         }
         return;
     }
@@ -247,6 +349,7 @@ sub _validate_stmt {
             my %loop_ctx = %$ctx;
             $loop_ctx{types} = _clone_hash($ctx->{types});
             $loop_ctx{mut} = _clone_hash($ctx->{mut});
+            $loop_ctx{numeric_kinds} = _clone_hash($ctx->{numeric_kinds});
             $loop_ctx{facts} = _clone_hash($ctx->{facts});
             _validate_stmt_seq($stmt->{body}, \%loop_ctx);
             return;
@@ -255,6 +358,7 @@ sub _validate_stmt {
         my %then_ctx = %$ctx;
         $then_ctx{types} = _clone_hash($ctx->{types});
         $then_ctx{mut} = _clone_hash($ctx->{mut});
+        $then_ctx{numeric_kinds} = _clone_hash($ctx->{numeric_kinds});
         $then_ctx{facts} = _clone_hash($ctx->{facts});
         $then_ctx{types}{$_} = $then_types->{$_} for keys %$then_types;
         $then_ctx{facts}{$_} = 1 for keys %$then_facts;
@@ -262,6 +366,7 @@ sub _validate_stmt {
         my %else_ctx = %$ctx;
         $else_ctx{types} = _clone_hash($ctx->{types});
         $else_ctx{mut} = _clone_hash($ctx->{mut});
+        $else_ctx{numeric_kinds} = _clone_hash($ctx->{numeric_kinds});
         $else_ctx{facts} = _clone_hash($ctx->{facts});
         $else_ctx{types}{$_} = $else_types->{$_} for keys %$else_types;
         $else_ctx{facts}{$_} = 1 for keys %$else_facts;
@@ -276,10 +381,13 @@ sub _validate_stmt {
             my %loop_ctx = %$ctx;
             $loop_ctx{types} = _clone_hash($ctx->{types});
             $loop_ctx{mut} = _clone_hash($ctx->{mut});
+            $loop_ctx{numeric_kinds} = _clone_hash($ctx->{numeric_kinds});
             $loop_ctx{facts} = _clone_hash($ctx->{facts});
             my $var = $stmt->{var} // '';
             $loop_ctx{types}{$var} = 'string' if $var ne '';
             $loop_ctx{mut}{$var} = 0 if $var ne '';
+            delete $loop_ctx{numeric_kinds}{$var} if $var ne '';
+            _clear_symbol_facts(\%loop_ctx, $var);
             _validate_stmt_seq($stmt->{body}, \%loop_ctx);
             return;
         }
@@ -294,10 +402,20 @@ sub _validate_stmt {
         my %loop_ctx = %$ctx;
         $loop_ctx{types} = _clone_hash($ctx->{types});
         $loop_ctx{mut} = _clone_hash($ctx->{mut});
+        $loop_ctx{numeric_kinds} = _clone_hash($ctx->{numeric_kinds});
         $loop_ctx{facts} = _clone_hash($ctx->{facts});
         my $var = $stmt->{var} // '';
         $loop_ctx{types}{$var} = $elem if $var ne '';
         $loop_ctx{mut}{$var} = 0 if $var ne '';
+        if ($var ne '') {
+            my $nk = _numeric_kind_for_type($elem);
+            if (defined($nk) && $nk ne '') {
+                $loop_ctx{numeric_kinds}{$var} = $nk;
+            } else {
+                delete $loop_ctx{numeric_kinds}{$var};
+            }
+            _clear_symbol_facts(\%loop_ctx, $var);
+        }
         _validate_stmt_seq($stmt->{body}, \%loop_ctx);
         return;
     }
@@ -339,13 +457,27 @@ sub enforce_hir_semantics {
     my ($hir) = @_;
     my $sigs = _function_sigs($hir);
     for my $fn (@{ $hir->{functions} // [] }) {
-        my ($types, $mut) = _env_from_params($fn);
+        my ($types, $mut, $numeric_kinds) = _env_from_params($fn);
+        my %facts;
+        for my $p (@{ $fn->{params} // [] }) {
+            next if !defined($p->{name}) || $p->{name} eq '';
+            my ($min, $max) = _constraints_integral_range($p->{constraints});
+            if (defined($min) && defined($max)) {
+                $facts{"range_var:$p->{name}:$min:$max"} = 1;
+            }
+            my $size = constraint_size_exact($p->{constraints});
+            if (defined($size) && $size =~ /^-?\d+$/) {
+                my $n = int($size);
+                $facts{"len_var:$p->{name}:$n"} = 1 if $n >= 0;
+            }
+        }
         my %ctx = (
             fn_return => $fn->{return_type},
             sigs      => $sigs,
             types     => $types,
             mut       => $mut,
-            facts     => {},
+            numeric_kinds => $numeric_kinds,
+            facts     => \%facts,
         );
         _validate_stmt_seq(_scheduled_statements($fn), \%ctx);
     }

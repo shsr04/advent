@@ -93,16 +93,45 @@ sub _split_type_and_constraints_top_level {
     return (trim($raw), undef);
 }
 
+sub _declared_numeric_kind_from_raw {
+    my ($raw) = @_;
+    my $t = trim($raw // '');
+    return undef if $t eq '';
+
+    # Strip balanced outer parens for simple annotations.
+    while ($t =~ /^\((.*)\)$/) {
+        my $inner = $1;
+        my $depth = 0;
+        my $ok = 1;
+        for my $ch (split //, $inner) {
+            $depth++ if $ch eq '(';
+            $depth-- if $ch eq ')';
+            if ($depth < 0) {
+                $ok = 0;
+                last;
+            }
+        }
+        last if !$ok || $depth != 0;
+        $t = trim($inner);
+    }
+    $t =~ s/\s+//g;
+    return 'int' if $t eq 'int';
+    return 'float' if $t eq 'float';
+    return 'number' if $t eq 'number';
+    return undef;
+}
+
 sub parse_declared_type_and_constraints {
     my (%args) = @_;
     my $raw = trim($args{raw} // '');
     my $where = $args{where} // 'declaration';
     my ($type_raw, $constraint_raw) = _split_type_and_constraints_top_level($raw);
+    my $declared_numeric_kind = _declared_numeric_kind_from_raw($type_raw);
     my $nested_number_list_size;
 
     if ($type_raw =~ /^\((.+)\)\[\]$/) {
         my $inner_raw = trim($1);
-        my ($inner_type, $inner_constraints) = parse_declared_type_and_constraints(
+        my ($inner_type, $inner_constraints, undef) = parse_declared_type_and_constraints(
             raw   => $inner_raw,
             where => "nested list element type in $where",
         );
@@ -147,9 +176,9 @@ sub parse_declared_type_and_constraints {
     );
     if (is_matrix_type($type)) {
         my $final = apply_matrix_constraints($type, $constraints, $where);
-        return ($final, $constraints);
+        return ($final, $constraints, $declared_numeric_kind);
     }
-    return ($type, $constraints);
+    return ($type, $constraints, $declared_numeric_kind);
 }
 
 sub parse_function_header {
@@ -287,7 +316,7 @@ sub parse_function_params {
           or compile_error("Invalid parameter declaration in function '$fn->{name}': $part");
 
         my ($name, $type_and_constraints) = ($1, trim($2));
-        my ($type, $constraints) = parse_declared_type_and_constraints(
+        my ($type, $constraints, $declared_numeric_kind) = parse_declared_type_and_constraints(
             raw   => $type_and_constraints,
             where => "parameter '$name' in function '$fn->{name}'",
         );
@@ -298,6 +327,7 @@ sub parse_function_params {
         push @params, {
             name        => $name,
             type        => $type,
+            declared_numeric_kind => $declared_numeric_kind,
             constraints => $constraints,
             c_in_name   => "__metac_in_$name",
         };

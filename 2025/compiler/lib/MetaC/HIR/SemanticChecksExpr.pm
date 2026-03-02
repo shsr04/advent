@@ -18,6 +18,8 @@ use MetaC::TypeSpec qw(
     is_sequence_type
     sequence_element_type
     sequence_type_for_element
+    is_matrix_type
+    matrix_type_meta
 );
 
 our @EXPORT_OK = qw(
@@ -26,8 +28,11 @@ our @EXPORT_OK = qw(
     _expr_is_fallible
     _function_sigs
     _infer_expr_type
+    _infer_numeric_kind
     _is_bool_type
     _is_number_type
+    _numeric_kind_assignable
+    _numeric_kind_for_type
     _type_without_member
     _type_without_error_union_member
     _types_assignable
@@ -107,6 +112,7 @@ sub _has_shared_member {
 sub _types_assignable {
     my ($actual, $expected) = @_;
     return 0 if !defined($actual) || $actual eq '' || !defined($expected) || $expected eq '';
+    return 1 if $actual eq 'empty_list' && (is_sequence_type($expected) || is_matrix_type($expected));
     return 1 if $actual eq $expected;
     return 1 if $expected eq 'number' && _is_number_type($actual);
 
@@ -138,13 +144,134 @@ sub _clone_hash {
 
 sub _env_from_params {
     my ($fn) = @_;
-    my (%types, %mut);
+    my (%types, %mut, %numeric_kinds);
     for my $p (@{ $fn->{params} // [] }) {
         next if !defined($p->{name}) || $p->{name} eq '';
         $types{$p->{name}} = $p->{type} if defined $p->{type};
         $mut{$p->{name}} = 0;
+        my $k = $p->{declared_numeric_kind};
+        $k = _numeric_kind_for_type($p->{type}) if !defined($k) || $k eq '';
+        $numeric_kinds{$p->{name}} = $k if defined($k) && $k ne '';
     }
-    return (\%types, \%mut);
+    return (\%types, \%mut, \%numeric_kinds);
+}
+
+sub _num_literal_kind {
+    my ($expr) = @_;
+    return undef if !defined($expr) || ref($expr) ne 'HASH' || ($expr->{kind} // '') ne 'num';
+    my $v = $expr->{value} // '';
+    return 'float' if $v =~ /[.eE]/;
+    return 'int' if $v =~ /^-?\d+$/;
+    return undef;
+}
+
+sub _numeric_kind_for_type {
+    my ($type) = @_;
+    return undef if !defined($type) || $type eq '';
+    return 'int' if $type eq 'int';
+    return 'float' if $type eq 'float';
+    return 'number' if $type eq 'number' || $type eq 'indexed_number';
+    return undef;
+}
+
+sub _numeric_kind_assignable {
+    my ($actual, $expected) = @_;
+    return 0 if !defined($actual) || !defined($expected) || $actual eq '' || $expected eq '';
+    return 1 if $actual eq $expected;
+    return 1 if $expected eq 'number' && ($actual eq 'int' || $actual eq 'float' || $actual eq 'number');
+    return 0;
+}
+
+sub _infer_numeric_kind {
+    my ($expr, $ctx) = @_;
+    return undef if !defined($expr) || ref($expr) ne 'HASH';
+    my $kind = $expr->{kind} // '';
+    return _num_literal_kind($expr) if $kind eq 'num';
+    if ($kind eq 'ident') {
+        my $name = $expr->{name} // '';
+        return $ctx->{numeric_kinds}{$name} if $name ne '' && exists $ctx->{numeric_kinds}{$name};
+        return _numeric_kind_for_type($ctx->{types}{$name});
+    }
+    if ($kind eq 'unary') {
+        return _infer_numeric_kind($expr->{expr}, $ctx) if ($expr->{op} // '') eq '-';
+        return undef;
+    }
+    if ($kind eq 'try') {
+        return _infer_numeric_kind($expr->{expr}, $ctx);
+    }
+    if ($kind eq 'binop') {
+        my $op = $expr->{op} // '';
+        my $l = _infer_numeric_kind($expr->{left}, $ctx);
+        my $r = _infer_numeric_kind($expr->{right}, $ctx);
+        return undef if !defined($l) || !defined($r) || $l eq '' || $r eq '';
+        if ($op eq '+' || $op eq '-' || $op eq '*' || $op eq '%') {
+            return undef if $l ne $r;
+            return $l if $l eq 'int' || $l eq 'float' || $l eq 'number';
+            return undef;
+        }
+        return 'float' if $op eq '/' && $l eq 'float' && $r eq 'float';
+        return 'int' if $op eq '~/' && $l eq 'int' && $r eq 'int';
+        return undef;
+    }
+    if ($kind eq 'call' || $kind eq 'method_call') {
+        my $t = _infer_expr_type($expr, $ctx);
+        return _numeric_kind_for_type($t);
+    }
+    return undef;
+}
+
+sub _extract_proven_range_for_ident {
+    my ($name, $ctx) = @_;
+    return undef if !defined($name) || $name eq '';
+    my $facts = $ctx->{facts} // {};
+    my ($best_min, $best_max, $found);
+    for my $k (keys %$facts) {
+        next if $k !~ /^range_var:\Q$name\E:(-?\d+):(-?\d+)$/;
+        my ($min, $max) = (int($1), int($2));
+        if (!$found) {
+            ($best_min, $best_max, $found) = ($min, $max, 1);
+            next;
+        }
+        $best_min = $min if $min > $best_min;
+        $best_max = $max if $max < $best_max;
+    }
+    return undef if !$found;
+    return { min => $best_min, max => $best_max };
+}
+
+sub _expr_int_range_proved {
+    my ($expr, $ctx, $min_need, $max_need) = @_;
+    return 0 if !defined($expr) || ref($expr) ne 'HASH';
+    my $kind = $expr->{kind} // '';
+    if ($kind eq 'num') {
+        my $v = $expr->{value} // '';
+        return 0 if $v !~ /^-?\d+$/;
+        my $n = int($v);
+        return ($n >= $min_need && $n <= $max_need) ? 1 : 0;
+    }
+    return 0 if $kind ne 'ident';
+    my $name = $expr->{name} // '';
+    my $r = _extract_proven_range_for_ident($name, $ctx);
+    return 0 if !defined($r);
+    return ($r->{min} >= $min_need && $r->{max} <= $max_need) ? 1 : 0;
+}
+
+sub _matrix_index_proved_for_known_sizes {
+    my ($idx_expr, $meta, $ctx) = @_;
+    return 0 if !defined($idx_expr) || ref($idx_expr) ne 'HASH' || !defined($meta) || ref($meta) ne 'HASH';
+    return 0 if ($idx_expr->{kind} // '') ne 'list_literal';
+    my $coords = $idx_expr->{items} // [];
+    my $dim = int($meta->{dim} // 0);
+    return 0 if $dim <= 0 || @$coords != $dim;
+    my $sizes = $meta->{sizes} // [];
+    for my $i (0 .. $dim - 1) {
+        my $size = int($sizes->[$i] // -1);
+        next if $size < 0; # wildcard axis remains unconstrained
+        return 0 if !$size;
+        my $ok = _expr_int_range_proved($coords->[$i], $ctx, 0, $size - 1);
+        return 0 if !$ok;
+    }
+    return 1;
 }
 
 sub _infer_expr_type {
@@ -380,6 +507,20 @@ sub _validate_expr {
         if ($op eq '+' || $op eq '-' || $op eq '*' || $op eq '/' || $op eq '~/' || $op eq '%') {
             compile_error("Semantic/F053-Type: '$op' requires number operands")
               if !_is_number_type($lt) || !_is_number_type($rt);
+            my $lk = _infer_numeric_kind($expr->{left}, $ctx);
+            my $rk = _infer_numeric_kind($expr->{right}, $ctx);
+            if ($op eq '/' || $op eq '~/') {
+                compile_error("Semantic/F053-Type: '$op' requires strict numeric operand kinds")
+                  if !defined($lk) || !defined($rk);
+                compile_error("Semantic/F053-Type: '/' requires operands of type float")
+                  if $op eq '/' && !($lk eq 'float' && $rk eq 'float');
+                compile_error("Semantic/F053-Type: '~/' requires operands of type int")
+                  if $op eq '~/' && !($lk eq 'int' && $rk eq 'int');
+                return 'number';
+            }
+            compile_error("Semantic/F053-Type: '$op' requires matching numeric operand types")
+              if !defined($lk) || !defined($rk) || $lk ne $rk
+                || ($lk ne 'int' && $lk ne 'float' && $lk ne 'number');
             return 'number';
         }
         if ($op eq '&&' || $op eq '||') {
@@ -426,6 +567,24 @@ sub _validate_expr {
     if ($kind eq 'call' || $kind eq 'method_call') {
         _validate_expr($_, $ctx, 0) for @{ $expr->{args} // [] };
         _validate_expr($expr->{recv}, $ctx, 0) if $kind eq 'method_call';
+        if ($kind eq 'method_call') {
+            my $method = $expr->{method} // '';
+            my $recv_t = _infer_expr_type($expr->{recv}, $ctx);
+            if (defined($recv_t) && is_matrix_type($recv_t)) {
+                my $meta = matrix_type_meta($recv_t);
+                if ($method eq 'size') {
+                    my $axis = $expr->{args}[0];
+                    my $axis_max = int($meta->{dim} // 0) - 1;
+                    compile_error("Semantic/F053-Entailment: Method 'size(...)' requires compile-time axis proof in range(0, $axis_max)")
+                      if $axis_max < 0 || !_expr_int_range_proved($axis, $ctx, 0, $axis_max);
+                }
+                if ($method eq 'insert' && ($meta->{has_size} // 0)) {
+                    my $idx = $expr->{args}[1];
+                    compile_error("Semantic/F053-Entailment: Method 'insert(...)' requires compile-time matrix index proof against matrixSize constraints")
+                      if !_matrix_index_proved_for_known_sizes($idx, $meta, $ctx);
+                }
+            }
+        }
         my $fallible = _expr_is_fallible($expr, $ctx);
         compile_error("Semantic/F053-Fallibility: unhandled fallible expression; use '?' or 'or catch(...)'")
           if $fallible && !$handled;

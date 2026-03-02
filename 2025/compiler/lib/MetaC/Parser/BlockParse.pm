@@ -217,7 +217,7 @@ sub parse_block {
 
         if ($line =~ /^const\s+([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(.+?)\s*=\s*(.+)$/) {
             my ($name, $type_with_constraints, $expr) = ($1, trim($2), trim($3));
-            my ($type, $constraints) = parse_declared_type_and_constraints(
+            my ($type, $constraints, $declared_numeric_kind) = parse_declared_type_and_constraints(
                 raw   => $type_with_constraints,
                 where => "constant '$name'",
             );
@@ -228,6 +228,7 @@ sub parse_block {
                 kind        => 'const_typed',
                 name        => $name,
                 type        => $type,
+                declared_numeric_kind => $declared_numeric_kind,
                 constraints => $constraints,
                 expr        => parse_expr($expr),
                 line        => $line_no,
@@ -305,7 +306,7 @@ sub parse_block {
 
         if ($line =~ /^let\s+([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(.+?)\s*=\s*(.+)$/) {
             my ($name, $type_with_constraints, $expr) = ($1, trim($2), trim($3));
-            my ($type, $constraints) = parse_declared_type_and_constraints(
+            my ($type, $constraints, $declared_numeric_kind) = parse_declared_type_and_constraints(
                 raw   => $type_with_constraints,
                 where => "variable '$name'",
             );
@@ -316,6 +317,7 @@ sub parse_block {
                 kind        => 'let',
                 name        => $name,
                 type        => $type,
+                declared_numeric_kind => $declared_numeric_kind,
                 constraints => $constraints,
                 expr        => parse_expr($expr),
                 line        => $line_no,
@@ -346,7 +348,7 @@ sub parse_block {
 
         if ($line =~ /^([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(.+?)\s*=\s*(.+)$/) {
             my ($name, $type_with_constraints, $expr) = ($1, trim($2), trim($3));
-            my ($type, $constraints) = parse_declared_type_and_constraints(
+            my ($type, $constraints, $declared_numeric_kind) = parse_declared_type_and_constraints(
                 raw   => $type_with_constraints,
                 where => "typed assignment for '$name'",
             );
@@ -357,6 +359,7 @@ sub parse_block {
                 kind        => 'typed_assign',
                 name        => $name,
                 type        => $type,
+                declared_numeric_kind => $declared_numeric_kind,
                 constraints => $constraints,
                 expr        => parse_expr($expr),
                 line        => $line_no,

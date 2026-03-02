@@ -1,0 +1,8 @@
+@Test({
+   "compile_err" : "cannot assign numeric kind 'int' to 'x' with numeric kind 'float'"
+})
+function main(): int {
+  let x: int = 1
+  x: float = 2
+  return 0
+}

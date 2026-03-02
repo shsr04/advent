@@ -1,0 +1,7 @@
+@Test({
+   "compile_err" : "cannot assign numeric kind 'float' to declared numeric kind 'int' for 'x'"
+})
+function main(): int {
+  const x: int = 1.5
+  return 0
+}

@@ -1,0 +1,9 @@
+@Test({
+   "compile_err" : "'+' requires matching numeric operand types"
+})
+function main(): int {
+  const a: number = 1
+  const b: int = 2
+  const c = a + b
+  return c
+}

@@ -586,7 +586,7 @@ Use this block for each feature:
     - `B4` closed: generic array domains like `(number | string)[]` accepted across declaration/return/call paths (covered by `f050_blocker_b4_union_array_domain_ok`).
 
 ### F-051 `HIR-Native Cutover Completion`
-- Status: in_progress (reopened 2026-03-02)
+- Status: rejected (2026-03-02)
 - Spec file: `instructions/hir-native-cutover-f051.md` (planned)
 - Correctness classes: C0/C1/C2/C3/C4
 - Key guarantees (target state):
@@ -628,32 +628,40 @@ Use this block for each feature:
   - entailment enforcement in HIR provides path-sensitive proof obligations for nullable/union narrowing, size/index bounds safety, and mutable-variable narrowing invalidation according to sections `2.4` and `5.4`.
   - fallibility enforcement in HIR guarantees that all fallible expressions are either handled (`?` / `or catch`) or rejected, with diagnostics aligned to section `4` and operation-level fallibility rules in section `5`.
   - call-contract validation already implemented in `ResolveCalls` remains the shared front-door, but this feature extends enforcement to non-call expressions and fact/flow obligations.
-- Blocking questions:
-  - strict `int` vs `float` arithmetic/division enforcement from section `5.2` is still constrained by current type normalization in `compiler/lib/MetaC/TypeSpec.pm` (`int`/`float` collapse to `number`).
-  - entailment proof consumers are implemented for nullable narrowing, literal/list-length/index checks, and size/count facts, but not yet for full matrix-size proof obligations.
+- Closure notes (2026-03-02):
+  - strict `int` vs `float` arithmetic/division enforcement is now active in HIR semantic validation without changing canonical type normalization, by carrying numeric-kind metadata (`int`/`float`/`number`) from parser declarations/params into semantic context and enforcing operand-kind contracts in `SemanticChecksExpr`.
+  - matrix-size entailment proof consumers are now active for matrix method calls requiring compile-time index/axis proofs:
+    - `matrix.size(axis)` enforces proved `axis in [0, dim-1]`.
+    - `matrix.insert(value, index)` enforces proved coordinate bounds against known `matrixSize(...)` constraints.
+  - statement-level semantic context now propagates and invalidates numeric/range/size facts on declarations, typed assignments, mutable reassignment, branches, and loops, so proofs remain path-sensitive and sound.
 - Notes/evidence:
   - Implemented HIR semantic pass split by concern:
     - expression/type/fallibility core: `compiler/lib/MetaC/HIR/SemanticChecksExpr.pm`
     - statement/flow/orchestration layer: `compiler/lib/MetaC/HIR/SemanticChecks.pm`
+  - Parser/HIR bridge for strict numeric enforcement:
+    - parser records declared numeric kind for params/typed declarations/typed assignments in `compiler/lib/MetaC/Parser/Functions.pm` and `compiler/lib/MetaC/Parser/BlockParse.pm`.
+    - HIR semantic contexts seed numeric kinds from parser metadata and apply strict assignment compatibility checks (`compiler/lib/MetaC/HIR/SemanticChecks.pm`).
   - Pipeline integration: `compiler/lib/MetaC/HIR.pm:55-63` now runs `enforce_hir_semantics(...)` before `resolve_hir_calls(...)` so semantic obligations fail fast at HIR level.
   - Type enforcement coverage (examples):
-    - operator and condition checks in `_validate_expr` (`SemanticChecksExpr.pm:372-430`) and `_validate_stmt` (`SemanticChecks.pm:241-317`).
-    - assignment/declaration compatibility and mutability checks in `_validate_stmt` (`SemanticChecks.pm:115-158`).
-    - comparison shared-type/ordered-type checks in `_validate_expr` (`SemanticChecksExpr.pm:387-397`) aligned with normref `5.1`.
+    - strict arithmetic/division signature checks plus numeric-kind inference in `_validate_expr` / `_infer_numeric_kind` (`compiler/lib/MetaC/HIR/SemanticChecksExpr.pm`), aligned with normref `5.2`.
+    - declaration/assignment compatibility + numeric-kind contracts in `_validate_stmt` (`compiler/lib/MetaC/HIR/SemanticChecks.pm`).
+    - comparison shared-type/ordered-type checks in `_validate_expr` (`compiler/lib/MetaC/HIR/SemanticChecksExpr.pm`) aligned with normref `5.1`.
   - Entailment/proof coverage (examples):
-    - nullable narrowing + size/count fact derivation in `_derive_if_narrowing` (`SemanticChecks.pm:27-88`).
-    - list destructure proof requirements in `_list_length_proved` + `_validate_stmt` (`SemanticChecks.pm:90-101`, `:160-167`).
-    - index bounds proof via facts/literals in `_index_has_bounds_proof` (`SemanticChecksExpr.pm:291-316`).
+    - nullable narrowing + size/count fact derivation in `_derive_if_narrowing` (`compiler/lib/MetaC/HIR/SemanticChecks.pm`).
+    - range/size fact seeding + reassignment invalidation for sound path proofs (`compiler/lib/MetaC/HIR/SemanticChecks.pm`).
+    - index bounds proof via facts/literals in `_index_has_bounds_proof` (`compiler/lib/MetaC/HIR/SemanticChecksExpr.pm`).
+    - matrix-size proof consumers in `_validate_expr` (`compiler/lib/MetaC/HIR/SemanticChecksExpr.pm`) for `size(...)` and `insert(...)`.
   - Fallibility enforcement coverage (examples):
-    - mandatory handling checks for `call`, `method_call`, and `index` in `_validate_expr` (`SemanticChecksExpr.pm:402-429`).
-    - `?`/`or catch` applicability checks in `_validate_expr` + `_validate_stmt` (`SemanticChecksExpr.pm:415-420`, `SemanticChecks.pm:195-233`).
-    - contextual callback fallibility inference through op-registry callback contracts in `_method_contextual_fallible` (`SemanticChecksExpr.pm:251-289`) with registry-backed fallback hints (`:333-345`).
+    - mandatory handling checks for `call`, `method_call`, and `index` in `_validate_expr` (`compiler/lib/MetaC/HIR/SemanticChecksExpr.pm`).
+    - `?`/`or catch` applicability checks in `_validate_expr` + `_validate_stmt` (`compiler/lib/MetaC/HIR/SemanticChecksExpr.pm`, `compiler/lib/MetaC/HIR/SemanticChecks.pm`).
+    - contextual callback fallibility inference through op-registry callback contracts in `_method_contextual_fallible` with registry-backed fallback hints (`compiler/lib/MetaC/HIR/SemanticChecksExpr.pm`).
   - Strict call-result typing closure:
     - resolved call contracts now store required `result_type` (not `result_type_hint`) and fail when unresolved in `compiler/lib/MetaC/HIR/ResolveCalls.pm:347-368`, `:386-410`, `:572-584`, and `:618-632`.
     - expression inference consumes strict `resolved_call.result_type` in `compiler/lib/MetaC/HIR/SemanticChecksExpr.pm:195-223`.
     - op registry now exposes strict APIs `builtin_result_type` / `method_result_type` with compatibility aliases retained only as wrappers in `compiler/lib/MetaC/HIR/OpRegistry.pm:268-284` and `:409-425`.
   - Verification evidence:
     - targeted F-053 harness run: `/tmp/f053-verify/report.md` and `/tmp/f053-verify/report.json` (`9 passed, 0 failed`, generated 2026-03-02).
+    - targeted semantic-gap closure run: `/tmp/f053-gap-verify/report.md` and `/tmp/f053-gap-verify/report.json` (`8 passed, 0 failed`, generated 2026-03-02), including strict arithmetic/division cases and matrix axis/index proof cases.
     - syntax checks green:
       - `perl -I compiler/lib -c compiler/lib/MetaC/HIR/SemanticChecksExpr.pm`
       - `perl -I compiler/lib -c compiler/lib/MetaC/HIR/SemanticChecks.pm`
