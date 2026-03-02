@@ -8,6 +8,7 @@ use MetaC::HIR::Lowering qw(lower_source_to_vnf_hir);
 use MetaC::HIR::Gates qw(verify_vnf_hir dump_vnf_hir);
 use MetaC::HIR::ResolveCalls qw(resolve_hir_calls);
 use MetaC::HIR::SemanticChecks qw(enforce_hir_semantics);
+use MetaC::HIR::BackendC qw(codegen_from_vnf_hir);
 use MetaC::HIR::BackendEcho qw(emit_echo_from_vnf_hir);
 
 our @EXPORT_OK = qw(
@@ -15,6 +16,7 @@ our @EXPORT_OK = qw(
     lower_source_to_vnf_hir
     verify_vnf_hir
     enforce_hir_semantics
+    codegen_from_vnf_hir
     emit_echo_from_vnf_hir
     dump_vnf_hir
 );
@@ -30,16 +32,17 @@ sub _run_passes {
 
 sub _emit_backend_output {
     my (%args) = @_;
-    my $backend = $args{backend} // 'echo';
+    my $backend = $args{backend} // 'c';
     my $hir = $args{hir};
 
+    return codegen_from_vnf_hir($hir) if $backend eq 'c';
     return emit_echo_from_vnf_hir($hir) if $backend eq 'echo';
     compile_error("Unknown backend '$backend'");
 }
 
 sub compile_source_via_vnf_hir {
     my ($source, %opts) = @_;
-    my $backend = $opts{backend} // 'echo';
+    my $backend = $opts{backend} // 'c';
     my $state = { source => $source };
     my $passes = [
         sub {

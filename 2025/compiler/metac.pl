@@ -10,14 +10,14 @@ use File::Path qw(make_path);
 use MetaC::HIR qw(compile_source_via_vnf_hir);
 
 sub usage {
-    print STDERR "Usage: perl compiler/metac.pl <source.metac> -o <output.txt> [--backend echo] [--dump-hir <path>]\n";
+    print STDERR "Usage: perl compiler/metac.pl <source.metac> -o <output.txt> [--backend c|echo] [--dump-hir <path>]\n";
     exit 1;
 }
 
 sub main {
     my $output_path;
     my $hir_dump_path;
-    my $backend = 'echo';
+    my $backend = 'c';
     GetOptions(
         'o|output=s' => \$output_path,
         'dump-hir=s' => \$hir_dump_path,

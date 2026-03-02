@@ -666,3 +666,69 @@ Use this block for each feature:
       - `perl -I compiler/lib -c compiler/lib/MetaC/HIR/SemanticChecksExpr.pm`
       - `perl -I compiler/lib -c compiler/lib/MetaC/HIR/SemanticChecks.pm`
       - `perl -I compiler/lib -c compiler/lib/MetaC/HIR.pm`
+
+### F-054 `Synthetic C Backend (Mechanical HIR->C Translation Only)`
+- Status: planned
+- Spec file: `instructions/hir-synthetic-c-backend-f054.md` (planned)
+- Correctness classes: C0/C1/C2/C3/C4
+- Key guarantees:
+  - the C backend is purely synthetic: it must not perform semantic interpretation, proof checks, type-repair, or policy decisions.
+  - backend emission is mechanical over incoming HIR nodes/contracts only; each supported HIR node kind maps to deterministic C emission templates/routines.
+  - semantic validity is exclusively upstream responsibility (HIR lowering, gates, semantic checks, call resolution).
+  - if incoming HIR is malformed due to internal compiler errors, emitted C may also be malformed; this is expected behavior for this feature.
+  - the synthetic C backend must not reject, sanitize, or attempt to correct malformed HIR structures.
+- Scope boundaries:
+  - includes: deterministic node-to-C lowering from verified/unverified HIR payloads, stable emission order, and explicit node coverage diagnostics only for missing emitter wiring.
+  - excludes: any backend-side entailment/fallibility/type validation logic and any backend-side recovery heuristics.
+- Notes/evidence:
+  - Implement entirely new C backend. Do not refer to old code.
+  - Motivation: enforce strict architecture separation where all semantic decisions happen before backend emission.
+  - Primary implementation surfaces:
+    - `compiler/lib/MetaC/HIR/BackendC.pm`
+    - `compiler/lib/MetaC/Codegen/*` (migration target: remove semantic branches, keep mechanical formatting/runtime glue only)
+  - Acceptance criteria:
+    - backend code paths contain no semantic branch logic keyed to language rules (type/fallibility/entailment decisions).
+    - malformed HIR fixture tests demonstrate passthrough emission behavior (malformed-in -> malformed-out C) without backend rejection.
+    - conformance tests are green.
+    - conformance tests confirm semantic diagnostics are produced upstream, not by backend emission.
+  - Subtasks (from-scratch, one unattended run each):
+    - `F-054-S1` Backend skeleton + deterministic region scheduling
+      - Status: completed (2026-03-02)
+      - Scope: create `HIR::BackendC` with function/region/exit scaffolding, label emission, and no semantic rejection paths.
+      - Acceptance gate: `perl -I compiler/lib -c compiler/lib/MetaC/HIR/BackendC.pm` passes; `perl compiler/metac.pl <smoke.metac> -o <out.c>` emits valid C text (not HIR dump).
+      - Deferred: non-trivial expression/statement kinds and runtime behavior.
+    - `F-054-S2` Scalar expression/statement mechanical emitters
+      - Status: completed (2026-03-02)
+      - Scope: emit `num/str/bool/null/ident/unary/binop`, `let/const/assign/assign_op/incdec/return/expr_stmt`, and CFG exits (`Goto/IfExit/WhileExit/Return`) with deterministic templates.
+      - Acceptance gate: targeted scalar/control tests compile and run without backend placeholder comments for covered kinds.
+      - Deferred: collections, method calls, fallible-flow lowering.
+    - `F-054-S3` Call-contract-driven call/method emission
+      - Status: planned
+      - Scope: mechanically emit `call`/`method_call` using resolved canonical call metadata (`op_id`, `call_kind`, arity), with no backend policy inference.
+      - Acceptance gate: call-heavy targeted suite (user calls, builtins, fluent methods) passes.
+      - Deferred: list/matrix runtime helper completeness.
+    - `F-054-S4` Runtime glue split (mechanical helpers only)
+      - Status: planned
+      - Scope: add backend runtime prelude/helper registry required by emitted intrinsics (logging, strings, utf8, basic list storage), keeping helper selection usage-driven and non-semantic.
+      - Acceptance gate: string/logging/utf8 targeted tests pass.
+      - Deferred: full list/matrix/fallible helper set.
+    - `F-054-S5` Sequence/list/matrix structural operations
+      - Status: planned
+      - Scope: mechanical emission + runtime helpers for list literals, push/size/index/destructure, seq/split/chars/chunk/reduce/filter/map scaffolding, and matrix core operations used by current tests.
+      - Acceptance gate: collection/matrix targeted tests pass.
+      - Deferred: error-flow integration and remaining edge cases.
+    - `F-054-S6` Mechanical fallibility/try/or-catch lowering
+      - Status: planned
+      - Scope: emit error-channel structs/flags and region wiring for `TryExit`, `?`, and `or catch` strictly from HIR contracts; no backend fallibility decisions.
+      - Acceptance gate: fallibility-focused targeted tests pass; upstream still owns unhandled-fallible diagnostics.
+      - Deferred: conformance-wide hardening.
+    - `F-054-S7` Semantic/backend boundary hardening
+      - Status: planned
+      - Scope: remove backend branches keyed to language policy; keep only structural node coverage checks and passthrough behavior on malformed HIR.
+      - Acceptance gate: purity checks pass (`type_is_*` and similar policy helpers absent from backend/materialization surfaces); malformed-HIR passthrough fixtures pass.
+      - Deferred: full-suite closure only.
+    - `F-054-S8` Full conformance closure
+      - Status: planned
+      - Scope: close remaining emitter/runtime gaps revealed by regression corpus without reintroducing backend semantic enforcement.
+      - Acceptance gate: `make test` reports all passing.
+      - Deferred: none (feature closure).
