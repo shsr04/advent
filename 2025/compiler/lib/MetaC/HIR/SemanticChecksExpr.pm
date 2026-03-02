@@ -18,6 +18,9 @@ use MetaC::TypeSpec qw(
     is_sequence_type
     sequence_element_type
     sequence_type_for_element
+    sequence_member_type
+    is_sequence_member_type
+    sequence_member_meta
     is_matrix_type
     matrix_type_meta
 );
@@ -71,8 +74,19 @@ sub _type_without_error_union_member {
 
 sub _is_number_member {
     my ($m) = @_;
-    return 1 if defined($m) && ($m eq 'number' || $m eq 'int' || $m eq 'float' || $m eq 'indexed_number');
+    if (defined($m) && is_sequence_member_type($m)) {
+        my $meta = sequence_member_meta($m);
+        $m = defined($meta) ? $meta->{elem} : $m;
+    }
+    return 1 if defined($m) && ($m eq 'number' || $m eq 'int' || $m eq 'float');
     return 0;
+}
+
+sub _base_member_type {
+    my ($m) = @_;
+    return $m if !defined($m) || !is_sequence_member_type($m);
+    my $meta = sequence_member_meta($m);
+    return defined($meta) ? $meta->{elem} : $m;
 }
 
 sub _is_bool_member {
@@ -102,9 +116,10 @@ sub _is_bool_type {
 
 sub _has_shared_member {
     my ($a, $b) = @_;
-    my %left = map { $_ => 1 } @{ _union_members($a) };
+    my %left = map { _base_member_type($_) => 1 } @{ _union_members($a) };
     for my $m (@{ _union_members($b) }) {
-        return 1 if $left{$m};
+        my $base = _base_member_type($m);
+        return 1 if $left{$base};
     }
     return 0;
 }
@@ -112,6 +127,10 @@ sub _has_shared_member {
 sub _types_assignable {
     my ($actual, $expected) = @_;
     return 0 if !defined($actual) || $actual eq '' || !defined($expected) || $expected eq '';
+    if (is_sequence_member_type($actual)) {
+        my $meta = sequence_member_meta($actual);
+        $actual = $meta->{elem} if defined($meta) && defined($meta->{elem});
+    }
     return 1 if $actual eq 'empty_list' && (is_sequence_type($expected) || is_matrix_type($expected));
     return 1 if $actual eq $expected;
     return 1 if $expected eq 'number' && _is_number_type($actual);
@@ -130,8 +149,9 @@ sub _function_sigs {
     my %sigs;
     for my $fn (@{ $hir->{functions} // [] }) {
         $sigs{$fn->{name}} = {
-            return_type => $fn->{return_type},
-            params      => $fn->{params},
+            return_type                 => $fn->{return_type},
+            declared_return_numeric_kind => $fn->{declared_return_numeric_kind},
+            params                      => $fn->{params},
         };
     }
     return \%sigs;
@@ -168,9 +188,13 @@ sub _num_literal_kind {
 sub _numeric_kind_for_type {
     my ($type) = @_;
     return undef if !defined($type) || $type eq '';
+    if (is_sequence_member_type($type)) {
+        my $meta = sequence_member_meta($type);
+        $type = $meta->{elem} if defined($meta) && defined($meta->{elem});
+    }
     return 'int' if $type eq 'int';
     return 'float' if $type eq 'float';
-    return 'number' if $type eq 'number' || $type eq 'indexed_number';
+    return 'number' if $type eq 'number';
     return undef;
 }
 
@@ -213,7 +237,13 @@ sub _infer_numeric_kind {
         return 'int' if $op eq '~/' && $l eq 'int' && $r eq 'int';
         return undef;
     }
-    if ($kind eq 'call' || $kind eq 'method_call') {
+    if ($kind eq 'call' || $kind eq 'method_call' || $kind eq 'index') {
+        if ($kind eq 'call') {
+            my $name = $expr->{name} // '';
+            my $sig = $ctx->{sigs}{$name};
+            my $declared = defined($sig) ? $sig->{declared_return_numeric_kind} : undef;
+            return $declared if defined($declared) && $declared ne '';
+        }
         my $t = _infer_expr_type($expr, $ctx);
         return _numeric_kind_for_type($t);
     }
@@ -310,7 +340,9 @@ sub _infer_expr_type {
     if ($kind eq 'index') {
         my $recv_t = _infer_expr_type($expr->{recv}, $ctx);
         return 'number' if defined($recv_t) && $recv_t eq 'string';
-        return sequence_element_type($recv_t);
+        my $elem = sequence_element_type($recv_t);
+        return undef if !defined($elem);
+        return sequence_member_type($elem);
     }
 
     if ($kind eq 'try') {
@@ -445,6 +477,36 @@ sub _index_has_bounds_proof {
     return 0;
 }
 
+sub _receiver_has_known_size {
+    my ($recv_expr, $ctx) = @_;
+    return 0 if !defined($recv_expr) || ref($recv_expr) ne 'HASH';
+    my $kind = $recv_expr->{kind} // '';
+    return 1 if $kind eq 'list_literal';
+    return 0 if $kind ne 'ident';
+    my $name = $recv_expr->{name} // '';
+    return 0 if $name eq '';
+    my $facts = $ctx->{facts} // {};
+    for my $k (keys %$facts) {
+        return 1 if $k =~ /^len_var:\Q$name\E:(-?\d+)$/;
+    }
+    return 0;
+}
+
+sub _method_conditionally_fallible {
+    my ($expr, $ctx) = @_;
+    my $method = $expr->{method} // '';
+    my $recv_t = _infer_expr_type($expr->{recv}, $ctx);
+    return 1 if !defined($recv_t) || $recv_t eq '';
+
+    if ($method eq 'insert' && is_sequence_type($recv_t)) {
+        return _receiver_has_known_size($expr->{recv}, $ctx) ? 0 : 1;
+    }
+    if (($method eq 'slice' || $method eq 'last' || $method eq 'head') && is_sequence_type($recv_t)) {
+        return _receiver_has_known_size($expr->{recv}, $ctx) ? 0 : 1;
+    }
+    return 1;
+}
+
 sub _expr_is_fallible {
     my ($expr, $ctx) = @_;
     return 0 if !defined($expr) || ref($expr) ne 'HASH';
@@ -470,7 +532,8 @@ sub _expr_is_fallible {
         $fall = $hint if defined($hint) && $hint ne '';
     }
     $fall = 'never' if !defined($fall) || $fall eq '';
-    return 1 if $fall eq 'always' || $fall eq 'conditional';
+    return 1 if $fall eq 'always';
+    return _method_conditionally_fallible($expr, $ctx) if $fall eq 'conditional';
     return _method_contextual_fallible($expr, $ctx) if $fall eq 'contextual';
     return 0;
 }

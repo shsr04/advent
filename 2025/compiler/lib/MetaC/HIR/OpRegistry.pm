@@ -13,6 +13,8 @@ use MetaC::TypeSpec qw(
     is_sequence_type
     sequence_element_type
     sequence_type_for_element
+    sequence_member_type
+    is_sequence_member_type
 );
 
 our @EXPORT_OK = qw(
@@ -106,7 +108,7 @@ my %REGISTRY = (
         chars     => { op_id => 'method.chars.v1',     receiver_policy => 'string',                   param_policy => 'none',               result_policy => 'fixed',             result_type => sequence_type_for_element('string'),                    fallibility => 'never' },
         chunk     => { op_id => 'method.chunk.v1',     receiver_policy => 'string',                   param_policy => 'fixed',              param_type_symbols => ['number'],     result_policy => 'fixed',             result_type => sequence_type_for_element('string'),                    fallibility => 'never' },
         isBlank   => { op_id => 'method.isBlank.v1',   receiver_policy => 'string',                   param_policy => 'none',               result_policy => 'fixed',             result_type => 'bool',                fallibility => 'never' },
-        split     => { op_id => 'method.split.v1',     receiver_policy => 'string',                   param_policy => 'fixed',              param_type_symbols => ['string'],     result_policy => 'fixed',             result_type => sequence_type_for_element('string') . ' | error',      fallibility => 'always' },
+        split     => { op_id => 'method.split.v1',     receiver_policy => 'string',                   param_policy => 'fixed',              param_type_symbols => ['string'],     result_policy => 'fixed',             result_type => sequence_type_for_element('string'),                    fallibility => 'never' },
         match     => { op_id => 'method.match.v1',     receiver_policy => 'string',                   param_policy => 'fixed',              param_type_symbols => ['string'],     result_policy => 'fixed',             result_type => sequence_type_for_element('string') . ' | error',      fallibility => 'always' },
         compareTo => { op_id => 'method.compareTo.v1', receiver_policy => 'default_comparison',       param_policy => 'fixed',              param_type_symbols => ['receiver'],   result_policy => 'fixed',             result_type => 'comparison_result',   fallibility => 'never' },
         andThen   => { op_id => 'method.andThen.v1',   receiver_policy => 'comparison_result',        param_policy => 'fixed',              param_type_symbols => ['comparison_result'], result_policy => 'fixed',       result_type => 'comparison_result',   fallibility => 'never' },
@@ -141,8 +143,8 @@ my %REGISTRY = (
                 return_type_symbol => 'bool',
             },
         },
-        max       => { op_id => 'method.max.v1',       receiver_policy => 'sequence',                 param_policy => 'none',               result_policy => 'fixed',             result_type => 'indexed_number',      fallibility => 'never' },
-        last      => { op_id => 'method.last.v1',      receiver_policy => 'sequence',                 param_policy => 'none',               result_policy => 'last_by_receiver',  fallibility => 'never' },
+        max       => { op_id => 'method.max.v1',       receiver_policy => 'sequence',                 param_policy => 'none',               result_policy => 'traceable_member',  fallibility => 'never' },
+        last      => { op_id => 'method.last.v1',      receiver_policy => 'sequence',                 param_policy => 'none',               result_policy => 'traceable_member',  fallibility => 'conditional' },
         sort      => { op_id => 'method.sort.v1',      receiver_policy => 'sequence_orderable',       param_policy => 'none',               result_policy => 'receiver',          fallibility => 'never' },
         map       => {
             op_id => 'method.map.v1',
@@ -158,7 +160,7 @@ my %REGISTRY = (
                 return_type_symbol => 'elem',
             },
         },
-        slice     => { op_id => 'method.slice.v1',     receiver_policy => 'sequence',                 param_policy => 'fixed',              param_type_symbols => ['number'],     result_policy => 'receiver',          fallibility => 'never' },
+        slice     => { op_id => 'method.slice.v1',     receiver_policy => 'sequence',                 param_policy => 'fixed',              param_type_symbols => ['number'],     result_policy => 'receiver',          fallibility => 'conditional' },
         filter    => {
             op_id => 'method.filter.v1',
             receiver_policy => 'sequence',
@@ -190,8 +192,8 @@ my %REGISTRY = (
         insert    => { op_id => 'method.insert.v1',    receiver_policy => 'sequence_or_matrix',       param_policy => 'insert_by_receiver', result_policy => 'receiver',          fallibility => 'matrix_insert' },
         log       => { op_id => 'method.log.v1',       receiver_policy => 'any',                      param_policy => 'none',               result_policy => 'receiver',          fallibility => 'never' },
         members   => { op_id => 'method.members.v1',   receiver_policy => 'matrix',                   param_policy => 'none',               result_policy => 'matrix_members',    fallibility => 'never' },
-        index     => { op_id => 'method.index.v1',     receiver_policy => 'element_or_matrix_member', param_policy => 'none',               result_policy => 'index_by_receiver', fallibility => 'never' },
-        neighbours => { op_id => 'method.neighbours.v1', receiver_policy => 'matrix_or_member',       param_policy => 'none',               result_policy => 'matrix_neighbours', fallibility => 'never' },
+        index     => { op_id => 'method.index.v1',     receiver_policy => 'sequence_member_or_matrix_member', param_policy => 'none',         result_policy => 'index_by_receiver', fallibility => 'never' },
+        neighbours => { op_id => 'method.neighbours.v1', receiver_policy => 'matrix_member',          param_policy => 'none',               result_policy => 'matrix_neighbours', fallibility => 'never' },
         reduce    => {
             op_id => 'method.reduce.v1',
             receiver_policy => 'sequence',
@@ -361,6 +363,9 @@ sub _method_receiver_supported_by_policy {
     return is_matrix_type($recv_type) ? 1 : 0 if $policy eq 'matrix';
     return 1 if $policy eq 'sequence_or_matrix' && (_is_sequence_receiver_type($recv_type) || is_matrix_type($recv_type));
     return 1 if $policy eq 'matrix_or_member' && (is_matrix_type($recv_type) || is_matrix_member_type($recv_type));
+    return is_matrix_member_type($recv_type) ? 1 : 0 if $policy eq 'matrix_member';
+    return 1 if $policy eq 'sequence_member_or_matrix_member'
+      && (is_matrix_member_type($recv_type) || is_sequence_member_type($recv_type));
     return 1 if $policy eq 'element_or_matrix_member'
       && (is_matrix_member_type($recv_type) || $recv_type eq 'number' || $recv_type eq 'string' || $recv_type eq 'bool');
     return 0 if $policy eq 'none';
@@ -375,11 +380,6 @@ sub method_receiver_supported {
     return _method_receiver_supported_by_policy($policy, $recv_type);
 }
 
-sub _last_result_type {
-    my ($recv_type) = @_;
-    return sequence_element_type($recv_type);
-}
-
 sub _matrix_members_result_type {
     my ($recv_type) = @_;
     return undef if !defined($recv_type) || !is_matrix_type($recv_type);
@@ -390,7 +390,15 @@ sub _index_result_type {
     my ($recv_type) = @_;
     return sequence_type_for_element('number')
       if defined($recv_type) && is_matrix_member_type($recv_type);
+    return 'int' if defined($recv_type) && is_sequence_member_type($recv_type);
     return 'number';
+}
+
+sub _member_result_type {
+    my ($recv_type) = @_;
+    my $elem = sequence_element_type($recv_type);
+    return undef if !defined($elem);
+    return sequence_member_type($elem);
 }
 
 sub _matrix_neighbours_result_type {
@@ -413,7 +421,7 @@ sub method_result_type {
 
     return $spec->{result_type} if $policy eq 'fixed';
     return $recv_type if $policy eq 'receiver';
-    return _last_result_type($recv_type) if $policy eq 'last_by_receiver';
+    return _member_result_type($recv_type) if $policy eq 'traceable_member';
     return _matrix_members_result_type($recv_type) if $policy eq 'matrix_members';
     return _index_result_type($recv_type) if $policy eq 'index_by_receiver';
     return _matrix_neighbours_result_type($recv_type) if $policy eq 'matrix_neighbours';
@@ -430,8 +438,10 @@ sub method_fallibility_hint {
     my $policy = $spec->{fallibility} // 'never';
 
     return 'always' if $policy eq 'always';
+    return 'conditional' if $policy eq 'conditional';
     return 'contextual' if $policy eq 'contextual';
     if ($policy eq 'matrix_insert') {
+        return 'conditional' if defined($recv_type) && is_sequence_type($recv_type);
         return 'never' if !defined($recv_type) || !is_matrix_type($recv_type);
         my $meta = matrix_type_meta($recv_type);
         return $meta->{has_size} ? 'never' : 'conditional';

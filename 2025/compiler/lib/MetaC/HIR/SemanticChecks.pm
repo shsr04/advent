@@ -28,6 +28,7 @@ use MetaC::HIR::SemanticChecksExpr qw(
 use MetaC::TypeSpec qw(
     is_sequence_type
     sequence_element_type
+    sequence_member_type
 );
 
 our @EXPORT_OK = qw(enforce_hir_semantics);
@@ -399,6 +400,7 @@ sub _validate_stmt {
         compile_error("Semantic/F053-Type: for_each iterable must be sequence")
           if !defined($iter_t) || !is_sequence_type($iter_t);
         my $elem = sequence_element_type($iter_t);
+        $elem = sequence_member_type($elem) if defined($elem);
         my %loop_ctx = %$ctx;
         $loop_ctx{types} = _clone_hash($ctx->{types});
         $loop_ctx{mut} = _clone_hash($ctx->{mut});

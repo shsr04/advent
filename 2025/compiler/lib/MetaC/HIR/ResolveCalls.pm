@@ -32,6 +32,9 @@ use MetaC::TypeSpec qw(
     is_matrix_member_list_type
     sequence_element_type
     sequence_type_for_element
+    sequence_member_type
+    is_sequence_member_type
+    sequence_member_meta
     is_matrix_type
     matrix_type_meta
 );
@@ -79,7 +82,28 @@ sub _clone_env {
 
 sub _iterable_item_type_hint {
     my ($iterable_type) = @_;
-    return sequence_element_type($iterable_type);
+    my $elem = sequence_element_type($iterable_type);
+    return undef if !defined($elem);
+    return sequence_member_type($elem);
+}
+
+sub _sequence_member_base_type {
+    my ($type) = @_;
+    return $type if !defined($type) || $type eq '';
+    if (is_union_type($type)) {
+        my %uniq;
+        for my $m (@{ union_member_types($type) }) {
+            if (is_sequence_member_type($m)) {
+                my $meta = sequence_member_meta($m);
+                $m = $meta->{elem} if defined($meta) && defined($meta->{elem});
+            }
+            $uniq{$m} = 1 if defined($m) && $m ne '';
+        }
+        return join(' | ', sort keys %uniq);
+    }
+    return $type if !is_sequence_member_type($type);
+    my $meta = sequence_member_meta($type);
+    return defined($meta) ? $meta->{elem} : $type;
 }
 
 sub _callback_type_valid {
@@ -123,9 +147,10 @@ sub _method_param_type_compatible {
     my ($actual, $expected) = @_;
     return 0 if !defined($actual) || $actual eq '' || $actual eq 'unknown';
     return 0 if !defined($expected) || $expected eq '' || $expected eq 'unknown';
+    $actual = _sequence_member_base_type($actual);
     return 1 if $expected eq 'any';
     return 1 if $actual eq $expected;
-    return 1 if $expected eq 'number' && ($actual eq 'int' || $actual eq 'float' || $actual eq 'indexed_number');
+    return 1 if $expected eq 'number' && ($actual eq 'int' || $actual eq 'float' || $actual eq 'number');
     my $actual_non_error = _single_non_error_member_from_error_union($actual);
     return 1 if defined($actual_non_error) && $actual_non_error eq $expected;
     return 0;
@@ -451,8 +476,7 @@ sub _infer_expr_type_hint {
         return 'number' if ($recv_t // '') eq 'string';
         my $elem = sequence_element_type($recv_t);
         return undef if !defined $elem;
-        return 'number' if $elem eq 'indexed_number';
-        return $elem;
+        return sequence_member_type($elem);
     }
 
     if ($kind eq 'try') {
@@ -553,6 +577,12 @@ sub _resolve_expr {
           if !method_is_known($method);
         compile_error("ResolveCalls/F050-Call-Registry: cannot resolve receiver type for intrinsic method '$method'")
           if !defined($recv_type) || $recv_type eq '' || $recv_type eq 'unknown';
+        if ($method eq 'index' && !method_receiver_supported($method, $recv_type)) {
+            compile_error("ResolveCalls/F050-Traceability: method 'index' requires value with source index metadata");
+        }
+        if ($method eq 'neighbours' && !method_receiver_supported($method, $recv_type) && is_matrix_type($recv_type)) {
+            compile_error("ResolveCalls/F050-Traceability: method 'neighbours' requires value with source matrix-member metadata");
+        }
         compile_error("ResolveCalls/F050-Call-Registry: method '$method' is not defined for receiver type '$recv_type'")
           if !method_receiver_supported($method, $recv_type);
         _verify_method_parameter_contract(
@@ -676,7 +706,7 @@ sub _register_binding_from_stmt {
     if ($kind eq 'destructure_list') {
         my $list_t = _infer_expr_type_hint($stmt->{expr}, $env, $sigs, {});
         my $item_t = sequence_element_type($list_t);
-        $item_t = 'number' if defined($item_t) && $item_t eq 'indexed_number';
+        $item_t = _sequence_member_base_type($item_t);
         return if !defined $item_t;
         for my $v (@{ $stmt->{vars} // [] }) {
             $env->{$v} = $item_t if defined($v) && $v ne '';
@@ -776,6 +806,10 @@ sub _resolve_function_calls {
     my %region_by_id = map { $_->{id} => $_ } @{ $fn->{regions} // [] };
 
     my $schedule = $fn->{region_schedule} // [];
+    my %scheduled = ();
+    if (ref($schedule) eq 'ARRAY') {
+        %scheduled = map { $_ => 1 } @$schedule;
+    }
     if (ref($schedule) eq 'ARRAY') {
         for my $rid (@$schedule) {
             my $region = $region_by_id{$rid};
@@ -790,18 +824,13 @@ sub _resolve_function_calls {
                     seen_expr => {},
                     seen_stmt => {},
                 );
-                _resolve_expr(
-                    expr => $stmt,
-                    env  => $env,
-                    sigs => $sigs,
-                    seen => {},
-                );
                 $step->{payload} = stmt_to_payload($stmt);
             }
         }
     }
 
     for my $region (@{ $fn->{regions} // [] }) {
+        next if %scheduled && !$scheduled{$region->{id}};
         for my $step (@{ $region->{steps} // [] }) {
             my $stmt = step_payload_to_stmt($step->{payload});
             next if !defined $stmt;
@@ -811,12 +840,6 @@ sub _resolve_function_calls {
                 sigs      => $sigs,
                 seen_expr => {},
                 seen_stmt => {},
-            );
-            _resolve_expr(
-                expr => $stmt,
-                env  => $env,
-                sigs => $sigs,
-                seen => {},
             );
             $step->{payload} = stmt_to_payload($stmt);
         }

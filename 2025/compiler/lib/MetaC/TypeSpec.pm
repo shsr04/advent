@@ -25,6 +25,9 @@ our @EXPORT_OK = qw(
     is_matrix_member_list_type
     matrix_member_list_meta
     matrix_neighbor_list_type
+    sequence_member_type
+    is_sequence_member_type
+    sequence_member_meta
     is_sequence_type
     sequence_element_type
     sequence_type_for_element
@@ -287,6 +290,7 @@ sub is_supported_value_type {
     return 1 if $member eq 'null';
     return 1 if $member eq 'number_or_null';
     return 1 if is_array_type($member);
+    return 1 if is_sequence_member_type($member);
     return 1 if is_matrix_type($member);
     return 0;
 }
@@ -315,6 +319,24 @@ sub array_type_meta {
         elem => normalize_type_annotation(_decode_type_token($elem_token)),
     };
 }
+sub sequence_member_type {
+    my ($elem_type) = @_;
+    my $elem = normalize_type_annotation($elem_type // '');
+    return undef if $elem eq '' || $elem eq 'unknown';
+    return "sequence_member<e=" . _encode_type_token($elem) . ">";
+}
+sub is_sequence_member_type {
+    my ($type) = @_;
+    return defined($type) && $type =~ /^sequence_member<e=(?:[0-9A-F]{2})+>$/ ? 1 : 0;
+}
+sub sequence_member_meta {
+    my ($type) = @_;
+    return undef if !is_sequence_member_type($type);
+    my ($elem_token) = $type =~ /^sequence_member<e=((?:[0-9A-F]{2})+)>$/;
+    return {
+        elem => normalize_type_annotation(_decode_type_token($elem_token)),
+    };
+}
 sub sequence_type_for_element {
     my ($elem_type) = @_;
     my $elem = normalize_type_annotation($elem_type // '');
@@ -325,6 +347,10 @@ sub sequence_element_type {
     my ($type) = @_;
     my $t = normalize_type_annotation($type // '');
     return undef if $t eq '' || $t eq 'unknown';
+    if (is_sequence_member_type($t)) {
+        my $meta = sequence_member_meta($t);
+        return $meta->{elem} if defined($meta) && defined($meta->{elem});
+    }
     if (is_array_type($t)) {
         my $meta = array_type_meta($t);
         return $meta->{elem} if defined($meta) && defined($meta->{elem});

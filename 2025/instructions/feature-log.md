@@ -543,7 +543,7 @@ Use this block for each feature:
     - backend/materialization purity invariant active in test runner (`type_is_*` forbidden in `HIR/BackendC.pm` and `HIR/MaterializeC.pm`).
 
 ### F-050 `Normative Domain Alignment`
-- Status: in_progress (reopened)
+- Status: rejected (superseded by F-053)
 - Spec file: `instructions/normative-domain-alignment-f050.md` (planned)
 - Correctness classes: C0/C1/C2/C3/C4
 - Key guarantees:
@@ -586,7 +586,7 @@ Use this block for each feature:
     - `B4` closed: generic array domains like `(number | string)[]` accepted across declaration/return/call paths (covered by `f050_blocker_b4_union_array_domain_ok`).
 
 ### F-051 `HIR-Native Cutover Completion`
-- Status: rejected (2026-03-02)
+- Status: rejected (superseded by F-053)
 - Spec file: `instructions/hir-native-cutover-f051.md` (planned)
 - Correctness classes: C0/C1/C2/C3/C4
 - Key guarantees (target state):

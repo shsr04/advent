@@ -215,15 +215,18 @@ sub parse_function_header {
     $rest = trim($rest);
 
     my $return_type;
+    my $declared_return_numeric_kind;
     if ($rest ne '') {
         return undef if $rest !~ /^:\s*(.+)$/;
         $return_type = trim($1);
+        $declared_return_numeric_kind = _declared_numeric_kind_from_raw($return_type);
     }
 
     return {
-        name        => $name,
-        args        => $args,
-        return_type => $return_type,
+        name                         => $name,
+        args                         => $args,
+        return_type                  => $return_type,
+        declared_return_numeric_kind => $declared_return_numeric_kind,
     };
 }
 
@@ -247,7 +250,12 @@ sub collect_functions {
 
         my $header = parse_function_header($trimmed);
         if (defined $header) {
-            my ($name, $args, $return_type) = ($header->{name}, $header->{args}, $header->{return_type});
+            my ($name, $args, $return_type, $declared_return_numeric_kind) = (
+                $header->{name},
+                $header->{args},
+                $header->{return_type},
+                $header->{declared_return_numeric_kind},
+            );
             my $header_line_no = $idx + 1;
 
             compile_error("Duplicate function definition: $name") if exists $functions{$name};
@@ -281,6 +289,7 @@ sub collect_functions {
                 name               => $name,
                 args               => $args,
                 return_type        => $return_type,
+                declared_return_numeric_kind => $declared_return_numeric_kind,
                 header_line_no     => $header_line_no,
                 body_start_line_no => $header_line_no + 1,
                 body_lines         => \@body,

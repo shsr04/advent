@@ -352,6 +352,7 @@ sub _lower_function_hir {
         name         => $fn->{name},
         params       => $fn->{parsed_params},
         return_type  => $fn->{return_type},
+        declared_return_numeric_kind => $fn->{declared_return_numeric_kind},
         regions      => $regions,
         region_schedule => $lowered->{schedule},
         edges        => $edges,
