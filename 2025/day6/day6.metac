@@ -27,7 +27,7 @@ function sumProblems(): number|error {
     }
     
     for const i in seq(0, numbers.size()-2) {
-        numbers.insert(numbers[i]*10+column[i], i)?
+    numbers.insert(numbers[i]*10+column[i], i)?²
     }
     
     if isSeparator(column) {
