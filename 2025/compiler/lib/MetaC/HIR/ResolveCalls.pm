@@ -3,25 +3,50 @@ use strict;
 use warnings;
 use Exporter 'import';
 use Scalar::Util qw(refaddr);
+use MetaC::Support qw(compile_error);
 use MetaC::HIR::TypedNodes qw(step_payload_to_stmt stmt_to_payload);
-use MetaC::IntrinsicRegistry qw(method_base_specs intrinsic_method_op_id);
+use MetaC::HIR::OpRegistry qw(
+    user_call_op_id
+    user_method_style_allowed
+    builtin_is_known
+    builtin_op_id
+    builtin_result_type_hint
+    builtin_param_contract
+    method_is_known
+    method_receiver_supported
+    method_op_id
+    method_result_type_hint
+    method_fallibility_hint
+    method_callback_contract
+    method_param_contract
+);
 
 use MetaC::TypeSpec qw(
+    is_union_type
+    union_contains_member
+    union_member_types
+    is_supported_value_type
+    is_supported_generic_union_return
+    is_array_type
+    is_matrix_member_type
+    is_matrix_member_list_type
+    sequence_element_type
+    sequence_type_for_element
     is_matrix_type
     matrix_type_meta
-    matrix_member_type
-    matrix_member_list_type
-    is_matrix_member_type
-    matrix_member_meta
-    is_matrix_member_list_type
-    matrix_member_list_meta
-    matrix_neighbor_list_type
-    non_error_member_of_error_union
-    is_array_type
-    array_type_meta
 );
 
 our @EXPORT_OK = qw(resolve_hir_calls);
+
+sub _single_non_error_member_from_error_union {
+    my ($type) = @_;
+    return undef if !defined($type);
+    return undef if !is_union_type($type);
+    return undef if !union_contains_member($type, 'error');
+    my @members = grep { $_ ne 'error' } @{ union_member_types($type) };
+    return undef if @members != 1;
+    return $members[0];
+}
 
 sub _function_sigs {
     my ($hir) = @_;
@@ -54,73 +79,269 @@ sub _clone_env {
 
 sub _iterable_item_type_hint {
     my ($iterable_type) = @_;
-    return 'number' if ($iterable_type // '') eq 'number_list';
-    return 'string' if ($iterable_type // '') eq 'string_list';
-    return 'bool' if ($iterable_type // '') eq 'bool_list';
-    return 'number_list' if ($iterable_type // '') eq 'number_list_list';
-    if (defined $iterable_type && $iterable_type =~ /^matrix_member_list<(.+)>$/) {
-        return "matrix_member<$1>";
-    }
-    if (is_array_type($iterable_type)) {
-        my $meta = array_type_meta($iterable_type);
-        return $meta->{elem} if defined $meta && defined $meta->{elem};
-    }
-    return undef;
+    return sequence_element_type($iterable_type);
 }
 
-sub _infer_method_result_hint {
-    my ($method, $recv_type) = @_;
-    return 'number' if $method eq 'size' || $method eq 'count';
-    return 'string_list' if $method eq 'chars';
-    return 'string_list' if $method eq 'chunk';
-    return 'bool' if $method eq 'isBlank';
-    return 'string_list | error' if $method eq 'split' || $method eq 'match';
-    return 'number' if $method eq 'compareTo' || $method eq 'andThen' || $method eq 'push';
-    return 'bool' if $method eq 'any' || $method eq 'all';
-    return 'indexed_number' if $method eq 'max';
-    if ($method eq 'last') {
-        return 'string' if ($recv_type // '') eq 'string_list';
-        return 'number' if ($recv_type // '') eq 'number_list';
-        return 'number_list' if ($recv_type // '') eq 'number_list_list';
-        return 'bool' if ($recv_type // '') eq 'bool_list';
-        return 'indexed_number' if ($recv_type // '') eq 'indexed_number_list';
-        return undef;
-    }
-    return 'indexed_number_list' if $method eq 'sort';
-    return $recv_type if $method eq 'map';
-    return $recv_type if $method eq 'slice' || $method eq 'filter' || $method eq 'sortBy' || $method eq 'insert' || $method eq 'log';
-    return undef if !defined $recv_type;
-
-    if ($method eq 'members' && is_matrix_type($recv_type)) {
-        return matrix_member_list_type($recv_type);
-    }
-    if ($method eq 'index') {
-        return 'number_list' if is_matrix_member_type($recv_type);
-        return 'number';
-    }
-    if ($method eq 'neighbours') {
-        if (is_matrix_type($recv_type)) {
-            return matrix_neighbor_list_type($recv_type);
+sub _callback_type_valid {
+    my ($type) = @_;
+    return 0 if !defined($type) || $type eq '' || $type eq 'unknown' || $type eq 'inferred' || $type eq 'empty_list';
+    return 1 if $type eq 'comparison_result';
+    return 1 if is_supported_value_type($type);
+    return 1 if is_supported_generic_union_return($type);
+    return 1 if is_array_type($type) || is_matrix_type($type) || is_matrix_member_type($type) || is_matrix_member_list_type($type);
+    if (is_union_type($type)) {
+        my $members = union_member_types($type);
+        for my $m (@$members) {
+            return 0 if !_callback_type_valid($m);
         }
-        if (is_matrix_member_type($recv_type)) {
-            my $meta = matrix_member_meta($recv_type);
-            return 'number_list' if $meta->{elem} eq 'number';
-            return 'string_list' if $meta->{elem} eq 'string';
-        }
+        return 1;
     }
-    return undef;
+    return 0;
 }
 
-sub _method_fallibility_hint {
-    my ($method, $recv_type) = @_;
-    my $spec = method_base_specs()->{$method};
-    return 'always' if defined($spec) && ($spec->{fallibility} // '') eq 'always';
-    return 'contextual' if defined($spec) && ($spec->{fallibility} // '') eq 'mapper';
-    if ($method eq 'insert' && defined $recv_type && is_matrix_type($recv_type)) {
-        my $meta = matrix_type_meta($recv_type);
-        return $meta->{has_size} ? 'never' : 'conditional';
+sub _matches_base_or_error {
+    my ($actual, $base) = @_;
+    return 1 if defined($actual) && $actual eq $base;
+    return 0 if !defined($actual) || !is_union_type($actual) || !union_contains_member($actual, 'error');
+    my @rest = grep { $_ ne 'error' } @{ union_member_types($actual) };
+    return @rest == 1 && $rest[0] eq $base ? 1 : 0;
+}
+
+sub _resolve_callback_type_symbol {
+    my (%args) = @_;
+    my $symbol = $args{symbol};
+    my $ctx = $args{ctx} // {};
+    my $method = $args{method} // '';
+    my $part = $args{part} // 'type';
+    return undef if !defined($symbol) || $symbol eq '';
+    return $symbol if $symbol eq 'bool' || $symbol eq 'comparison_result';
+    return $ctx->{$symbol} if exists $ctx->{$symbol};
+    compile_error("ResolveCalls/F050-Callback-Signature: '$method' callback contract has unknown $part symbol '$symbol'");
+}
+
+sub _method_param_type_compatible {
+    my ($actual, $expected) = @_;
+    return 0 if !defined($actual) || $actual eq '' || $actual eq 'unknown';
+    return 0 if !defined($expected) || $expected eq '' || $expected eq 'unknown';
+    return 1 if $expected eq 'any';
+    return 1 if $actual eq $expected;
+    return 1 if $expected eq 'number' && ($actual eq 'int' || $actual eq 'float' || $actual eq 'indexed_number');
+    my $actual_non_error = _single_non_error_member_from_error_union($actual);
+    return 1 if defined($actual_non_error) && $actual_non_error eq $expected;
+    return 0;
+}
+
+sub _expected_param_type_valid {
+    my ($expected) = @_;
+    return 1 if defined($expected) && $expected eq 'any';
+    return _callback_type_valid($expected);
+}
+
+sub _verify_callback_signature {
+    my (%args) = @_;
+    my $method = $args{method};
+    my $role = $args{role};
+    my $expr = $args{expr};
+    my $arity = int($args{arity} // 0);
+    my $param_types = $args{param_types} // [];
+    my $return_base = $args{return_base};
+    my $env = $args{env};
+    my $sigs = $args{sigs};
+    my $has_bad_param = scalar(grep { !_callback_type_valid($_) } @$param_types) > 0 ? 1 : 0;
+
+    compile_error("ResolveCalls/F050-Callback-Signature: '$method' $role has invalid expected type contract")
+      if !$arity || @$param_types != $arity || $has_bad_param || !_callback_type_valid($return_base);
+    compile_error("ResolveCalls/F050-Callback-Signature: '$method' $role must be provided")
+      if !defined($expr) || ref($expr) ne 'HASH';
+
+    my $kind = $expr->{kind} // '';
+    my $return_t;
+    if ($kind eq 'lambda1' || $kind eq 'lambda2') {
+        my @params = $kind eq 'lambda1' ? (($expr->{param} // '')) : (($expr->{param1} // ''), ($expr->{param2} // ''));
+        compile_error("ResolveCalls/F050-Callback-Signature: '$method' $role expects $arity parameter(s)")
+          if @params != $arity || grep { $_ eq '' } @params;
+        my $lambda_env = _clone_env($env);
+        for my $i (0 .. $#params) {
+            $lambda_env->{$params[$i]} = $param_types->[$i];
+        }
+        $return_t = _infer_expr_type_hint($expr->{body}, $lambda_env, $sigs, {});
+    } elsif ($kind eq 'ident') {
+        my $name = $expr->{name} // '';
+        my $sig = $sigs->{$name};
+        compile_error("ResolveCalls/F050-Callback-Signature: unknown callback function '$name' for '$method' $role")
+          if !defined($sig) || ref($sig) ne 'HASH';
+        my $params = $sig->{params} // [];
+        compile_error("ResolveCalls/F050-Callback-Signature: callback function '$name' for '$method' $role expects $arity parameter(s)")
+          if ref($params) ne 'ARRAY' || @$params != $arity;
+        for my $i (0 .. $arity - 1) {
+            my $decl = $params->[$i]{type};
+            my $expect = $param_types->[$i];
+            compile_error("ResolveCalls/F050-Callback-Signature: callback function '$name' parameter " . ($i + 1) . " type must be '$expect'")
+              if !_callback_type_valid($decl) || $decl ne $expect;
+        }
+        $return_t = $sig->{return_type};
+    } else {
+        compile_error("ResolveCalls/F050-Callback-Signature: '$method' $role must be a lambda or named function reference");
     }
-    return 'never';
+
+    compile_error("ResolveCalls/F050-Callback-Signature: '$method' $role return type is unresolved")
+      if !defined($return_t) || $return_t eq '' || $return_t eq 'unknown';
+    compile_error("ResolveCalls/F050-Callback-Signature: '$method' $role return type '$return_t' is invalid")
+      if !_callback_type_valid($return_t);
+    compile_error("ResolveCalls/F050-Callback-Signature: '$method' $role must return '$return_base' or '$return_base | error' (got '$return_t')")
+      if !_matches_base_or_error($return_t, $return_base);
+}
+
+sub _verify_method_callback_contract {
+    my (%args) = @_;
+    my $method = $args{method} // '';
+    my $recv_type = $args{recv_type};
+    my $arg_exprs = $args{arg_exprs} // [];
+    my $env = $args{env};
+    my $sigs = $args{sigs};
+    my $contract = method_callback_contract($method);
+    return if !defined($contract);
+
+    my $arg_count = int($contract->{total_arg_count} // 0);
+    compile_error("ResolveCalls/F050-Callback-Signature: '$method' callback contract has invalid arg count")
+      if $arg_count <= 0;
+    compile_error("ResolveCalls/F050-Callback-Signature: '$method' expects exactly $arg_count argument(s)")
+      if @$arg_exprs != $arg_count;
+
+    my $elem_t = sequence_element_type($recv_type);
+    compile_error("ResolveCalls/F050-Callback-Signature: cannot infer sequence element type for '$method' receiver '$recv_type'")
+      if !defined($elem_t) || !_callback_type_valid($elem_t);
+    my %ctx = (elem => $elem_t);
+
+    if (defined($contract->{initial_arg_index})) {
+        my $initial_idx = int($contract->{initial_arg_index});
+        compile_error("ResolveCalls/F050-Callback-Signature: '$method' callback contract has invalid initial argument index")
+          if $initial_idx < 0 || $initial_idx >= @$arg_exprs;
+        my $initial_t = _infer_expr_type_hint($arg_exprs->[$initial_idx], $env, $sigs, {});
+        compile_error("ResolveCalls/F050-Callback-Signature: '$method' initial value type is unresolved")
+          if !defined($initial_t) || !_callback_type_valid($initial_t);
+        my $initial_policy = $contract->{initial_type_policy} // 'any_valid';
+        if ($initial_policy eq 'elem' && $initial_t ne $elem_t) {
+            compile_error("ResolveCalls/F050-Callback-Signature: '$method' initial value must have element type '$elem_t' (got '$initial_t')");
+        }
+        compile_error("ResolveCalls/F050-Callback-Signature: '$method' callback contract has invalid initial policy '$initial_policy'")
+          if $initial_policy ne 'any_valid' && $initial_policy ne 'elem';
+        $ctx{initial} = $initial_t;
+    }
+
+    my $callback_idx = int($contract->{callback_arg_index} // -1);
+    compile_error("ResolveCalls/F050-Callback-Signature: '$method' callback contract has invalid callback argument index")
+      if $callback_idx < 0 || $callback_idx >= @$arg_exprs;
+    my $callback_arity = int($contract->{callback_arity} // 0);
+    my $param_symbols = $contract->{param_type_symbols} // [];
+    compile_error("ResolveCalls/F050-Callback-Signature: '$method' callback contract has invalid parameter symbols")
+      if ref($param_symbols) ne 'ARRAY' || $callback_arity <= 0 || @$param_symbols != $callback_arity;
+    my @params = map {
+        _resolve_callback_type_symbol(
+            symbol => $_,
+            ctx => \%ctx,
+            method => $method,
+            part => 'parameter',
+        );
+    } @$param_symbols;
+    my $return_base = _resolve_callback_type_symbol(
+        symbol => $contract->{return_type_symbol},
+        ctx => \%ctx,
+        method => $method,
+        part => 'return',
+    );
+
+    _verify_callback_signature(
+        method      => $method,
+        role        => 'callback',
+        expr        => $arg_exprs->[$callback_idx],
+        arity       => $callback_arity,
+        param_types => \@params,
+        return_base => $return_base,
+        env         => $env,
+        sigs        => $sigs,
+    );
+}
+
+sub _verify_method_parameter_contract {
+    my (%args) = @_;
+    my $method = $args{method} // '';
+    my $recv_type = $args{recv_type};
+    my $arg_exprs = $args{arg_exprs} // [];
+    my $env = $args{env};
+    my $sigs = $args{sigs};
+    my $contract = method_param_contract($method, $recv_type);
+    compile_error("ResolveCalls/F050-Param-Policy: method '$method' has invalid parameter policy")
+      if !defined($contract) || ref($contract) ne 'HASH';
+
+    return _verify_param_contract(
+        label => "method '$method'",
+        policy => $contract->{policy},
+        arity => $contract->{arity},
+        param_types => $contract->{param_types},
+        arg_exprs => $arg_exprs,
+        env => $env,
+        sigs => $sigs,
+        allow_callback_contract => 1,
+    );
+}
+
+sub _verify_param_contract {
+    my (%args) = @_;
+    my $label = $args{label} // 'call';
+    my $policy = $args{policy} // 'unknown';
+    my $arity = int($args{arity} // -1);
+    my $param_types = $args{param_types} // [];
+    my $arg_exprs = $args{arg_exprs} // [];
+    my $env = $args{env};
+    my $sigs = $args{sigs};
+    my $allow_callback_contract = $args{allow_callback_contract} ? 1 : 0;
+
+    compile_error("ResolveCalls/F050-Param-Policy: $label has unknown parameter policy")
+      if $policy eq 'unknown';
+    if ($policy eq 'callback_contract') {
+        compile_error("ResolveCalls/F050-Param-Policy: $label has unsupported callback parameter policy")
+          if !$allow_callback_contract;
+        return 'callback_contract';
+    }
+    compile_error("ResolveCalls/F050-Param-Policy: $label parameter contract is invalid")
+      if ($policy ne 'none' && $policy ne 'fixed') || $arity < 0 || ref($param_types) ne 'ARRAY' || @$param_types != $arity;
+    compile_error("ResolveCalls/F050-Param-Policy: $label expects exactly $arity argument(s)")
+      if @$arg_exprs != $arity;
+
+    for my $i (0 .. $arity - 1) {
+        my $actual = _infer_expr_type_hint($arg_exprs->[$i], $env, $sigs, {});
+        my $expected = $param_types->[$i];
+        compile_error("ResolveCalls/F050-Param-Policy: $label has invalid expected parameter type '$expected'")
+          if !_expected_param_type_valid($expected);
+        compile_error("ResolveCalls/F050-Param-Policy: $label argument " . ($i + 1) . " type is unresolved")
+          if !defined($actual) || $actual eq '' || $actual eq 'unknown';
+        compile_error("ResolveCalls/F050-Param-Policy: $label argument " . ($i + 1) . " type must be '$expected' (got '$actual')")
+          if !_method_param_type_compatible($actual, $expected);
+    }
+    return 'checked';
+}
+
+sub _verify_named_call_parameter_contract {
+    my (%args) = @_;
+    my $name = $args{name} // '';
+    my $arg_exprs = $args{arg_exprs} // [];
+    my $env = $args{env};
+    my $sigs = $args{sigs};
+    my $contract = $args{contract};
+    my $call_kind = $args{call_kind} // 'call';
+    compile_error("ResolveCalls/F050-Param-Policy: $call_kind '$name' has invalid parameter policy")
+      if !defined($contract) || ref($contract) ne 'HASH';
+
+    _verify_param_contract(
+        label => "$call_kind '$name'",
+        policy => $contract->{param_policy},
+        arity => $contract->{param_arity},
+        param_types => $contract->{param_type_contract},
+        arg_exprs => $arg_exprs,
+        env => $env,
+        sigs => $sigs,
+    );
 }
 
 sub _canonical_call_expr {
@@ -149,15 +370,37 @@ sub _call_result_hint {
     if (exists $sigs->{$name}) {
         return $sigs->{$name}{return_type};
     }
-    return 'number | error' if $name eq 'parseNumber';
-    return 'error' if $name eq 'error';
-    return 'number' if $name eq 'max' || $name eq 'min' || $name eq 'last';
-    return 'number_list' if $name eq 'seq';
-    if ($name eq 'log') {
-        return undef if !defined($expr->{args}) || ref($expr->{args}) ne 'ARRAY' || !@{ $expr->{args} };
-        return _infer_expr_type_hint($expr->{args}[0], $env, $sigs, $seen);
-    }
-    return undef;
+    return builtin_result_type_hint(
+        $name,
+        $expr->{args},
+        sub {
+            my ($arg_expr) = @_;
+            return _infer_expr_type_hint($arg_expr, $env, $sigs, $seen);
+        },
+    );
+}
+
+sub _user_call_contract {
+    my (%args) = @_;
+    my $name = $args{name};
+    my $arg_type_hints = $args{arg_type_hints} // [];
+    my $sigs = $args{sigs};
+    my $sig = $sigs->{$name};
+    return undef if !defined($sig) || ref($sig) ne 'HASH';
+
+    my $param_types = [ map { $_->{type} } @{ $sig->{params} // [] } ];
+    return {
+        schema           => 'f050-call-contract-v1',
+        call_kind        => 'user',
+        op_id            => user_call_op_id(),
+        target_name      => $name,
+        arity            => scalar(@$arg_type_hints),
+        result_type_hint => $sig->{return_type} // 'unknown',
+        param_policy     => 'fixed',
+        param_arity      => scalar(@$param_types),
+        arg_type_hints   => $arg_type_hints,
+        param_type_contract => $param_types,
+    };
 }
 
 sub _infer_expr_type_hint {
@@ -180,10 +423,7 @@ sub _infer_expr_type_hint {
         my @types = map { _infer_expr_type_hint($_, $env, $sigs, $seen) } @$items;
         return undef if grep { !defined $_ } @types;
         my %uniq = map { $_ => 1 } @types;
-        return 'number_list' if keys(%uniq) == 1 && exists $uniq{number};
-        return 'string_list' if keys(%uniq) == 1 && exists $uniq{string};
-        return 'bool_list' if keys(%uniq) == 1 && exists $uniq{bool};
-        return 'number_list_list' if keys(%uniq) == 1 && exists $uniq{number_list};
+        return sequence_type_for_element($types[0]) if keys(%uniq) == 1;
         return undef;
     }
 
@@ -202,17 +442,17 @@ sub _infer_expr_type_hint {
 
     if ($kind eq 'index') {
         my $recv_t = _infer_expr_type_hint($expr->{recv}, $env, $sigs, $seen);
-        return 'number' if ($recv_t // '') eq 'string' || ($recv_t // '') eq 'number_list' || ($recv_t // '') eq 'indexed_number_list';
-        return 'string' if ($recv_t // '') eq 'string_list';
-        return 'bool' if ($recv_t // '') eq 'bool_list';
-        return 'number_list' if ($recv_t // '') eq 'number_list_list';
-        return undef;
+        return 'number' if ($recv_t // '') eq 'string';
+        my $elem = sequence_element_type($recv_t);
+        return undef if !defined $elem;
+        return 'number' if $elem eq 'indexed_number';
+        return $elem;
     }
 
     if ($kind eq 'try') {
         my $inner_t = _infer_expr_type_hint($expr->{expr}, $env, $sigs, $seen);
         return undef if !defined $inner_t;
-        my $non_error = non_error_member_of_error_union($inner_t);
+        my $non_error = _single_non_error_member_from_error_union($inner_t);
         return defined($non_error) ? $non_error : $inner_t;
     }
 
@@ -232,7 +472,7 @@ sub _infer_expr_type_hint {
             return $hint if defined($hint) && $hint ne '' && $hint ne 'unknown';
         }
         my $recv_t = _infer_expr_type_hint($expr->{recv}, $env, $sigs, $seen);
-        return _infer_method_result_hint($expr->{method} // '', $recv_t);
+        return method_result_type_hint($expr->{method} // '', $recv_t);
     }
 
     return undef;
@@ -248,8 +488,10 @@ sub _resolve_expr {
 
     my $addr = refaddr($expr);
     return if defined($addr) && $seen->{$addr}++;
+    my $kind = $expr->{kind} // '';
 
     for my $k (sort keys %$expr) {
+        next if ($kind eq 'lambda1' || $kind eq 'lambda2') && $k eq 'body';
         my $v = $expr->{$k};
         if (ref($v) eq 'HASH') {
             _resolve_expr(expr => $v, env => $env, sigs => $sigs, seen => $seen);
@@ -262,7 +504,6 @@ sub _resolve_expr {
         }
     }
 
-    my $kind = $expr->{kind} // '';
     if ($kind eq 'method_call') {
         my $method = $expr->{method} // '';
         my $recv_type = _infer_expr_type_hint($expr->{recv}, $env, $sigs, {});
@@ -271,15 +512,63 @@ sub _resolve_expr {
             defined($t) ? $t : 'unknown'
         } @{ $expr->{args} // [] };
 
+        my $user_sig = $sigs->{$method};
+        if (defined($user_sig) && user_method_style_allowed($user_sig)) {
+            my @canonical_args = ($expr->{recv}, @{ $expr->{args} // [] });
+            my @full_arg_hints = (defined($recv_type) ? $recv_type : 'unknown', @arg_hints);
+            my $contract = _user_call_contract(
+                name           => $method,
+                arg_type_hints => \@full_arg_hints,
+                sigs           => $sigs,
+            );
+            _verify_named_call_parameter_contract(
+                name     => $method,
+                call_kind => 'function',
+                contract => $contract,
+                arg_exprs => \@canonical_args,
+                env      => $env,
+                sigs     => $sigs,
+            );
+            $expr->{kind} = 'call';
+            $expr->{name} = $method;
+            $expr->{args} = \@canonical_args;
+            delete $expr->{method};
+            delete $expr->{recv};
+            $expr->{resolved_call} = $contract;
+            $expr->{canonical_call} = _canonical_call_expr(expr => $expr, contract => $contract);
+            return;
+        }
+
+        compile_error("ResolveCalls/F050-Call-Registry: unknown intrinsic method '$method'")
+          if !method_is_known($method);
+        compile_error("ResolveCalls/F050-Call-Registry: cannot resolve receiver type for intrinsic method '$method'")
+          if !defined($recv_type) || $recv_type eq '' || $recv_type eq 'unknown';
+        compile_error("ResolveCalls/F050-Call-Registry: method '$method' is not defined for receiver type '$recv_type'")
+          if !method_receiver_supported($method, $recv_type);
+        _verify_method_parameter_contract(
+            method    => $method,
+            recv_type => $recv_type,
+            arg_exprs => $expr->{args} // [],
+            env       => $env,
+            sigs      => $sigs,
+        );
+        _verify_method_callback_contract(
+            method    => $method,
+            recv_type => $recv_type,
+            arg_exprs => $expr->{args} // [],
+            env       => $env,
+            sigs      => $sigs,
+        );
+
         my $contract = {
             schema              => 'f050-call-contract-v1',
             call_kind           => 'intrinsic_method',
-            op_id               => intrinsic_method_op_id($method),
+            op_id               => method_op_id($method),
             method_name         => $method,
             arity               => scalar(@{ $expr->{args} // [] }),
             receiver_type_hint  => defined($recv_type) ? $recv_type : 'unknown',
-            result_type_hint    => _infer_method_result_hint($method, $recv_type) // 'unknown',
-            fallibility         => _method_fallibility_hint($method, $recv_type),
+            result_type_hint    => method_result_type_hint($method, $recv_type) // 'unknown',
+            fallibility         => method_fallibility_hint($method, $recv_type),
             arg_type_hints      => \@arg_hints,
         };
 
@@ -297,27 +586,44 @@ sub _resolve_expr {
 
     if ($kind eq 'call') {
         my $name = $expr->{name} // '';
-        my $call_kind = exists $sigs->{$name} ? 'user' : 'builtin';
-        my $return_hint = _call_result_hint($expr, $env, $sigs, {});
         my @arg_hints = map {
             my $t = _infer_expr_type_hint($_, $env, $sigs, {});
             defined($t) ? $t : 'unknown'
         } @{ $expr->{args} // [] };
 
-        my $contract = {
-            schema           => 'f050-call-contract-v1',
-            call_kind        => $call_kind,
-            op_id            => ($call_kind eq 'user' ? "call.user.$name.v1" : "call.builtin.$name.v1"),
-            target_name      => $name,
-            arity            => scalar(@{ $expr->{args} // [] }),
-            result_type_hint => defined($return_hint) ? $return_hint : 'unknown',
-            arg_type_hints   => \@arg_hints,
-        };
-
-        if ($call_kind eq 'user') {
-            my $sig = $sigs->{$name};
-            $contract->{param_type_contract} = [ map { $_->{type} } @{ $sig->{params} // [] } ];
+        my $contract = _user_call_contract(
+            name           => $name,
+            arg_type_hints => \@arg_hints,
+            sigs           => $sigs,
+        );
+        if (!defined $contract) {
+            compile_error("ResolveCalls/F050-Call-Registry: unknown function or builtin '$name'")
+              if !builtin_is_known($name);
+            my $param_contract = builtin_param_contract($name);
+            compile_error("ResolveCalls/F050-Param-Policy: builtin '$name' has invalid parameter policy")
+              if !defined($param_contract) || ref($param_contract) ne 'HASH';
+            my $return_hint = _call_result_hint($expr, $env, $sigs, {});
+            $contract = {
+                schema           => 'f050-call-contract-v1',
+                call_kind        => 'builtin',
+                op_id            => builtin_op_id($name),
+                target_name      => $name,
+                arity            => scalar(@{ $expr->{args} // [] }),
+                result_type_hint => defined($return_hint) ? $return_hint : 'unknown',
+                param_policy     => $param_contract->{policy} // 'unknown',
+                param_arity      => int($param_contract->{arity} // 0),
+                arg_type_hints   => \@arg_hints,
+                param_type_contract => $param_contract->{param_types} // [],
+            };
         }
+        _verify_named_call_parameter_contract(
+            name      => $name,
+            call_kind => $contract->{call_kind} // 'function',
+            contract  => $contract,
+            arg_exprs => $expr->{args} // [],
+            env       => $env,
+            sigs      => $sigs,
+        );
         $expr->{resolved_call} = $contract;
         $expr->{canonical_call} = _canonical_call_expr(expr => $expr, contract => $contract);
     }
@@ -346,7 +652,7 @@ sub _register_binding_from_stmt {
         return if !defined($name) || $name eq '';
         my $expr = defined $stmt->{expr} ? $stmt->{expr} : $stmt->{first};
         my $type = _infer_expr_type_hint($expr, $env, $sigs, {});
-        my $non_error = defined($type) ? non_error_member_of_error_union($type) : undef;
+        my $non_error = _single_non_error_member_from_error_union($type);
         $env->{$name} = defined($non_error) ? $non_error : $type
           if defined($type) && $type ne '';
         return;
@@ -354,11 +660,8 @@ sub _register_binding_from_stmt {
 
     if ($kind eq 'destructure_list') {
         my $list_t = _infer_expr_type_hint($stmt->{expr}, $env, $sigs, {});
-        my $item_t = !defined($list_t) ? undef
-          : $list_t eq 'number_list' ? 'number'
-          : $list_t eq 'string_list' ? 'string'
-          : $list_t eq 'bool_list' ? 'bool'
-          : undef;
+        my $item_t = sequence_element_type($list_t);
+        $item_t = 'number' if defined($item_t) && $item_t eq 'indexed_number';
         return if !defined $item_t;
         for my $v (@{ $stmt->{vars} // [] }) {
             $env->{$v} = $item_t if defined($v) && $v ne '';

@@ -88,11 +88,13 @@ When a function does not specify a return type, it returns no value. The excepti
 A function without a return type *can* use the `return` statement to exit early.
 A function with a return type *must* return a conformant value in all of its execution paths.
 
+The program must not call any function which is not defined.
+
 ### 1.1 Fluent function invocation
 
 A function with at least 1 parameter *can* be invoked *either* by function-style invocation *or* by method-style invocation.
-- Function-style invocation has the form: `<name>(<arg1>, <arg2>, ...)`
-- Method-style invocation has the form: `<arg1>.<name>(<arg2>, ...)`
+- Function-style invocation has the form: `<name>(<arg1> [, <arg2>, ...])`
+- Method-style invocation has the form: `<arg1>.<name>([<arg2>, ...])`
 
 Both forms are functionally equivalent.
 
@@ -236,6 +238,8 @@ The program must not use error propagation if the enclosing function has a non-`
 
 The program must not perform invalid operations, as *specified* in this section.
 
+The program must not perform any operations which are *neither* defined in this section *nor* specified in the program itself.
+
 The program must not produce a runtime error for operations which are not explicitly marked as fallible by having an `error`-containing return type.
 
 The following general-purpose symbols and operations are available:
@@ -245,10 +249,30 @@ The following general-purpose symbols and operations are available:
 - `seq(start: int, end: int): int[]`
   - Returns the sequence of numbers from `start` to `end`, inclusively.
   - If `start > end`, returns an empty sequence.
+- `parseNumber(input: string): number | error`
+  - Returns the input string, parsed as a number.
+  - Fails if the input is not a numeric string.
+- `max(a: number, b: number): number`
+  - Returns the maximum of the given values.
+- `min(a: number, b: number): number`
+  - Returns the minimum of the given values.
 
 ### 5.1 Comparison operations
 
 A comparison operation *can* only occur between two operands which share at least one basic type. Two operands are equal if they contain exactly the same values. Otherwise, they are not equal.
+
+When ordering elements of the same type, the following comparison operations are available:
+- `<type>.compareTo(<other: type>): ComparisonResult`
+  - Returns an opaque type which indicates if the target value is `less than`, `equal` or `greater than` the `<other>` value.
+- `ComparisonResult.andThen(<next: ComparisonResult>): ComparisonResult`
+  - Returns the subsequent comparison result, which is applied only if the preceding comparison produced an `equal` result. This allows chaining comparisons for staged execution.
+
+The built-in types use the following default comparison operation:
+- Number: numerical comparison
+- String: lexicographical comparison
+- Sequence: first by size, then recursive element-wise comparison
+- Matrix: dimension-array comparison
+- Boolean: *no predefined comparison*
 
 ### 5.2 Mathematical operations
 
@@ -306,6 +330,7 @@ The following operations are available on sequence-based types `S: <type>[] with
 - `S.filter(<filter>): <type>[] [| error]`
   - Returns the sequence, where an element `x` is dropped exactly if `<filter>(x) == false`.
   - Fallible: exactly if `<filter>` is fallible.
+- `S.count()` => equivalent to `S.size()`
 - `S.any(<predicate>): boolean [| error]`
   - Returns true exactly if any element satisfies `<predicate>`.
   - Fallible: exactly if `<predicate>` is fallible.
@@ -320,6 +345,14 @@ The following operations are available on sequence-based types `S: <type>[] with
   - Fallible: exactly if `<scanner>` is fallible.
 - `S.reverse(): S`
   - Returns the sequence in reverse order.
+- `S.sort(): S`
+  - Returns the sequence, sorted using the default comparison operation.
+- `S.sortBy(<comparator: (x,y) => ComparisonResult>): S [| error]`
+  - Returns the sequence, sorted using the `<comparator>` function. For each application of `<comparator>`, if the `ComparisonResult` is `less than` or `equal`, then `x` is placed before `y`. Otherwise, `y` is placed before `x`.
+  - Fallible: exactly if `<comparator>` is fallible.
+- `S.slice(<from: int>): <type>[] with size(<new-size>) [| error]`
+  - Returns the subsequence starting at index `<from>`.
+  - Fallible: exactly if `S` has no constraint determining its size, therefore making `<from>` possibly out of bounds.
 - `S.chunk(<size: number>): <type>[][]`
   - Returns the sequence, divided into chunks of size at most `size`. If the sequence cannot be split evenly, the last chunk contains the remaining elements.
 - ...

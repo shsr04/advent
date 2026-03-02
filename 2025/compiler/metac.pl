@@ -7,19 +7,21 @@ use Getopt::Long qw(GetOptions);
 use File::Basename qw(dirname);
 use File::Path qw(make_path);
 
-use MetaC::Codegen qw(compile_source_with_hir_dump);
+use MetaC::HIR qw(compile_source_via_vnf_hir);
 
 sub usage {
-    print STDERR "Usage: perl compiler/metac.pl <source.metac> -o <output.c>\n";
+    print STDERR "Usage: perl compiler/metac.pl <source.metac> -o <output.txt> [--backend echo] [--dump-hir <path>]\n";
     exit 1;
 }
 
 sub main {
     my $output_path;
     my $hir_dump_path;
+    my $backend = 'echo';
     GetOptions(
         'o|output=s' => \$output_path,
         'dump-hir=s' => \$hir_dump_path,
+        'backend=s' => \$backend,
     ) or usage();
 
     my $source_path = shift @ARGV;
@@ -31,14 +33,17 @@ sub main {
     my $source_text = <$in>;
     close $in;
 
-    my ($c_code, $hir_dump) = compile_source_with_hir_dump($source_text);
+    my ($backend_output, $hir_dump) = compile_source_via_vnf_hir(
+        $source_text,
+        backend => $backend,
+    );
 
     my $out_dir = dirname($output_path);
     make_path($out_dir) if $out_dir ne '' && !-d $out_dir;
 
     open my $out, '>', $output_path
       or die "io error: unable to write '$output_path': $!\n";
-    print {$out} $c_code;
+    print {$out} $backend_output;
     close $out;
 
     if (defined $hir_dump_path) {

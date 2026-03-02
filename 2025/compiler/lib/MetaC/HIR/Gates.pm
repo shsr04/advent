@@ -6,11 +6,9 @@ use Exporter 'import';
 use MetaC::Support qw(compile_error);
 use MetaC::TypeSpec qw(
     is_union_type
+    union_contains_member
     is_supported_value_type
     is_supported_generic_union_return
-    type_is_number_or_error
-    type_is_bool_or_error
-    type_is_string_or_error
 );
 
 our @EXPORT_OK = qw(verify_vnf_hir dump_vnf_hir);
@@ -74,11 +72,17 @@ sub _type_supported {
     my ($ret) = @_;
     return 1 if !defined $ret;
     return 1 if is_supported_value_type($ret);
-    return 1 if type_is_number_or_error($ret);
-    return 1 if type_is_bool_or_error($ret);
-    return 1 if type_is_string_or_error($ret);
-    return 1 if is_union_type($ret) && is_supported_generic_union_return($ret);
     return 1 if is_supported_generic_union_return($ret);
+    return 0;
+}
+
+sub _return_allows_error_propagation {
+    my ($fn) = @_;
+    return 1 if ($fn->{name} // '') eq 'main';
+    my $ret = $fn->{return_type};
+    return 0 if !defined $ret || $ret eq '';
+    return 1 if $ret eq 'error';
+    return 1 if is_union_type($ret) && union_contains_member($ret, 'error');
     return 0;
 }
 
@@ -294,6 +298,9 @@ sub _gate_effect {
         for my $region (@{ $fn->{regions} }) {
             my $exit_kind = $region->{exit}{kind} // '';
             next if $exit_kind ne 'TryExit';
+
+            compile_error("Gate-Effect/F047-Gate-Effect: '?' propagation is only allowed in error-capable functions (or main); function '$fn->{name}' returns '$fn->{return_type}'")
+              if !_return_allows_error_propagation($fn);
 
             compile_error("Gate-Effect/F047-Gate-Effect: TryExit missing fallible expression in '$fn->{name}'")
               if !defined($region->{exit}{fallible_expr}) || ref($region->{exit}{fallible_expr}) ne 'HASH';
