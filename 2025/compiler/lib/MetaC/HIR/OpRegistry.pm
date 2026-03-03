@@ -26,13 +26,21 @@ our @EXPORT_OK = qw(
     builtin_op_id
     builtin_result_type
     builtin_result_type_hint
+    builtin_fallibility_hint
+    builtin_may_be_fallible
     builtin_param_contract
     method_is_known
     method_receiver_supported
     method_op_id
     method_result_type
     method_result_type_hint
+    method_dynamic_result_policy
     method_fallibility_hint
+    method_has_tag
+    method_has_length_semantics
+    method_traceability_hint
+    method_requires_matrix_axis_argument
+    method_callback_shape_label
     method_callback_contract
     method_param_contract
 );
@@ -118,16 +126,16 @@ my %REGISTRY = (
         },
     },
     methods => {
-        size      => { op_id => 'method.size.v1',      receiver_policy => 'sized',                    param_policy => 'size_by_receiver',   result_policy => 'fixed',             result_type => 'number',              fallibility => 'never' },
-        count     => { op_id => 'method.count.v1',     receiver_policy => 'sized',                    param_policy => 'none',               result_policy => 'fixed',             result_type => 'number',              fallibility => 'never' },
+        size      => { op_id => 'method.size.v1',      receiver_policy => 'sized',                    param_policy => 'size_by_receiver',   result_policy => 'fixed',             result_type => 'number',              fallibility => 'never', length_semantics => 1, matrix_axis_argument => 1 },
+        count     => { op_id => 'method.count.v1',     receiver_policy => 'sized',                    param_policy => 'none',               result_policy => 'fixed',             result_type => 'number',              fallibility => 'never', length_semantics => 1 },
         chars     => { op_id => 'method.chars.v1',     receiver_policy => 'string',                   param_policy => 'none',               result_policy => 'fixed',             result_type => sequence_type_for_element('string'),                    fallibility => 'never' },
         chunk     => { op_id => 'method.chunk.v1',     receiver_policy => 'string',                   param_policy => 'fixed',              param_type_symbols => ['number'],     result_policy => 'fixed',             result_type => sequence_type_for_element('string'),                    fallibility => 'never' },
         isBlank   => { op_id => 'method.isBlank.v1',   receiver_policy => 'string',                   param_policy => 'none',               result_policy => 'fixed',             result_type => 'bool',                fallibility => 'never' },
-        split     => { op_id => 'method.split.v1',     receiver_policy => 'string',                   param_policy => 'fixed',              param_type_symbols => ['string'],     result_policy => 'fixed',             result_type => sequence_type_for_element('string') . ' | error',      fallibility => 'always' },
+        split     => { op_id => 'method.split.v1',     receiver_policy => 'string',                   param_policy => 'fixed',              param_type_symbols => ['string'],     result_policy => 'fixed',             result_type => sequence_type_for_element('string') . ' | error',      fallibility => 'always', tags => ['fallible_diag_split'] },
         match     => { op_id => 'method.match.v1',     receiver_policy => 'string',                   param_policy => 'fixed',              param_type_symbols => ['string'],     result_policy => 'fixed',             result_type => sequence_type_for_element('string') . ' | error',      fallibility => 'always' },
         compareTo => { op_id => 'method.compareTo.v1', receiver_policy => 'default_comparison',       param_policy => 'fixed',              param_type_symbols => ['receiver'],   result_policy => 'fixed',             result_type => 'comparison_result',   fallibility => 'never' },
         andThen   => { op_id => 'method.andThen.v1',   receiver_policy => 'comparison_result',        param_policy => 'fixed',              param_type_symbols => ['comparison_result'], result_policy => 'fixed',       result_type => 'comparison_result',   fallibility => 'never' },
-        push      => { op_id => 'method.push.v1',      receiver_policy => 'sequence',                 param_policy => 'fixed',              param_type_symbols => ['receiver_elem'], result_policy => 'fixed',        result_type => 'number',              fallibility => 'never' },
+        push      => { op_id => 'method.push.v1',      receiver_policy => 'sequence',                 param_policy => 'fixed',              param_type_symbols => ['receiver_elem'], result_policy => 'fixed',        result_type => 'number',              fallibility => 'never', tags => ['mutates_receiver', 'requires_nested_size_push_proof'] },
         any       => {
             op_id => 'method.any.v1',
             receiver_policy => 'sequence',
@@ -135,6 +143,8 @@ my %REGISTRY = (
             result_policy => 'fixed',
             result_type => 'bool',
             fallibility => 'contextual',
+            tags => ['try_const_assignment_unsupported', 'enforce_callback_lambda_shape'],
+            callback_shape_label => 'any(...) predicate must be a single-parameter lambda',
             callback_contract => {
                 total_arg_count => 1,
                 callback_arg_index => 0,
@@ -150,6 +160,8 @@ my %REGISTRY = (
             result_policy => 'fixed',
             result_type => 'bool',
             fallibility => 'contextual',
+            tags => ['try_const_assignment_unsupported', 'enforce_callback_lambda_shape'],
+            callback_shape_label => 'all(...) predicate must be a single-parameter lambda',
             callback_contract => {
                 total_arg_count => 1,
                 callback_arg_index => 0,
@@ -158,15 +170,17 @@ my %REGISTRY = (
                 return_type_symbol => 'bool',
             },
         },
-        max       => { op_id => 'method.max.v1',       receiver_policy => 'sequence',                 param_policy => 'none',               result_policy => 'traceable_member',  fallibility => 'never' },
-        last      => { op_id => 'method.last.v1',      receiver_policy => 'sequence',                 param_policy => 'none',               result_policy => 'traceable_member',  fallibility => 'conditional' },
+        max       => { op_id => 'method.max.v1',       receiver_policy => 'sequence',                 param_policy => 'none',               result_policy => 'traceable_member',  fallibility => 'never', string_elem_result_type => 'number' },
+        last      => { op_id => 'method.last.v1',      receiver_policy => 'sequence',                 param_policy => 'none',               result_policy => 'traceable_member',  fallibility => 'conditional', tags => ['conditional_sequence_requires_known_size'] },
         sort      => { op_id => 'method.sort.v1',      receiver_policy => 'sequence_orderable',       param_policy => 'none',               result_policy => 'receiver',          fallibility => 'never' },
         map       => {
             op_id => 'method.map.v1',
             receiver_policy => 'sequence',
             param_policy => 'callback_contract',
             result_policy => 'receiver',
+            dynamic_result_policy => 'mapped_sequence',
             fallibility => 'contextual',
+            tags => ['fallible_diag_mapper'],
             callback_contract => {
                 total_arg_count => 1,
                 callback_arg_index => 0,
@@ -175,13 +189,15 @@ my %REGISTRY = (
                 return_type_symbol => 'any',
             },
         },
-        slice     => { op_id => 'method.slice.v1',     receiver_policy => 'sequence',                 param_policy => 'fixed',              param_type_symbols => ['number'],     result_policy => 'receiver',          fallibility => 'conditional' },
+        slice     => { op_id => 'method.slice.v1',     receiver_policy => 'sequence',                 param_policy => 'fixed',              param_type_symbols => ['number'],     result_policy => 'receiver',          fallibility => 'conditional', tags => ['conditional_sequence_infallible'] },
         filter    => {
             op_id => 'method.filter.v1',
             receiver_policy => 'sequence',
             param_policy => 'callback_contract',
             result_policy => 'receiver',
+            dynamic_result_policy => 'receiver',
             fallibility => 'contextual',
+            tags => ['entailment_filter_receiver_elem_supported'],
             callback_contract => {
                 total_arg_count => 1,
                 callback_arg_index => 0,
@@ -204,17 +220,20 @@ my %REGISTRY = (
                 return_type_symbol => 'comparison_result',
             },
         },
-        insert    => { op_id => 'method.insert.v1',    receiver_policy => 'sequence_or_matrix',       param_policy => 'insert_by_receiver', result_policy => 'receiver',          fallibility => 'matrix_insert' },
+        insert    => { op_id => 'method.insert.v1',    receiver_policy => 'sequence_or_matrix',       param_policy => 'insert_by_receiver', result_policy => 'receiver',          fallibility => 'matrix_insert', tags => ['mutates_receiver', 'conditional_sequence_requires_known_size', 'fallible_diag_insert_matrix_unconstrained', 'entailment_insert_sequence_index_literal_if_size_known', 'entailment_insert_matrix_index_proof_if_size_known'] },
         log       => { op_id => 'method.log.v1',       receiver_policy => 'any',                      param_policy => 'none',               result_policy => 'receiver',          fallibility => 'never' },
         members   => { op_id => 'method.members.v1',   receiver_policy => 'matrix',                   param_policy => 'none',               result_policy => 'matrix_members',    fallibility => 'never' },
-        index     => { op_id => 'method.index.v1',     receiver_policy => 'sequence_member_or_matrix_member', param_policy => 'none',         result_policy => 'index_by_receiver', fallibility => 'never' },
-        neighbours => { op_id => 'method.neighbours.v1', receiver_policy => 'matrix_or_member',        param_policy => 'neighbours_by_receiver', result_policy => 'matrix_neighbours', fallibility => 'never' },
+        index     => { op_id => 'method.index.v1',     receiver_policy => 'sequence_member_or_matrix_member', param_policy => 'none',         result_policy => 'index_by_receiver', fallibility => 'never', traceability => 'requires_source_index_metadata' },
+        neighbours => { op_id => 'method.neighbours.v1', receiver_policy => 'matrix_or_member',        param_policy => 'neighbours_by_receiver', result_policy => 'matrix_neighbours', fallibility => 'never', traceability => 'requires_source_matrix_member_metadata' },
         reduce    => {
             op_id => 'method.reduce.v1',
             receiver_policy => 'sequence',
             param_policy => 'callback_contract',
             result_policy => 'unknown',
+            dynamic_result_policy => 'initial',
             fallibility => 'contextual',
+            tags => ['try_const_assignment_unsupported', 'enforce_callback_lambda_shape'],
+            callback_shape_label => 'reduce(...) second arg must be a two-parameter lambda',
             callback_contract => {
                 total_arg_count => 2,
                 initial_arg_index => 0,
@@ -230,7 +249,10 @@ my %REGISTRY = (
             receiver_policy => 'sequence',
             param_policy => 'callback_contract',
             result_policy => 'receiver',
+            dynamic_result_policy => 'receiver_with_error',
             fallibility => 'always',
+            tags => ['try_const_assignment_unsupported', 'enforce_callback_lambda_shape'],
+            callback_shape_label => 'assert(...) first arg must be a single-parameter lambda predicate',
             callback_contract => {
                 total_arg_count => 2,
                 callback_arg_index => 0,
@@ -244,7 +266,9 @@ my %REGISTRY = (
             receiver_policy => 'sequence',
             param_policy => 'callback_contract',
             result_policy => 'receiver',
+            dynamic_result_policy => 'sequence_of_initial',
             fallibility => 'contextual',
+            tags => ['try_const_assignment_unsupported'],
             callback_contract => {
                 total_arg_count => 2,
                 initial_arg_index => 0,
@@ -312,6 +336,26 @@ sub builtin_result_type {
 
 sub builtin_result_type_hint {
     return builtin_result_type(@_);
+}
+
+sub builtin_fallibility_hint {
+    my ($name) = @_;
+    my $spec = _builtin_spec($name);
+    my $result_policy = $spec->{result_policy} // 'unknown';
+
+    if ($result_policy eq 'fixed') {
+        my $result_type = $spec->{result_type};
+        return (defined($result_type) && $result_type =~ /\berror\b/) ? 'always' : 'never';
+    }
+    return 'contextual' if $result_policy eq 'arg0';
+    return 'contextual';
+}
+
+sub builtin_may_be_fallible {
+    my ($name) = @_;
+    my $hint = builtin_fallibility_hint($name);
+    return 0 if !defined($hint) || $hint eq '' || $hint eq 'never';
+    return 1;
 }
 
 sub _resolve_builtin_param_symbol {
@@ -461,9 +505,10 @@ sub method_result_type {
     my $spec = _method_spec($method);
     my $policy = $spec->{result_policy} // 'unknown';
 
-    if ($method eq 'max') {
+    my $string_elem_result_type = $spec->{string_elem_result_type};
+    if (defined($string_elem_result_type) && $string_elem_result_type ne '') {
         my $elem = sequence_element_type($recv_type);
-        return 'number' if defined($elem) && $elem eq 'string';
+        return $string_elem_result_type if defined($elem) && $elem eq 'string';
     }
 
     return $spec->{result_type} if $policy eq 'fixed';
@@ -477,6 +522,15 @@ sub method_result_type {
 
 sub method_result_type_hint {
     return method_result_type(@_);
+}
+
+sub method_dynamic_result_policy {
+    my ($method) = @_;
+    return undef if !method_is_known($method);
+    my $spec = _method_spec($method);
+    my $policy = $spec->{dynamic_result_policy};
+    return undef if !defined($policy) || $policy eq '';
+    return $policy;
 }
 
 sub method_fallibility_hint {
@@ -494,6 +548,48 @@ sub method_fallibility_hint {
         return $meta->{has_size} ? 'never' : 'conditional';
     }
     return 'never';
+}
+
+sub method_has_tag {
+    my ($method, $tag) = @_;
+    return 0 if !method_is_known($method);
+    return 0 if !defined($tag) || $tag eq '';
+    my $spec = _method_spec($method);
+    my $tags = $spec->{tags};
+    return 0 if !defined($tags) || ref($tags) ne 'ARRAY';
+    return scalar(grep { defined($_) && $_ eq $tag } @$tags) ? 1 : 0;
+}
+
+sub method_has_length_semantics {
+    my ($method) = @_;
+    return 0 if !method_is_known($method);
+    my $spec = _method_spec($method);
+    return ($spec->{length_semantics} // 0) ? 1 : 0;
+}
+
+sub method_traceability_hint {
+    my ($method) = @_;
+    return undef if !method_is_known($method);
+    my $spec = _method_spec($method);
+    my $hint = $spec->{traceability};
+    return undef if !defined($hint) || $hint eq '';
+    return $hint;
+}
+
+sub method_requires_matrix_axis_argument {
+    my ($method) = @_;
+    return 0 if !method_is_known($method);
+    my $spec = _method_spec($method);
+    return ($spec->{matrix_axis_argument} // 0) ? 1 : 0;
+}
+
+sub method_callback_shape_label {
+    my ($method) = @_;
+    return undef if !method_is_known($method);
+    my $spec = _method_spec($method);
+    my $label = $spec->{callback_shape_label};
+    return undef if !defined($label) || $label eq '';
+    return $label;
 }
 
 sub method_callback_contract {

@@ -4,6 +4,8 @@ use warnings;
 use Exporter 'import';
 
 use MetaC::Support qw(compile_error);
+use MetaC::HIR::OpRegistry qw(method_has_length_semantics);
+use MetaC::HIR::TypeRegistry qw(scalar_is_error);
 use MetaC::TypeSpec qw(
     is_union_type
     union_contains_member
@@ -81,7 +83,7 @@ sub _return_allows_error_propagation {
     return 1 if ($fn->{name} // '') eq 'main';
     my $ret = $fn->{return_type};
     return 0 if !defined $ret || $ret eq '';
-    return 1 if $ret eq 'error';
+    return 1 if scalar_is_error($ret);
     return 1 if is_union_type($ret) && union_contains_member($ret, 'error');
     return 0;
 }
@@ -396,7 +398,7 @@ sub _exit_tag_facts {
                     my $method = $size_expr->{method} // '';
                     my $args = $size_expr->{args} // [];
                     my $recv = $size_expr->{recv};
-                    if (($method eq 'size' || $method eq 'count')
+                    if (method_has_length_semantics($method)
                         && ref($args) eq 'ARRAY' && !@$args
                         && defined($recv) && ref($recv) eq 'HASH' && ($recv->{kind} // '') eq 'ident')
                     {

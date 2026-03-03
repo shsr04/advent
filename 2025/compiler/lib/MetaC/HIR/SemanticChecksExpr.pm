@@ -4,12 +4,31 @@ use warnings;
 use Exporter 'import';
 
 use MetaC::Support qw(compile_error);
+use MetaC::Parser qw(parse_expr);
 use MetaC::HIR::OpRegistry qw(
     method_callback_contract
+    method_callback_shape_label
     builtin_is_known
     builtin_result_type
     method_result_type
+    method_dynamic_result_policy
     method_fallibility_hint
+    method_requires_matrix_axis_argument
+    method_has_tag
+);
+use MetaC::HIR::TypeRegistry qw(
+    canonical_scalar_base
+    scalar_is_numeric
+    scalar_is_boolean
+    scalar_is_string
+    scalar_is_error
+    scalar_is_comparison
+    numeric_kind_for_type
+    numeric_kind_assignable
+    numeric_kind_is_concrete
+    numeric_kind_additive_compatible
+    numeric_kind_div_compatible
+    sequence_elem_label
 );
 use MetaC::TypeSpec qw(
     is_union_type
@@ -86,8 +105,7 @@ sub _is_number_member {
     if (defined($m)) {
         $m = _base_member_type($m);
     }
-    return 1 if defined($m) && ($m eq 'number' || $m eq 'int' || $m eq 'float');
-    return 0;
+    return scalar_is_numeric($m) ? 1 : 0;
 }
 
 sub _unwrap_member_type {
@@ -112,8 +130,7 @@ sub _base_member_type {
 sub _is_bool_member {
     my ($m) = @_;
     $m = _base_member_type($m) if defined($m);
-    return 1 if defined($m) && ($m eq 'bool' || $m eq 'boolean');
-    return 0;
+    return scalar_is_boolean($m) ? 1 : 0;
 }
 
 sub _all_members_match {
@@ -155,8 +172,9 @@ sub _has_shared_member {
 sub _constrained_scalar_base {
     my ($t) = @_;
     return undef if !defined($t) || $t eq '';
-    return 'string' if $t =~ /^stringwith/;
-    return 'number' if $t =~ /^numberwith/;
+    my $base = canonical_scalar_base($t);
+    return undef if !defined($base);
+    return $base if $base eq 'string' || $base eq 'number';
     return undef;
 }
 
@@ -263,24 +281,17 @@ sub _numeric_kind_for_type {
     if (is_sequence_member_type($type) || is_matrix_member_type($type)) {
         $type = _base_member_type($type);
     }
-    return 'int' if $type eq 'int';
-    return 'float' if $type eq 'float';
-    return 'number' if $type eq 'number';
-    return undef;
+    return numeric_kind_for_type($type);
 }
 
 sub _numeric_kind_assignable {
     my ($actual, $expected) = @_;
-    return 0 if !defined($actual) || !defined($expected) || $actual eq '' || $expected eq '';
-    return 1 if $actual eq $expected;
-    return 1 if $expected eq 'number' && ($actual eq 'int' || $actual eq 'float' || $actual eq 'number');
-    return 0;
+    return numeric_kind_assignable($actual, $expected);
 }
 
 sub _is_concrete_numeric_kind {
     my ($k) = @_;
-    return 0 if !defined($k) || $k eq '';
-    return ($k eq 'int' || $k eq 'float') ? 1 : 0;
+    return numeric_kind_is_concrete($k);
 }
 
 sub _is_numeric_literal_expr {
@@ -291,22 +302,22 @@ sub _is_numeric_literal_expr {
 
 sub _numeric_kinds_compatible_additive {
     my ($lk, $rk, $left_expr, $right_expr) = @_;
-    return 0 if !defined($lk) || !defined($rk) || $lk eq '' || $rk eq '';
-    return 1 if $lk eq $rk && ($lk eq 'int' || $lk eq 'float' || $lk eq 'number');
-    return 1 if _is_concrete_numeric_kind($lk) && _is_concrete_numeric_kind($rk);
-    return 1 if ($lk eq 'int' || $lk eq 'float') && $rk eq 'number';
-    return 1 if $lk eq 'number' && _is_concrete_numeric_kind($rk) && _is_numeric_literal_expr($right_expr);
-    return 1 if $rk eq 'number' && _is_concrete_numeric_kind($lk) && _is_numeric_literal_expr($left_expr);
-    return 0;
+    return numeric_kind_additive_compatible(
+        left_kind => $lk,
+        right_kind => $rk,
+        left_is_literal => _is_numeric_literal_expr($left_expr),
+        right_is_literal => _is_numeric_literal_expr($right_expr),
+    );
 }
 
 sub _numeric_kinds_compatible_div {
     my ($lk, $rk, $left_expr, $right_expr) = @_;
-    return 0 if !defined($lk) || !defined($rk) || $lk eq '' || $rk eq '';
-    return 1 if _is_concrete_numeric_kind($lk) && _is_concrete_numeric_kind($rk);
-    return 1 if $lk eq 'number' && _is_concrete_numeric_kind($rk) && _is_numeric_literal_expr($right_expr);
-    return 1 if $rk eq 'number' && _is_concrete_numeric_kind($lk) && _is_numeric_literal_expr($left_expr);
-    return 0;
+    return numeric_kind_div_compatible(
+        left_kind => $lk,
+        right_kind => $rk,
+        left_is_literal => _is_numeric_literal_expr($left_expr),
+        right_is_literal => _is_numeric_literal_expr($right_expr),
+    );
 }
 
 sub _infer_numeric_kind {
@@ -460,7 +471,7 @@ sub _infer_expr_type {
 
     if ($kind eq 'index') {
         my $recv_t = _infer_expr_type($expr->{recv}, $ctx);
-        return 'number' if defined($recv_t) && $recv_t eq 'string';
+        return 'number' if scalar_is_string($recv_t);
         if (defined($recv_t) && is_sequence_member_type($recv_t)) {
             my $meta = sequence_member_meta($recv_t);
             $recv_t = $meta->{elem} if defined($meta) && defined($meta->{elem});
@@ -504,31 +515,15 @@ sub _infer_expr_type {
             my $recv_t = _infer_expr_type($expr->{recv}, $ctx);
             return undef if !defined($recv_t) || $recv_t eq '';
             my $method = $expr->{method} // '';
-            if ($method eq 'reduce') {
-                my $init_t = _infer_expr_type($expr->{args}[0], $ctx);
-                return $init_t if defined($init_t) && $init_t ne '';
-            }
-            if ($method eq 'scan') {
-                my $init_t = _infer_expr_type($expr->{args}[0], $ctx);
-                return sequence_type_for_element($init_t) if defined($init_t) && $init_t ne '';
-            }
-            if ($method eq 'filter') {
-                return $recv_t;
-            }
-            if ($method eq 'assert') {
-                return _type_with_error_member($recv_t);
-            }
-            if ($method eq 'map' && is_sequence_type($recv_t)) {
-                my $elem_t = sequence_element_type($recv_t);
-                my $cb = $expr->{args}[0];
-                my $cb_t = _callback_return_type($cb, [$elem_t], $ctx);
-                if (defined($cb_t) && $cb_t ne '') {
-                    my $base = _type_without_error_union_member($cb_t);
-                    $base = $cb_t if !defined($base);
-                    my $mapped = sequence_type_for_element($base);
-                    return _type_with_error_member($mapped) if _type_has_member($cb_t, 'error');
-                    return $mapped;
-                }
+            my $dynamic_policy = method_dynamic_result_policy($method);
+            if (defined($dynamic_policy) && $dynamic_policy ne '') {
+                my $dynamic = _infer_method_dynamic_result_type(
+                    policy => $dynamic_policy,
+                    expr   => $expr,
+                    recv_t => $recv_t,
+                    ctx    => $ctx,
+                );
+                return $dynamic if defined($dynamic) && $dynamic ne '';
             }
             my $method_t = method_result_type($expr->{method}, $recv_t);
             if (defined($method_t) && $method_t ne '') {
@@ -588,6 +583,45 @@ sub _callback_return_type {
     return _infer_expr_type($expr->{body}, \%lambda_ctx);
 }
 
+sub _infer_method_dynamic_result_type {
+    my (%args) = @_;
+    my $policy = $args{policy} // '';
+    my $expr = $args{expr};
+    my $recv_t = $args{recv_t};
+    my $ctx = $args{ctx};
+
+    if ($policy eq 'initial') {
+        my $init_t = _infer_expr_type($expr->{args}[0], $ctx);
+        return $init_t if defined($init_t) && $init_t ne '';
+        return undef;
+    }
+    if ($policy eq 'sequence_of_initial') {
+        my $init_t = _infer_expr_type($expr->{args}[0], $ctx);
+        return sequence_type_for_element($init_t) if defined($init_t) && $init_t ne '';
+        return undef;
+    }
+    if ($policy eq 'receiver') {
+        return $recv_t;
+    }
+    if ($policy eq 'receiver_with_error') {
+        return _type_with_error_member($recv_t);
+    }
+    if ($policy eq 'mapped_sequence' && is_sequence_type($recv_t)) {
+        my $elem_t = sequence_element_type($recv_t);
+        my $cb = $expr->{args}[0];
+        my $cb_t = _callback_return_type($cb, [$elem_t], $ctx);
+        if (defined($cb_t) && $cb_t ne '') {
+            my $base = _type_without_error_union_member($cb_t);
+            $base = $cb_t if !defined($base);
+            my $mapped = sequence_type_for_element($base);
+            return _type_with_error_member($mapped) if _type_has_member($cb_t, 'error');
+            return $mapped;
+        }
+        return undef;
+    }
+    return undef;
+}
+
 sub _method_contextual_fallible {
     my ($expr, $ctx) = @_;
     my $method = $expr->{method} // '';
@@ -615,7 +649,7 @@ sub _method_contextual_fallible {
     my @param_types;
     for my $s (@$symbols) {
         return 1 if !defined($s);
-        if ($s eq 'bool' || $s eq 'comparison_result') {
+        if (scalar_is_boolean($s) || scalar_is_comparison($s)) {
             push @param_types, $s;
             next;
         }
@@ -634,7 +668,7 @@ sub _index_has_bounds_proof {
     my $recv = $expr->{recv};
     return 0 if !defined($recv) || ref($recv) ne 'HASH';
     my $recv_t = _infer_expr_type($recv, $ctx);
-    return 1 if defined($recv_t) && $recv_t eq 'string';
+    return 1 if scalar_is_string($recv_t);
     my $idx = $expr->{index};
     return 0 if !defined($idx) || ref($idx) ne 'HASH';
     my $idx_kind = $idx->{kind} // '';
@@ -690,13 +724,13 @@ sub _method_conditionally_fallible {
     my $recv_t = _infer_expr_type($expr->{recv}, $ctx);
     return 1 if !defined($recv_t) || $recv_t eq '';
 
-    if ($method eq 'insert' && is_sequence_type($recv_t)) {
+    if (method_has_tag($method, 'conditional_sequence_requires_known_size') && is_sequence_type($recv_t)) {
         return _receiver_has_known_size($expr->{recv}, $ctx) ? 0 : 1;
     }
-    if ($method eq 'slice' && is_sequence_type($recv_t)) {
+    if (method_has_tag($method, 'conditional_sequence_infallible') && is_sequence_type($recv_t)) {
         return 0;
     }
-    if (($method eq 'last' || $method eq 'head') && is_sequence_type($recv_t)) {
+    if (method_has_tag($method, 'conditional_sequence_requires_known_size') && is_sequence_type($recv_t)) {
         return _receiver_has_known_size($expr->{recv}, $ctx) ? 0 : 1;
     }
     return 1;
@@ -716,7 +750,7 @@ sub _expr_is_fallible {
     my $hint = _infer_expr_type($expr, $ctx);
     if (defined($hint) && $hint ne '') {
         return 1 if is_union_type($hint) && union_contains_member($hint, 'error');
-        return 0 if $hint eq 'error';
+        return 0 if scalar_is_error($hint);
     }
     return 0 if $kind ne 'method_call';
 
@@ -751,8 +785,8 @@ sub _unhandled_fallibility_diagnostic {
     return undef if $kind ne 'method_call';
     my $method = $expr->{method} // '';
     return "Semantic/F053-Fallibility: Method 'split(...)' is fallible; handle it with '?'"
-      if $method eq 'split';
-    if ($method eq 'map') {
+      if method_has_tag($method, 'fallible_diag_split');
+    if (method_has_tag($method, 'fallible_diag_mapper')) {
         my $mapper = $expr->{args}[0];
         my $mapper_name = (defined($mapper) && ref($mapper) eq 'HASH' && ($mapper->{kind} // '') eq 'ident')
           ? ($mapper->{name} // '')
@@ -761,7 +795,7 @@ sub _unhandled_fallibility_diagnostic {
           if $mapper_name ne '';
         return "Semantic/F053-Fallibility: Method 'map(...)' is fallible for mapper; handle it with '?'";
     }
-    if ($method eq 'insert') {
+    if (method_has_tag($method, 'fallible_diag_insert_matrix_unconstrained')) {
         my $recv_t = _infer_expr_type($expr->{recv}, $ctx);
         if (defined($recv_t) && is_matrix_type($recv_t)) {
             my $meta = matrix_type_meta($recv_t);
@@ -797,13 +831,42 @@ sub _receiver_diag_label {
     return undef if !defined($recv_t) || $recv_t eq '';
     if (is_sequence_type($recv_t)) {
         my $elem = sequence_element_type($recv_t);
-        return 'number_list' if defined($elem) && ($elem eq 'number' || $elem eq 'int' || $elem eq 'float');
-        return 'string_list' if defined($elem) && $elem eq 'string';
-        return 'bool_list' if defined($elem) && ($elem eq 'bool' || $elem eq 'boolean');
+        my $label = sequence_elem_label($elem);
+        return $label if defined($label) && $label ne '';
         return 'sequence';
     }
     return 'matrix' if is_matrix_type($recv_t);
     return $recv_t;
+}
+
+sub _method_callback_shape_label {
+    my ($method, $arity) = @_;
+    my $specific = method_callback_shape_label($method);
+    return $specific if defined($specific) && $specific ne '';
+    return "method '$method(...)' callback must be a two-parameter lambda" if $arity == 2;
+    return "method '$method(...)' callback must be a single-parameter lambda";
+}
+
+sub _validate_method_callback_shape {
+    my ($expr, $method) = @_;
+    return if !method_has_tag($method, 'enforce_callback_lambda_shape');
+
+    my $contract = method_callback_contract($method);
+    return if !defined($contract) || ref($contract) ne 'HASH';
+    my $args = $expr->{args} // [];
+    return if ref($args) ne 'ARRAY';
+
+    my $cb_idx = int($contract->{callback_arg_index} // -1);
+    my $arity = int($contract->{callback_arity} // 0);
+    return if $cb_idx < 0 || $arity <= 0 || $cb_idx >= @$args;
+
+    my $cb = $args->[$cb_idx];
+    my $expect_kind = $arity == 2 ? 'lambda2' : 'lambda1';
+    my $ok = defined($cb) && ref($cb) eq 'HASH' && (($cb->{kind} // '') eq $expect_kind);
+    return if $ok;
+
+    my $label = _method_callback_shape_label($method, $arity);
+    compile_error("Semantic/F053-Type: $label");
 }
 
 sub _validate_expr {
@@ -840,9 +903,15 @@ sub _validate_expr {
                 my $slot = defined($1) ? $1 : '';
                 $slot =~ s/^\s+//;
                 $slot =~ s/\s+$//;
-                next if $slot !~ /^[A-Za-z_][A-Za-z0-9_]*$/;
-                my $it = $ctx->{types}{$slot};
-                compile_error("Semantic/F053-Type: Unknown variable: $slot")
+                my $slot_expr = eval { parse_expr($slot) };
+                if ($@ || !defined($slot_expr) || ref($slot_expr) ne 'HASH') {
+                    my $detail = $@ // 'invalid interpolation expression';
+                    $detail =~ s/\s+$//;
+                    $detail =~ s/^compile error(?: on line \d+)?:\s*//;
+                    compile_error("Semantic/F053-Type: Invalid interpolation expression '\${$slot}': $detail");
+                }
+                my $it = _validate_expr($slot_expr, $ctx, 0);
+                compile_error("Semantic/F053-Type: Unsupported interpolation expression type: unknown")
                   if !defined($it) || $it eq '';
                 compile_error("Semantic/F053-Type: Unsupported interpolation expression type: $it")
                   if is_union_type($it);
@@ -913,16 +982,16 @@ sub _validate_expr {
         my $rt = _validate_expr($expr->{recv}, $ctx, 0);
         my $it = _validate_expr($expr->{index}, $ctx, 0);
         compile_error("Semantic/F053-Type: index operator requires sequence or string receiver")
-          if !defined($rt) || ($rt ne 'string' && !is_sequence_type($rt));
+          if !defined($rt) || (!scalar_is_string($rt) && !is_sequence_type($rt));
         compile_error("Semantic/F053-Type: index must be number")
           if !_is_number_type($it);
         my $fallible = _expr_is_fallible($expr, $ctx);
         if ($fallible && !$handled) {
-            if (defined($rt) && $rt ne 'string' && is_sequence_type($rt)) {
+            if (defined($rt) && !scalar_is_string($rt) && is_sequence_type($rt)) {
                 my $elem = sequence_element_type($rt);
                 my $label = 'sequence';
-                $label = 'number_list' if defined($elem) && $elem eq 'number';
-                $label = 'string_list' if defined($elem) && $elem eq 'string';
+                my $elem_label = sequence_elem_label($elem);
+                $label = $elem_label if defined($elem_label) && $elem_label ne '';
                 compile_error("Semantic/F053-Entailment: Index on '$label' requires compile-time in-bounds proof");
             }
             compile_error("Semantic/F053-Fallibility: unhandled fallible expression; use '?' or 'or catch(...)'");
@@ -963,43 +1032,27 @@ sub _validate_expr {
         }
         if ($kind eq 'method_call') {
             my $method = $expr->{method} // '';
-            if ($method eq 'reduce') {
-                my $args = $expr->{args} // [];
-                my $cb = (ref($args) eq 'ARRAY') ? $args->[1] : undef;
-                compile_error("Semantic/F053-Type: reduce(...) second arg must be a two-parameter lambda")
-                  if !defined($cb) || ref($cb) ne 'HASH' || ($cb->{kind} // '') ne 'lambda2';
-            }
-            if ($method eq 'any' || $method eq 'all') {
-                my $args = $expr->{args} // [];
-                my $cb = (ref($args) eq 'ARRAY') ? $args->[0] : undef;
-                my $label = $method eq 'any' ? 'any(...) predicate must be a single-parameter lambda'
-                  : 'all(...) predicate must be a single-parameter lambda';
-                compile_error("Semantic/F053-Type: $label")
-                  if !defined($cb) || ref($cb) ne 'HASH' || ($cb->{kind} // '') ne 'lambda1';
-            }
-            if ($method eq 'assert') {
-                my $args = $expr->{args} // [];
-                my $pred = (ref($args) eq 'ARRAY') ? $args->[0] : undef;
-                compile_error("Semantic/F053-Type: assert(...) first arg must be a single-parameter lambda predicate")
-                  if !defined($pred) || ref($pred) ne 'HASH' || ($pred->{kind} // '') ne 'lambda1';
-            }
+            _validate_method_callback_shape($expr, $method);
             my $recv_t = _infer_expr_type($expr->{recv}, $ctx);
-            if ($method eq 'filter' && defined($recv_t) && is_sequence_type($recv_t)) {
+            if (method_has_tag($method, 'entailment_filter_receiver_elem_supported')
+                && defined($recv_t) && is_sequence_type($recv_t))
+            {
                 my $elem = sequence_element_type($recv_t);
                 my $ok = 0;
-                $ok = 1 if defined($elem) && ($elem eq 'number' || $elem eq 'int' || $elem eq 'float' || $elem eq 'string');
+                $ok = 1 if scalar_is_numeric($elem) || scalar_is_string($elem);
                 $ok = 1 if defined($elem) && is_matrix_member_type($elem);
                 if (!$ok) {
                     my $label = 'sequence';
                     if (defined($elem)) {
-                        $label = 'bool_list' if $elem eq 'bool' || $elem eq 'boolean';
-                        $label = 'number_list' if $elem eq 'number' || $elem eq 'int' || $elem eq 'float';
-                        $label = 'string_list' if $elem eq 'string';
+                        my $elem_label = sequence_elem_label($elem);
+                        $label = $elem_label if defined($elem_label) && $elem_label ne '';
                     }
                     compile_error("Semantic/F053-Type: filter(...) receiver must be string_list, number_list, or matrix member list, got $label");
                 }
             }
-            if ($method eq 'insert' && defined($recv_t) && is_sequence_type($recv_t) && _receiver_has_known_size($expr->{recv}, $ctx)) {
+            if (method_has_tag($method, 'entailment_insert_sequence_index_literal_if_size_known')
+                && defined($recv_t) && is_sequence_type($recv_t) && _receiver_has_known_size($expr->{recv}, $ctx))
+            {
                 my $args = $expr->{args} // [];
                 my $idx = (ref($args) eq 'ARRAY') ? $args->[1] : undef;
                 if (!defined($idx) || ref($idx) ne 'HASH' || (($idx->{kind} // '') ne 'num')) {
@@ -1016,13 +1069,13 @@ sub _validate_expr {
             }
             if (defined($recv_t) && is_matrix_type($recv_t)) {
                 my $meta = matrix_type_meta($recv_t);
-                if ($method eq 'size') {
+                if (method_requires_matrix_axis_argument($method)) {
                     my $axis = $expr->{args}[0];
                     my $axis_max = int($meta->{dim} // 0) - 1;
-                    compile_error("Semantic/F053-Entailment: Method 'size(...)' requires compile-time axis proof in range(0, $axis_max)")
+                    compile_error("Semantic/F053-Entailment: Method '$method(...)' requires compile-time axis proof in range(0, $axis_max)")
                       if $axis_max < 0 || !_expr_int_range_proved($axis, $ctx, 0, $axis_max);
                 }
-                if ($method eq 'insert' && ($meta->{has_size} // 0)) {
+                if (method_has_tag($method, 'entailment_insert_matrix_index_proof_if_size_known') && ($meta->{has_size} // 0)) {
                     my $sizes = $meta->{sizes} // [];
                     my $all_concrete = @$sizes ? 1 : 0;
                     for my $s (@$sizes) {

@@ -3,7 +3,11 @@ use strict;
 use warnings;
 use Exporter 'import';
 
-use MetaC::Support qw(compile_error);
+use MetaC::Support qw(
+    compile_error
+    set_error_source_text
+    clear_error_source_text
+);
 use MetaC::HIR::Lowering qw(lower_source_to_vnf_hir);
 use MetaC::HIR::Gates qw(verify_vnf_hir dump_vnf_hir);
 use MetaC::HIR::ResolveCalls qw(resolve_hir_calls);
@@ -80,7 +84,15 @@ sub compile_source_via_vnf_hir {
         },
     ];
 
-    my $out = _run_passes($state, $passes);
+    set_error_source_text($source);
+    my $out;
+    my $ok = eval {
+        $out = _run_passes($state, $passes);
+        1;
+    };
+    my $err = $@;
+    clear_error_source_text();
+    die $err if !$ok;
     return ($out->{backend_output}, $out->{hir_dump});
 }
 

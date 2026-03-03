@@ -7,6 +7,8 @@ our @EXPORT_OK = qw(
     compile_error
     set_error_line
     clear_error_line
+    set_error_source_text
+    clear_error_source_text
     strip_comments
     trim
     c_escape_string
@@ -24,6 +26,7 @@ our @EXPORT_OK = qw(
 );
 
 my $CURRENT_ERROR_LINE;
+my $CURRENT_ERROR_SOURCE_LINES;
 
 sub set_error_line {
     my ($line) = @_;
@@ -38,10 +41,41 @@ sub clear_error_line {
     $CURRENT_ERROR_LINE = undef;
 }
 
+sub set_error_source_text {
+    my ($source_text) = @_;
+    if (!defined($source_text)) {
+        $CURRENT_ERROR_SOURCE_LINES = undef;
+        return;
+    }
+    my @lines = split /\n/, $source_text, -1;
+    $CURRENT_ERROR_SOURCE_LINES = \@lines;
+}
+
+sub clear_error_source_text {
+    $CURRENT_ERROR_SOURCE_LINES = undef;
+}
+
+sub _error_source_snippet_for_line {
+    my ($line) = @_;
+    return undef if !defined($line) || $line !~ /^\d+$/ || $line <= 0;
+    return undef if !defined($CURRENT_ERROR_SOURCE_LINES) || ref($CURRENT_ERROR_SOURCE_LINES) ne 'ARRAY';
+    my $idx = int($line) - 1;
+    return undef if $idx < 0 || $idx > $#$CURRENT_ERROR_SOURCE_LINES;
+    my $snippet = $CURRENT_ERROR_SOURCE_LINES->[$idx];
+    return undef if !defined($snippet);
+    $snippet =~ s/\r$//;
+    return $snippet;
+}
+
 sub compile_error {
     my ($msg) = @_;
     if (defined $CURRENT_ERROR_LINE) {
-        die "compile error on line $CURRENT_ERROR_LINE: $msg\n";
+        my $err = "compile error on line $CURRENT_ERROR_LINE: $msg\n";
+        my $snippet = _error_source_snippet_for_line($CURRENT_ERROR_LINE);
+        if (defined($snippet) && $snippet ne '') {
+            $err .= "  > $snippet\n";
+        }
+        die $err;
     }
     die "compile error: $msg\n";
 }

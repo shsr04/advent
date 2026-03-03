@@ -6,6 +6,12 @@ use Exporter 'import';
 use MetaC::Support qw(compile_error);
 use MetaC::Parser qw(collect_functions parse_function_params parse_function_body);
 use MetaC::TypeSpec qw(normalize_type_annotation);
+use MetaC::HIR::OpRegistry qw(
+    builtin_is_known
+    builtin_may_be_fallible
+    method_is_known
+    method_fallibility_hint
+);
 use MetaC::HIR::TypedNodes qw(stmt_to_payload step_payload_to_stmt);
 
 our @EXPORT_OK = qw(lower_source_to_vnf_hir);
@@ -265,15 +271,15 @@ sub _try_expr_may_be_fallible {
     my $kind = $expr->{kind} // '';
     if ($kind eq 'call') {
         my $name = $expr->{name} // '';
-        return 0 if $name eq 'max' || $name eq 'min' || $name eq 'log' || $name eq 'seq' || $name eq 'last';
-        return 1;
+        return builtin_may_be_fallible($name) if builtin_is_known($name);
+        return 1 if defined($name) && $name ne '';
+        return 0;
     }
     if ($kind eq 'method_call') {
         my $m = $expr->{method} // '';
-        return 1 if $m eq 'split' || $m eq 'match' || $m eq 'map' || $m eq 'insert' || $m eq 'last'
-          || $m eq 'head' || $m eq 'slice' || $m eq 'reduce' || $m eq 'scan' || $m eq 'filter'
-          || $m eq 'sortBy' || $m eq 'assert';
-        return 0;
+        return 1 if !method_is_known($m);
+        my $hint = method_fallibility_hint($m, undef) // 'never';
+        return $hint eq 'never' ? 0 : 1;
     }
     return 0;
 }

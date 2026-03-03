@@ -5,10 +5,17 @@ use Exporter 'import';
 
 use MetaC::Support qw(
     compile_error
+    set_error_line
+    clear_error_line
     constraint_range_bounds
     constraint_size_exact
 );
 use MetaC::HIR::TypedNodes qw(step_payload_to_stmt);
+use MetaC::HIR::OpRegistry qw(
+    method_has_length_semantics
+    method_traceability_hint
+    method_has_tag
+);
 use MetaC::HIR::SemanticChecksExpr qw(
     _clone_hash
     _env_from_params
@@ -36,6 +43,12 @@ use MetaC::TypeSpec qw(
     matrix_member_meta
     is_sequence_member_type
     sequence_member_meta
+);
+use MetaC::HIR::TypeRegistry qw(
+    scalar_is_numeric
+    scalar_is_string
+    scalar_is_boolean
+    scalar_is_error
 );
 
 our @EXPORT_OK = qw(enforce_hir_semantics);
@@ -111,7 +124,7 @@ sub _derive_if_narrowing {
             my $method = $size_expr->{method} // '';
             my $args = $size_expr->{args} // [];
             my $recv = $size_expr->{recv};
-            if (($method eq 'size' || $method eq 'count')
+            if (method_has_length_semantics($method)
                 && ref($args) eq 'ARRAY' && !@$args
                 && defined($recv) && ref($recv) eq 'HASH')
             {
@@ -154,7 +167,9 @@ sub _list_length_proved {
     if (($expr->{kind} // '') eq 'list_literal') {
         return scalar(@{ $expr->{items} // [] }) == $need ? 1 : 0;
     }
-    if (($expr->{kind} // '') eq 'method_call' && (($expr->{method} // '') eq 'index')) {
+    if (($expr->{kind} // '') eq 'method_call'
+        && (method_traceability_hint($expr->{method} // '') // '') eq 'requires_source_index_metadata')
+    {
         my $recv = $expr->{recv};
         my $recv_t = _infer_expr_type($recv, $ctx);
         if (defined($recv_t) && is_sequence_member_type($recv_t)) {
@@ -256,9 +271,9 @@ sub _sequence_type_label {
     return undef if !defined($type) || !is_sequence_type($type);
     my $elem = sequence_element_type($type);
     return undef if !defined($elem) || $elem eq '';
-    return 'number[]' if $elem eq 'number' || $elem eq 'int' || $elem eq 'float';
-    return 'string[]' if $elem eq 'string';
-    return 'bool[]' if $elem eq 'bool' || $elem eq 'boolean';
+    return 'number[]' if scalar_is_numeric($elem);
+    return 'string[]' if scalar_is_string($elem);
+    return 'bool[]' if scalar_is_boolean($elem);
     return $elem . '[]';
 }
 
@@ -288,7 +303,7 @@ sub _fn_allows_error_propagation {
     my ($ctx) = @_;
     my $ret = $ctx->{fn_return};
     return 0 if !defined($ret) || $ret eq '';
-    return 1 if $ret eq 'error';
+    return 1 if scalar_is_error($ret);
     return 1 if is_union_type($ret) && union_contains_member($ret, 'error');
     return 0;
 }
@@ -384,7 +399,9 @@ sub _single_known_len_for_expr {
         return undef if @vals > 1;
         return $vals[0];
     }
-    if ($kind eq 'method_call' && (($expr->{method} // '') eq 'insert')) {
+    if ($kind eq 'method_call'
+        && method_has_tag(($expr->{method} // ''), 'entailment_insert_sequence_index_literal_if_size_known'))
+    {
         my $base = _single_known_len_for_expr($expr->{recv}, $ctx);
         return undef if !defined($base);
         return $base;
@@ -399,7 +416,7 @@ sub _record_len_alias_if_any {
     my $kind = $expr->{kind} // '';
     return if $kind ne 'method_call';
     my $method = $expr->{method} // '';
-    return if $method ne 'size' && $method ne 'count';
+    return if !method_has_length_semantics($method);
     my $args = $expr->{args} // [];
     return if ref($args) ne 'ARRAY' || @$args;
     my $recv = $expr->{recv};
@@ -416,7 +433,7 @@ sub _len_source_var_from_expr {
     if ($kind eq 'method_call') {
         my $method = $expr->{method} // '';
         my $args = $expr->{args} // [];
-        return undef if $method ne 'size' && $method ne 'count';
+        return undef if !method_has_length_semantics($method);
         return undef if ref($args) ne 'ARRAY' || @$args;
         my $recv = $expr->{recv};
         return undef if !defined($recv) || ref($recv) ne 'HASH' || ($recv->{kind} // '') ne 'ident';
@@ -491,7 +508,10 @@ sub _expr_references_mutable {
 sub _validate_stmt_seq {
     my ($stmts, $ctx) = @_;
     for my $stmt (@{ $stmts // [] }) {
+        my $line = (defined($stmt) && ref($stmt) eq 'HASH') ? ($stmt->{line} // undef) : undef;
+        set_error_line($line);
         _validate_stmt($stmt, $ctx);
+        clear_error_line();
     }
 }
 
@@ -702,7 +722,7 @@ sub _validate_stmt {
             my $target = (($expr->{kind} // '') eq 'try') ? $expr->{expr} : $expr;
             if (defined($target) && ref($target) eq 'HASH' && (($target->{kind} // '') eq 'method_call')) {
                 my $m = $target->{method} // '';
-                if ($m eq 'any' || $m eq 'all' || $m eq 'reduce' || $m eq 'scan') {
+                if (method_has_tag($m, 'try_const_assignment_unsupported')) {
                     compile_error("Semantic/F053-Type: Unsupported try expression in const assignment");
                 }
             }
@@ -883,14 +903,14 @@ sub _validate_stmt {
         my $expr = $stmt->{expr};
         if (defined($expr) && ref($expr) eq 'HASH' && ($expr->{kind} // '') eq 'method_call') {
             my $m = $expr->{method} // '';
-            if ($m eq 'push' || $m eq 'insert') {
+            if (method_has_tag($m, 'mutates_receiver')) {
                 my $recv = $expr->{recv};
                 if (defined($recv) && ref($recv) eq 'HASH' && ($recv->{kind} // '') eq 'ident') {
                     my $name = $recv->{name} // '';
                     compile_error("Semantic/F053-Type: Cannot mutate immutable variable '$name'")
                       if $name ne '' && !($ctx->{mut}{$name} // 0);
                 }
-                if ($m eq 'push') {
+                if (method_has_tag($m, 'requires_nested_size_push_proof')) {
                     my $need = _nested_required_size_for_receiver($recv, $ctx);
                     if (defined($need)) {
                         my $args = $expr->{args} // [];
@@ -1116,6 +1136,13 @@ sub enforce_hir_semantics {
         );
         $ctx{fn_allows_error_propagation} = _fn_allows_error_propagation(\%ctx) ? 1 : 0;
         _validate_stmt_seq(_scheduled_statements($fn), \%ctx);
+        $fn->{semantic_artifacts} = {
+            schema              => 'hir-semantic-artifacts.v1',
+            final_types         => _clone_hash($ctx{types}),
+            final_numeric_kinds => _clone_hash($ctx{numeric_kinds}),
+            final_constraints   => _clone_hash($ctx{constraints}),
+            proven_facts        => [ sort keys %{ $ctx{facts} // {} } ],
+        };
     }
     return $hir;
 }

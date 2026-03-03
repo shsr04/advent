@@ -3,7 +3,11 @@ use strict;
 use warnings;
 use Exporter 'import';
 use Scalar::Util qw(refaddr);
-use MetaC::Support qw(compile_error);
+use MetaC::Support qw(
+    compile_error
+    set_error_line
+    clear_error_line
+);
 use MetaC::HIR::TypedNodes qw(step_payload_to_stmt stmt_to_payload);
 use MetaC::HIR::OpRegistry qw(
     user_call_op_id
@@ -16,9 +20,18 @@ use MetaC::HIR::OpRegistry qw(
     method_receiver_supported
     method_op_id
     method_result_type
+    method_dynamic_result_policy
     method_fallibility_hint
+    method_traceability_hint
+    method_requires_matrix_axis_argument
     method_callback_contract
     method_param_contract
+);
+use MetaC::HIR::TypeRegistry qw(
+    scalar_is_boolean
+    scalar_is_comparison
+    scalar_is_numeric
+    scalar_is_string
 );
 
 use MetaC::TypeSpec qw(
@@ -133,7 +146,7 @@ sub _sequence_member_base_type {
 sub _callback_type_valid {
     my ($type) = @_;
     return 0 if !defined($type) || $type eq '' || $type eq 'unknown' || $type eq 'inferred' || $type eq 'empty_list';
-    return 1 if $type eq 'comparison_result';
+    return 1 if scalar_is_comparison($type);
     return 1 if is_supported_value_type($type);
     return 1 if is_supported_generic_union_return($type);
     return 1 if is_array_type($type) || is_matrix_type($type) || is_matrix_member_type($type) || is_matrix_member_list_type($type);
@@ -164,7 +177,7 @@ sub _resolve_callback_type_symbol {
     my $method = $args{method} // '';
     my $part = $args{part} // 'type';
     return undef if !defined($symbol) || $symbol eq '';
-    return $symbol if $symbol eq 'bool' || $symbol eq 'comparison_result' || $symbol eq 'any';
+    return $symbol if scalar_is_boolean($symbol) || scalar_is_comparison($symbol) || $symbol eq 'any';
     return $ctx->{$symbol} if exists $ctx->{$symbol};
     compile_error("ResolveCalls/F050-Callback-Signature: '$method' callback contract has unknown $part symbol '$symbol'");
 }
@@ -191,7 +204,7 @@ sub _method_param_type_compatible {
                 $ok = 1;
                 last;
             }
-            if ($e eq 'number' && ($a eq 'int' || $a eq 'float' || $a eq 'number')) {
+            if ($e eq 'number' && scalar_is_numeric($a)) {
                 $ok = 1;
                 last;
             }
@@ -375,12 +388,13 @@ sub _verify_method_parameter_contract {
     my $contract = method_param_contract($method, $recv_type);
     compile_error("ResolveCalls/F050-Param-Policy: method '$method' has invalid parameter policy")
       if !defined($contract) || ref($contract) ne 'HASH';
-    if ($method eq 'neighbours' && defined($recv_type) && is_matrix_type($recv_type)) {
+    my $traceability = method_traceability_hint($method) // '';
+    if ($traceability eq 'requires_source_matrix_member_metadata' && defined($recv_type) && is_matrix_type($recv_type)) {
         my $actual = (ref($arg_exprs) eq 'ARRAY' && @$arg_exprs)
           ? _infer_expr_type_hint($arg_exprs->[0], $env, $sigs, {})
           : undef;
         my $expected = sequence_type_for_element('number');
-        compile_error("ResolveCalls/F050-Param-Policy: Method 'neighbours(...)' requires value with source matrix-member metadata")
+        compile_error("ResolveCalls/F050-Param-Policy: Method '$method(...)' requires value with source matrix-member metadata")
           if !_method_param_type_compatible($actual, $expected);
     }
 
@@ -394,6 +408,25 @@ sub _verify_method_parameter_contract {
         sigs => $sigs,
         allow_callback_contract => 1,
     );
+}
+
+sub _traceability_requirement_applies_for_receiver {
+    my ($hint, $recv_type) = @_;
+    return 0 if !defined($hint) || $hint eq '';
+    return 1 if $hint eq 'requires_source_index_metadata';
+    return (defined($recv_type) && is_matrix_type($recv_type)) ? 1 : 0
+      if $hint eq 'requires_source_matrix_member_metadata';
+    return 0;
+}
+
+sub _traceability_requirement_diagnostic {
+    my ($method, $hint) = @_;
+    return undef if !defined($hint) || $hint eq '';
+    return "ResolveCalls/F050-Traceability: method '$method' requires value with source index metadata"
+      if $hint eq 'requires_source_index_metadata';
+    return "ResolveCalls/F050-Traceability: method '$method' requires value with source matrix-member metadata"
+      if $hint eq 'requires_source_matrix_member_metadata';
+    return undef;
 }
 
 sub _verify_param_contract {
@@ -500,6 +533,87 @@ sub _call_result_type {
     );
 }
 
+sub _infer_mapped_sequence_type_hint {
+    my (%args) = @_;
+    my $expr = $args{expr};
+    my $recv_t = $args{recv_t};
+    my $env = $args{env};
+    my $sigs = $args{sigs};
+    my $seen = $args{seen};
+    return undef if !defined($recv_t) || !is_sequence_type($recv_t);
+
+    my $elem_t = sequence_element_type($recv_t);
+    my $cb = $expr->{args}[0];
+    my $cb_ret;
+    if (defined($cb) && ref($cb) eq 'HASH' && (($cb->{kind} // '') eq 'ident')) {
+        my $name = $cb->{name} // '';
+        if (exists $sigs->{$name}) {
+            $cb_ret = $sigs->{$name}{return_type};
+        } elsif (builtin_is_known($name)) {
+            my %pt = ('__cb_arg_0' => $elem_t);
+            my @args = ({ kind => 'ident', name => '__cb_arg_0' });
+            $cb_ret = builtin_result_type(
+                $name,
+                \@args,
+                sub {
+                    my ($arg_expr) = @_;
+                    return undef if !defined($arg_expr) || ref($arg_expr) ne 'HASH';
+                    return $pt{ $arg_expr->{name} // '' };
+                },
+            );
+        }
+    } elsif (defined($cb) && ref($cb) eq 'HASH' && (($cb->{kind} // '') eq 'lambda1')) {
+        my $param = $cb->{param} // '__cb_arg_0';
+        my %lambda_env = (%{ $env // {} }, $param => $elem_t);
+        $cb_ret = _infer_expr_type_hint($cb->{body}, \%lambda_env, $sigs, $seen);
+    }
+    return undef if !defined($cb_ret) || $cb_ret eq '';
+
+    my $base = _single_non_error_member_from_error_union($cb_ret);
+    $base = $cb_ret if !defined($base);
+    my $mapped = sequence_type_for_element($base);
+    return $mapped . ' | error' if is_union_type($cb_ret) && union_contains_member($cb_ret, 'error');
+    return $mapped;
+}
+
+sub _infer_method_dynamic_result_type_hint {
+    my (%args) = @_;
+    my $policy = $args{policy} // '';
+    my $expr = $args{expr};
+    my $recv_t = $args{recv_t};
+    my $env = $args{env};
+    my $sigs = $args{sigs};
+    my $seen = $args{seen};
+
+    if ($policy eq 'initial') {
+        my $init_t = _infer_expr_type_hint($expr->{args}[0], $env, $sigs, $seen);
+        return $init_t if defined($init_t) && $init_t ne '';
+        return undef;
+    }
+    if ($policy eq 'sequence_of_initial') {
+        my $init_t = _infer_expr_type_hint($expr->{args}[0], $env, $sigs, $seen);
+        return sequence_type_for_element($init_t) if defined($init_t) && $init_t ne '';
+        return undef;
+    }
+    if ($policy eq 'receiver') {
+        return $recv_t if defined($recv_t) && $recv_t ne '';
+        return undef;
+    }
+    if ($policy eq 'receiver_with_error') {
+        return ($recv_t // '') eq '' ? undef : ($recv_t . ' | error');
+    }
+    if ($policy eq 'mapped_sequence') {
+        return _infer_mapped_sequence_type_hint(
+            expr   => $expr,
+            recv_t => $recv_t,
+            env    => $env,
+            sigs   => $sigs,
+            seen   => $seen,
+        );
+    }
+    return undef;
+}
+
 sub _user_call_contract {
     my (%args) = @_;
     my $name = $args{name};
@@ -565,7 +679,7 @@ sub _infer_expr_type_hint {
 
     if ($kind eq 'index') {
         my $recv_t = _infer_expr_type_hint($expr->{recv}, $env, $sigs, $seen);
-        return 'number' if ($recv_t // '') eq 'string';
+        return 'number' if scalar_is_string($recv_t);
         my $elem = sequence_element_type($recv_t);
         return undef if !defined $elem;
         return sequence_member_type($elem);
@@ -599,51 +713,17 @@ sub _infer_expr_type_hint {
         }
         my $recv_t = _infer_expr_type_hint($expr->{recv}, $env, $sigs, $seen);
         my $method = $expr->{method} // '';
-        if ($method eq 'reduce') {
-            my $init_t = _infer_expr_type_hint($expr->{args}[0], $env, $sigs, $seen);
-            return $init_t if defined($init_t) && $init_t ne '';
-        }
-        if ($method eq 'scan') {
-            my $init_t = _infer_expr_type_hint($expr->{args}[0], $env, $sigs, $seen);
-            return sequence_type_for_element($init_t) if defined($init_t) && $init_t ne '';
-        }
-        if ($method eq 'filter') {
-            return $recv_t if defined($recv_t) && $recv_t ne '';
-        }
-        if ($method eq 'assert') {
-            return ($recv_t // '') eq '' ? undef : ($recv_t . ' | error');
-        }
-        if (($method eq 'map') && defined($recv_t) && is_sequence_type($recv_t)) {
-            my $elem_t = sequence_element_type($recv_t);
-            my $cb = $expr->{args}[0];
-            my $cb_ret;
-            if (defined($cb) && ref($cb) eq 'HASH' && (($cb->{kind} // '') eq 'ident')) {
-                my $name = $cb->{name} // '';
-                if (exists $sigs->{$name}) {
-                    $cb_ret = $sigs->{$name}{return_type};
-                } elsif (builtin_is_known($name)) {
-                    my %pt = ('__cb_arg_0' => $elem_t);
-                    my @args = ({ kind => 'ident', name => '__cb_arg_0' });
-                    $cb_ret = builtin_result_type(
-                        $name,
-                        \@args,
-                        sub {
-                            my ($arg_expr) = @_;
-                            return undef if !defined($arg_expr) || ref($arg_expr) ne 'HASH';
-                            return $pt{ $arg_expr->{name} // '' };
-                        },
-                    );
-                }
-            }
-            if (defined($cb_ret) && $cb_ret ne '') {
-                my $base = _single_non_error_member_from_error_union($cb_ret);
-                $base = $cb_ret if !defined($base);
-                my $mapped = sequence_type_for_element($base);
-                if (is_union_type($cb_ret) && union_contains_member($cb_ret, 'error')) {
-                    return $mapped . ' | error';
-                }
-                return $mapped;
-            }
+        my $dynamic_policy = method_dynamic_result_policy($method);
+        if (defined($dynamic_policy) && $dynamic_policy ne '') {
+            my $dynamic = _infer_method_dynamic_result_type_hint(
+                policy => $dynamic_policy,
+                expr   => $expr,
+                recv_t => $recv_t,
+                env    => $env,
+                sigs   => $sigs,
+                seen   => $seen,
+            );
+            return $dynamic if defined($dynamic) && $dynamic ne '';
         }
         return method_result_type($method, $recv_t);
     }
@@ -716,14 +796,16 @@ sub _resolve_expr {
           if !method_is_known($method);
         compile_error("ResolveCalls/F050-Call-Registry: cannot resolve receiver type for intrinsic method '$method'")
           if !defined($recv_type) || $recv_type eq '' || $recv_type eq 'unknown';
-        if ($method eq 'index' && !method_receiver_supported($method, $recv_type)) {
-            compile_error("ResolveCalls/F050-Traceability: method 'index' requires value with source index metadata");
-        }
-        if ($method eq 'neighbours' && !method_receiver_supported($method, $recv_type) && is_matrix_type($recv_type)) {
-            compile_error("ResolveCalls/F050-Traceability: method 'neighbours' requires value with source matrix-member metadata");
+        my $receiver_supported = method_receiver_supported($method, $recv_type);
+        if (!$receiver_supported) {
+            my $traceability = method_traceability_hint($method);
+            if (_traceability_requirement_applies_for_receiver($traceability, $recv_type)) {
+                my $diag = _traceability_requirement_diagnostic($method, $traceability);
+                compile_error($diag) if defined($diag) && $diag ne '';
+            }
         }
         compile_error("ResolveCalls/F050-Call-Registry: method '$method' is not defined for receiver type '$recv_type'")
-          if !method_receiver_supported($method, $recv_type);
+          if !$receiver_supported;
         _verify_method_parameter_contract(
             method    => $method,
             recv_type => $recv_type,
@@ -754,7 +836,7 @@ sub _resolve_expr {
             arg_type_hints      => \@arg_hints,
         };
 
-        if ($method eq 'size' && defined($recv_type) && is_matrix_type($recv_type)) {
+        if (method_requires_matrix_axis_argument($method) && defined($recv_type) && is_matrix_type($recv_type)) {
             my $meta = matrix_type_meta($recv_type);
             $contract->{axis_min} = 0;
             $contract->{axis_max} = $meta->{dim} - 1;
@@ -1060,6 +1142,56 @@ sub _register_exit_bindings {
     }
 }
 
+sub _with_line_context {
+    my ($line, $cb) = @_;
+    if (defined($line) && $line =~ /^\d+$/ && $line > 0) {
+        set_error_line($line);
+    } else {
+        clear_error_line();
+    }
+    my $ret = $cb->();
+    clear_error_line();
+    return $ret;
+}
+
+sub _resolve_region_calls {
+    my (%args) = @_;
+    my $region = $args{region};
+    my $env = $args{env};
+    my $sigs = $args{sigs};
+    return if !defined($region) || ref($region) ne 'HASH';
+
+    for my $step (@{ $region->{steps} // [] }) {
+        my $line = $step->{provenance}{line};
+        my $stmt = _with_line_context($line, sub {
+            return step_payload_to_stmt($step->{payload});
+        });
+        next if !defined $stmt;
+        _with_line_context($line, sub {
+            _resolve_stmt_tree(
+                stmt      => $stmt,
+                env       => $env,
+                sigs      => $sigs,
+                seen_expr => {},
+                seen_stmt => {},
+            );
+            return;
+        });
+        $step->{payload} = stmt_to_payload($stmt);
+    }
+
+    my $exit = $region->{exit} // {};
+    my $line = $region->{line};
+    _with_line_context($line, sub {
+        for my $k (qw(cond_value iterable_expr fallible_expr value)) {
+            _resolve_expr(expr => $exit->{$k}, env => $env, sigs => $sigs, seen => {})
+              if defined $exit->{$k} && ref($exit->{$k}) eq 'HASH';
+        }
+        _register_exit_bindings(exit => $exit, env => $env, sigs => $sigs);
+        return;
+    });
+}
+
 sub _resolve_function_calls {
     my ($fn, $sigs) = @_;
     my $env = _env_from_params($fn->{params});
@@ -1074,47 +1206,13 @@ sub _resolve_function_calls {
         for my $rid (@$schedule) {
             my $region = $region_by_id{$rid};
             next if !defined $region;
-            for my $step (@{ $region->{steps} // [] }) {
-                my $stmt = step_payload_to_stmt($step->{payload});
-                next if !defined $stmt;
-                _resolve_stmt_tree(
-                    stmt      => $stmt,
-                    env       => $env,
-                    sigs      => $sigs,
-                    seen_expr => {},
-                    seen_stmt => {},
-                );
-                $step->{payload} = stmt_to_payload($stmt);
-            }
-            my $exit = $region->{exit} // {};
-            for my $k (qw(cond_value iterable_expr fallible_expr value)) {
-                _resolve_expr(expr => $exit->{$k}, env => $env, sigs => $sigs, seen => {})
-                  if defined $exit->{$k} && ref($exit->{$k}) eq 'HASH';
-            }
-            _register_exit_bindings(exit => $exit, env => $env, sigs => $sigs);
+            _resolve_region_calls(region => $region, env => $env, sigs => $sigs);
         }
     }
 
     for my $region (@{ $fn->{regions} // [] }) {
         next if %scheduled && $scheduled{$region->{id}};
-        for my $step (@{ $region->{steps} // [] }) {
-            my $stmt = step_payload_to_stmt($step->{payload});
-            next if !defined $stmt;
-            _resolve_stmt_tree(
-                stmt      => $stmt,
-                env       => $env,
-                sigs      => $sigs,
-                seen_expr => {},
-                seen_stmt => {},
-            );
-            $step->{payload} = stmt_to_payload($stmt);
-        }
-        my $exit = $region->{exit} // {};
-        for my $k (qw(cond_value iterable_expr fallible_expr value)) {
-            _resolve_expr(expr => $exit->{$k}, env => $env, sigs => $sigs, seen => {})
-              if defined $exit->{$k} && ref($exit->{$k}) eq 'HASH';
-        }
-        _register_exit_bindings(exit => $exit, env => $env, sigs => $sigs);
+        _resolve_region_calls(region => $region, env => $env, sigs => $sigs);
     }
 }
 
