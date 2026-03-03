@@ -23,7 +23,6 @@ function sumProblems(): number|error {
     const column = extractColumn(grid, x).log()
     if numbers.size() == 0 {
       operator = column.last()?
-      numbers = seq(0, column.size()-2).map(x => 0)
     }
     
     if isSeparator(column) {
@@ -33,12 +32,19 @@ function sumProblems(): number|error {
       continue
     }
     
-    for const i in seq(0, numbers.size()-1) {
-      const colValue = column[i]?
+    
+    const v = seq(0, column.size()-2)
+      .map(i => column[i])
+      .filter(x => x.isBlank()==false)
+      .reduce(0, (acc, x) => acc*10+parseNumber(x)?)
+    
+    let value = 0
+    for const i in seq(0, column.size()-2) {
+      const colValue = column[i]
       if colValue.isBlank() { continue }
-      const value = numbers[i]*10+parseNumber(colValue)?
-      numbers.insert(value, i)
+      value = value*10+parseNumber(colValue)?
     }
+    numbers.push(value)
   }
   
   return sum
