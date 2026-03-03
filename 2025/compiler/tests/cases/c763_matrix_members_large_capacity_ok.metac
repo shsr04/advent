@@ -1,0 +1,23 @@
+@Test({
+  "stdout": "Result: 1101,1100\n",
+  "exit": 0
+})
+function main() {
+  let m: matrix(number) with dim(2) = []
+  for const raw in seq(0, 1100) {
+    const i = raw + 0
+    m.insert(i, [i, i])?
+  }
+
+  let count = 0
+  let maxCol = -1
+  for const cell in m.members() {
+    const [row, col] = cell.index()
+    count += 1
+    if col > maxCol {
+      maxCol = col
+    }
+  }
+
+  log("Result: ${count},${maxCol}")
+}

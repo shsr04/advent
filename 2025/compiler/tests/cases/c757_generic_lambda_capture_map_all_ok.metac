@@ -1,0 +1,15 @@
+@Test({
+   "exit" : 0,
+   "stdout" : "Result: 1\n"
+})
+function main() {
+  const k = 2
+  const xs = seq(1, 3).map(x => { x + k })
+  const ok = xs.all(x => { x > k })
+
+  let result = 0
+  if ok && xs.max() == 5 {
+    result = 1
+  }
+  log("Result: ${result}")
+}

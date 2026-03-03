@@ -34,6 +34,153 @@ sub _template_expr_to_c {
     );
 }
 
+sub _collect_lambda_idents {
+    my ($expr, $out) = @_;
+    return if !defined($expr) || ref($expr) ne 'HASH';
+    my $k = $expr->{kind} // '';
+    if ($k eq 'ident') {
+        my $n = $expr->{name} // '';
+        $out->{$n} = 1 if $n ne '';
+        return;
+    }
+    for my $v (values %$expr) {
+        if (ref($v) eq 'HASH') {
+            _collect_lambda_idents($v, $out);
+            next;
+        }
+        next if ref($v) ne 'ARRAY';
+        for my $it (@$v) {
+            _collect_lambda_idents($it, $out) if ref($it) eq 'HASH';
+        }
+    }
+}
+
+sub _root_ident_name {
+    my ($expr) = @_;
+    return '' if !defined($expr) || ref($expr) ne 'HASH';
+    my $k = $expr->{kind} // '';
+    return $expr->{name} // '' if $k eq 'ident';
+    return _root_ident_name($expr->{recv}) if $k eq 'method_call';
+    return '';
+}
+
+sub _annotate_backend_call_contracts {
+    my ($expr) = @_;
+    return if !defined($expr) || ref($expr) ne 'HASH';
+    my $kind = $expr->{kind} // '';
+
+    for my $k (keys %$expr) {
+        my $v = $expr->{$k};
+        if (ref($v) eq 'HASH') {
+            _annotate_backend_call_contracts($v);
+            next;
+        }
+        next if ref($v) ne 'ARRAY';
+        for my $it (@$v) {
+            _annotate_backend_call_contracts($it) if ref($it) eq 'HASH';
+        }
+    }
+
+    if ($kind eq 'call') {
+        my $name = $expr->{name} // '';
+        if (builtin_is_known($name)) {
+            $expr->{resolved_call} //= {
+                call_kind => 'builtin',
+                op_id => builtin_op_id($name),
+                target_name => $name,
+                arity => scalar(@{ $expr->{args} // [] }),
+            };
+        }
+        return;
+    }
+    if ($kind eq 'method_call') {
+        my $method = $expr->{method} // '';
+        if (method_is_known($method)) {
+            $expr->{resolved_call} //= {
+                call_kind => 'intrinsic_method',
+                op_id => method_op_id($method),
+                target_name => $method,
+                method_name => $method,
+                arity => scalar(@{ $expr->{args} // [] }),
+            };
+        }
+        return;
+    }
+}
+
+sub _lambda_callback_codegen {
+    my (%args) = @_;
+    my $ctx = $args{ctx};
+    my $lambda = $args{lambda};
+    my $param_names = $args{param_names} // [];
+    my $param_types = $args{param_types} // [];
+    my $ret_c = $args{return_c} // 'int64_t';
+    return undef if !defined($ctx) || ref($ctx) ne 'HASH';
+    return undef if !defined($lambda) || ref($lambda) ne 'HASH';
+
+    my %params = map { $_ => 1 } grep { defined($_) && $_ ne '' } @$param_names;
+    my %idents;
+    _collect_lambda_idents($lambda->{body}, \%idents);
+    my @captures = grep {
+        !exists($params{$_}) && exists($ctx->{var_types}{$_})
+    } sort keys %idents;
+
+    my $cb_id = ++$ctx->{callback_counter};
+    my $fn_safe = $ctx->{fn_name} // 'fn';
+    $fn_safe =~ s/[^A-Za-z0-9_]/_/g;
+    my $cb_name = "__metac_cb_${fn_safe}_$cb_id";
+
+    my %alias = %{ $ctx->{ident_alias} // {} };
+    my @setup;
+    for my $cap (@captures) {
+        my $cap_ty = $ctx->{var_types}{$cap} // 'int64_t';
+        my $gname = "__metac_cbcap_${fn_safe}_${cb_id}_$cap";
+        $gname =~ s/[^A-Za-z0-9_]/_/g;
+        if (!exists $ctx->{generated_globals}{$gname}) {
+            $ctx->{generated_globals}{$gname} = "static $cap_ty $gname;";
+            push @{ $ctx->{generated_globals_order} }, $gname;
+        }
+        $alias{$cap} = $gname;
+        push @setup, "$gname = " . _expr_to_c({ kind => 'ident', name => $cap }, $ctx);
+    }
+
+    my %cb_var_types = %{ $ctx->{var_types} // {} };
+    for my $i (0 .. $#$param_names) {
+        my $pn = $param_names->[$i];
+        next if !defined($pn) || $pn eq '';
+        $cb_var_types{$pn} = $param_types->[$i] // 'int64_t';
+    }
+    my %cb_ctx = %$ctx;
+    $cb_ctx{ident_alias} = \%alias;
+    $cb_ctx{var_types} = \%cb_var_types;
+    _annotate_backend_call_contracts($lambda->{body});
+    my $body_c = _expr_to_c($lambda->{body}, \%cb_ctx);
+
+    my @cparams;
+    for my $i (0 .. $#$param_names) {
+        my $pn = $param_names->[$i] // '';
+        my $pt = $param_types->[$i] // 'int64_t';
+        next if $pn eq '';
+        push @cparams, "$pt $pn";
+    }
+    my $sig = @cparams ? join(', ', @cparams) : 'void';
+    my $fn_code = join("\n",
+        "static $ret_c $cb_name($sig) {",
+        "  return $body_c;",
+        "}",
+    );
+    push @{ $ctx->{generated_callbacks} }, $fn_code;
+
+    my $pre = @setup ? join(', ', @setup) : '';
+    return { fn => $cb_name, pre => $pre };
+}
+
+sub _with_callback_setup {
+    my ($pre, $call) = @_;
+    return $call if !defined($pre) || $pre eq '';
+    return '((' . $pre . '), (' . $call . '))';
+}
+
 sub _expr_to_c {
     my ($expr, $ctx) = @_;
     return '0' if !defined($expr) || ref($expr) ne 'HASH';
@@ -56,6 +203,9 @@ sub _expr_to_c {
         if ($name eq 'STDIN') {
             _helper_mark($ctx, 'stdin_read');
             return 'metac_stdin_read_all()';
+        }
+        if (defined($ctx->{ident_alias}) && ref($ctx->{ident_alias}) eq 'HASH' && exists($ctx->{ident_alias}{$name})) {
+            return $ctx->{ident_alias}{$name};
         }
         return $name ne '' ? $name : '/* missing-ident */ 0';
     }
@@ -102,19 +252,20 @@ sub _expr_to_c {
         my $idx = _expr_to_c($expr->{index}, $ctx);
         if (defined($recv) && ref($recv) eq 'HASH' && ($recv->{kind} // '') eq 'ident') {
             my $name = $recv->{name};
+            my $cname = _expr_to_c($recv, $ctx);
             my $ty = $ctx->{var_types}{$name} // '';
             if ($ty eq 'struct metac_list_i64') {
                 _helper_mark($ctx, 'list_i64');
-                return "metac_list_i64_get(&$name, $idx)";
+                return "metac_list_i64_get(&$cname, $idx)";
             }
             if ($ty eq 'struct metac_list_str') {
                 _helper_mark($ctx, 'list_str');
                 _helper_mark($ctx, 'list_str_get');
-                return "metac_list_str_get(&$name, $idx)";
+                return "metac_list_str_get(&$cname, $idx)";
             }
             if ($ty eq 'const char *') {
                 _helper_mark($ctx, 'string_index');
-                return "metac_string_code_at($name, $idx)";
+                return "metac_string_code_at($cname, $idx)";
             }
         }
         return "/* Backend/F054 missing index emitter */ 0";
@@ -134,7 +285,19 @@ sub _expr_to_c {
         my @args = map { _expr_to_c($_, $ctx) } @{ $expr->{args} // [] };
 
         if ($call_kind eq 'user' || $call_kind eq 'user_function') {
-            return $target . '(' . join(', ', @args) . ')';
+            my $call = $target . '(' . join(', ', @args) . ')';
+            my $setup = '';
+            for my $arg_expr (@{ $expr->{args} // [] }) {
+                next if !defined($arg_expr) || ref($arg_expr) ne 'HASH' || ($arg_expr->{kind} // '') ne 'ident';
+                my $arg_name = $arg_expr->{name} // '';
+                next if $arg_name eq '';
+                my $mvar = $ctx->{matrix_meta_vars}{$arg_name} // '';
+                next if $mvar eq '';
+                _helper_mark($ctx, 'matrix_meta');
+                $setup = "metac_set_last_matrix_meta($mvar)";
+                last;
+            }
+            return $setup ne '' ? "(($setup), ($call))" : $call;
         }
         if ($call_kind eq 'builtin') {
             if ($op_id eq 'call.builtin.parseNumber.v1') {
@@ -244,7 +407,29 @@ sub _expr_to_c {
         my @args = map { _expr_to_c($_, $ctx) } @{ $expr->{args} // [] };
 
         if ($call_kind eq 'user' || $call_kind eq 'user_function') {
-            return $target . '(' . join(', ', ($recv, @args)) . ')';
+            my $call = $target . '(' . join(', ', ($recv, @args)) . ')';
+            my $setup = '';
+            if (defined($recv_expr) && ref($recv_expr) eq 'HASH' && ($recv_expr->{kind} // '') eq 'ident') {
+                my $recv_name = $recv_expr->{name} // '';
+                my $mvar = $ctx->{matrix_meta_vars}{$recv_name} // '';
+                if ($mvar ne '') {
+                    _helper_mark($ctx, 'matrix_meta');
+                    $setup = "metac_set_last_matrix_meta($mvar)";
+                }
+            }
+            if ($setup eq '') {
+                for my $arg_expr (@{ $expr->{args} // [] }) {
+                    next if !defined($arg_expr) || ref($arg_expr) ne 'HASH' || ($arg_expr->{kind} // '') ne 'ident';
+                    my $arg_name = $arg_expr->{name} // '';
+                    next if $arg_name eq '';
+                    my $mvar = $ctx->{matrix_meta_vars}{$arg_name} // '';
+                    next if $mvar eq '';
+                    _helper_mark($ctx, 'matrix_meta');
+                    $setup = "metac_set_last_matrix_meta($mvar)";
+                    last;
+                }
+            }
+            return $setup ne '' ? "(($setup), ($call))" : $call;
         }
         if ($call_kind eq 'intrinsic_method') {
             if ($op_id eq 'method.match.v1') {
@@ -360,6 +545,37 @@ sub _expr_to_c {
                 }
             }
             if ($op_id eq 'method.any.v1') {
+                my $arg0 = $expr->{args}[0];
+                if (defined($recv_expr) && ref($recv_expr) eq 'HASH' && ($recv_expr->{kind} // '') eq 'ident') {
+                    my $rname = $recv_expr->{name} // '';
+                    my $rty = $ctx->{var_types}{$rname} // '';
+                    if (($rty eq 'struct metac_list_i64' || $rty eq 'struct metac_list_str')
+                        && defined($arg0) && ref($arg0) eq 'HASH')
+                    {
+                        my ($param_ty, $helper) = $rty eq 'struct metac_list_i64'
+                          ? ('int64_t', 'any_i64') : ('const char *', 'any_str');
+                        my $cb;
+                        if (($arg0->{kind} // '') eq 'lambda1') {
+                            $cb = _lambda_callback_codegen(
+                                ctx => $ctx,
+                                lambda => $arg0,
+                                param_names => [ $arg0->{param} // 'x' ],
+                                param_types => [ $param_ty ],
+                                return_c => 'int',
+                            );
+                        } elsif (($arg0->{kind} // '') eq 'ident') {
+                            $cb = { fn => ($arg0->{name} // ''), pre => '' };
+                        }
+                        if (defined($cb) && ($cb->{fn} // '') ne '') {
+                            _helper_mark($ctx, $rty eq 'struct metac_list_i64' ? 'list_i64' : 'list_str');
+                            _helper_mark($ctx, $helper);
+                            my $call = $rty eq 'struct metac_list_i64'
+                              ? 'metac_any_i64(&' . $rname . ', ' . $cb->{fn} . ')'
+                              : 'metac_any_str(&' . $rname . ', ' . $cb->{fn} . ')';
+                            return _with_callback_setup($cb->{pre}, $call);
+                        }
+                    }
+                }
                 if (defined($recv_expr) && ref($recv_expr) eq 'HASH' && ($recv_expr->{kind} // '') eq 'ident') {
                     my $rname = $recv_expr->{name} // '';
                     my $rty = $ctx->{var_types}{$rname} // '';
@@ -458,16 +674,15 @@ sub _expr_to_c {
                 return 'metac_method_slice_i64_value(' . $recv . ', ' . $start . ')';
             }
             if ($op_id eq 'method.index.v1') {
-                my $recv_hint = _expr_c_type_hint($recv_expr, $ctx);
                 my $receiver_type_hint = $meta->{receiver_type_hint} // '';
-                if (defined($receiver_type_hint) && $receiver_type_hint =~ /^matrix_member</) {
-                    _helper_mark($ctx, 'list_i64');
-                    return 'metac_list_i64_from_array((int64_t[]){0, 1}, 2)';
-                }
                 if (defined($recv_expr) && ref($recv_expr) eq 'HASH' && ($recv_expr->{kind} // '') eq 'ident') {
                     my $name = $recv_expr->{name} // '';
                     my $idx_expr = $ctx->{loop_item_index_expr}{$name};
                     return $idx_expr if defined $idx_expr && $idx_expr ne '';
+                }
+                if (defined($receiver_type_hint) && $receiver_type_hint =~ /^matrix_member</) {
+                    _helper_mark($ctx, 'list_i64');
+                    return 'metac_list_i64_empty()';
                 }
                 _helper_mark($ctx, 'member_index');
                 return 'metac_last_member_index';
@@ -487,11 +702,11 @@ sub _expr_to_c {
                 my $idx_hint = _expr_c_type_hint($expr->{args}[1], $ctx);
                 my $is_matrix_idx = defined($idx_hint) && $idx_hint eq 'struct metac_list_i64' ? 1 : 0;
                 my $receiver_type_hint = $meta->{receiver_type_hint} // '';
+                my $is_matrix_recv = (defined($receiver_type_hint) && $receiver_type_hint =~ /^matrix</) ? 1 : 0;
                 if (defined($recv_expr) && ref($recv_expr) eq 'HASH' && ($recv_expr->{kind} // '') eq 'ident') {
                     my $rname = $recv_expr->{name};
                     my $rty = $ctx->{var_types}{$rname} // '';
                     my $mvar = $ctx->{matrix_meta_vars}{$rname} // '';
-                    my $is_matrix_recv = (defined($receiver_type_hint) && $receiver_type_hint =~ /^matrix</) ? 1 : 0;
                     if ($rty eq 'struct metac_list_str') {
                         _helper_mark($ctx, 'list_str');
                         _helper_mark($ctx, 'method_insert');
@@ -521,6 +736,12 @@ sub _expr_to_c {
                     _helper_mark($ctx, 'list_str');
                     _helper_mark($ctx, 'method_insert');
                     if ($is_matrix_idx) {
+                        my $src_ident = _root_ident_name($recv_expr);
+                        my $src_mvar = $ctx->{matrix_meta_vars}{$src_ident} // '';
+                        if ($src_mvar ne '' && $is_matrix_recv) {
+                            _helper_mark($ctx, 'matrix_meta');
+                            return 'metac_method_insert_str_matrix_meta_value(' . $recv . ', ' . ($args[0] // '""') . ', ' . ($args[1] // 'metac_list_i64_empty()') . ', &' . $src_mvar . ')';
+                        }
                         return 'metac_method_insert_str_matrix_value(' . $recv . ', ' . ($args[0] // '""') . ', ' . ($args[1] // 'metac_list_i64_empty()') . ')';
                     }
                     return 'metac_method_insert_str_value(' . $recv . ', ' . ($args[0] // '""') . ', ' . ($args[1] // '0') . ')';
@@ -528,6 +749,12 @@ sub _expr_to_c {
                 _helper_mark($ctx, 'list_i64');
                 _helper_mark($ctx, 'method_insert');
                 if ($is_matrix_idx) {
+                    my $src_ident = _root_ident_name($recv_expr);
+                    my $src_mvar = $ctx->{matrix_meta_vars}{$src_ident} // '';
+                    if ($src_mvar ne '' && $is_matrix_recv) {
+                        _helper_mark($ctx, 'matrix_meta');
+                        return 'metac_method_insert_i64_matrix_meta_value(' . $recv . ', ' . ($args[0] // '0') . ', ' . ($args[1] // 'metac_list_i64_empty()') . ', &' . $src_mvar . ')';
+                    }
                     return 'metac_method_insert_i64_matrix_value(' . $recv . ', ' . ($args[0] // '0') . ', ' . ($args[1] // 'metac_list_i64_empty()') . ')';
                 }
                 return 'metac_method_insert_i64_value(' . $recv . ', ' . ($args[0] // '0') . ', ' . ($args[1] // '0') . ')';
@@ -585,6 +812,42 @@ sub _expr_to_c {
             if ($op_id eq 'method.filter.v1') {
                 my $pred = $expr->{args}[0];
                 my $recv_hint = _expr_c_type_hint($recv_expr, $ctx);
+                if (defined($recv_hint) && ($recv_hint eq 'struct metac_list_i64' || $recv_hint eq 'struct metac_list_str')
+                    && defined($pred) && ref($pred) eq 'HASH')
+                {
+                    my ($param_ty, $helper, $helper_value, $list_helper) = $recv_hint eq 'struct metac_list_i64'
+                      ? ('int64_t', 'filter_i64_cb', 'filter_i64_cb_value', 'list_i64')
+                      : ('const char *', 'filter_str_cb', 'filter_str_cb_value', 'list_str');
+                    my $cb;
+                    if (($pred->{kind} // '') eq 'lambda1') {
+                        $cb = _lambda_callback_codegen(
+                            ctx => $ctx,
+                            lambda => $pred,
+                            param_names => [ $pred->{param} // 'x' ],
+                            param_types => [ $param_ty ],
+                            return_c => 'int',
+                        );
+                    } elsif (($pred->{kind} // '') eq 'ident') {
+                        $cb = { fn => ($pred->{name} // ''), pre => '' };
+                    }
+                    if (defined($cb) && ($cb->{fn} // '') ne '') {
+                        _helper_mark($ctx, $list_helper);
+                        _helper_mark($ctx, $helper);
+                        my $call;
+                        if (defined($recv_expr) && ref($recv_expr) eq 'HASH' && ($recv_expr->{kind} // '') eq 'ident') {
+                            my $rname = $recv_expr->{name} // '';
+                            $call = $recv_hint eq 'struct metac_list_i64'
+                              ? 'metac_filter_i64_cb(&' . $rname . ', ' . $cb->{fn} . ')'
+                              : 'metac_filter_str_cb(&' . $rname . ', ' . $cb->{fn} . ')';
+                        } else {
+                            _helper_mark($ctx, $helper_value);
+                            $call = $recv_hint eq 'struct metac_list_i64'
+                              ? 'metac_filter_i64_cb_value(' . $recv . ', ' . $cb->{fn} . ')'
+                              : 'metac_filter_str_cb_value(' . $recv . ', ' . $cb->{fn} . ')';
+                        }
+                        return _with_callback_setup($cb->{pre}, $call);
+                    }
+                }
                 if (defined($recv_hint) && $recv_hint eq 'struct metac_list_str'
                     && defined($pred) && ref($pred) eq 'HASH'
                     && (($pred->{kind} // '') eq 'lambda1'))
@@ -741,11 +1004,185 @@ sub _expr_to_c {
                 }
                 return $recv;
             }
+            if ($op_id eq 'method.all.v1') {
+                my $arg0 = $expr->{args}[0];
+                if (defined($recv_expr) && ref($recv_expr) eq 'HASH' && ($recv_expr->{kind} // '') eq 'ident') {
+                    my $rname = $recv_expr->{name} // '';
+                    my $rty = $ctx->{var_types}{$rname} // '';
+                    if ($rty eq 'struct metac_list_str'
+                        && defined($arg0) && ref($arg0) eq 'HASH'
+                        && ($arg0->{kind} // '') eq 'lambda1')
+                    {
+                        my $cb = _lambda_callback_codegen(
+                            ctx => $ctx,
+                            lambda => $arg0,
+                            param_names => [ $arg0->{param} // 'x' ],
+                            param_types => [ 'const char *' ],
+                            return_c => 'int',
+                        );
+                        if (defined($cb)) {
+                            _helper_mark($ctx, 'list_str');
+                            _helper_mark($ctx, 'all_str');
+                            return _with_callback_setup($cb->{pre}, 'metac_all_str(&' . $rname . ', ' . $cb->{fn} . ')');
+                        }
+                    }
+                    if ($rty eq 'struct metac_list_i64'
+                        && defined($arg0) && ref($arg0) eq 'HASH'
+                        && ($arg0->{kind} // '') eq 'lambda1')
+                    {
+                        my $cb = _lambda_callback_codegen(
+                            ctx => $ctx,
+                            lambda => $arg0,
+                            param_names => [ $arg0->{param} // 'x' ],
+                            param_types => [ 'int64_t' ],
+                            return_c => 'int',
+                        );
+                        if (defined($cb)) {
+                            _helper_mark($ctx, 'list_i64');
+                            _helper_mark($ctx, 'all_i64');
+                            return _with_callback_setup($cb->{pre}, 'metac_all_i64(&' . $rname . ', ' . $cb->{fn} . ')');
+                        }
+                    }
+                    if ($rty eq 'struct metac_list_str'
+                        && defined($arg0) && ref($arg0) eq 'HASH'
+                        && ($arg0->{kind} // '') eq 'ident')
+                    {
+                        _helper_mark($ctx, 'list_str');
+                        _helper_mark($ctx, 'all_str');
+                        return 'metac_all_str(&' . $rname . ', ' . ($args[0] // '0') . ')';
+                    }
+                    if ($rty eq 'struct metac_list_i64'
+                        && defined($arg0) && ref($arg0) eq 'HASH'
+                        && ($arg0->{kind} // '') eq 'ident')
+                    {
+                        _helper_mark($ctx, 'list_i64');
+                        _helper_mark($ctx, 'all_i64');
+                        return 'metac_all_i64(&' . $rname . ', ' . ($args[0] // '0') . ')';
+                    }
+                    if ($rty eq 'struct metac_list_str'
+                        && defined($arg0) && ref($arg0) eq 'HASH'
+                        && ($arg0->{kind} // '') eq 'lambda1')
+                    {
+                        my $p = $arg0->{param} // '';
+                        my $b = $arg0->{body};
+                        if (defined($b) && ref($b) eq 'HASH'
+                            && (($b->{kind} // '') eq 'method_call')
+                            && (($b->{method} // '') eq 'isBlank')
+                            && defined($b->{recv}) && ref($b->{recv}) eq 'HASH'
+                            && (($b->{recv}{kind} // '') eq 'ident')
+                            && (($b->{recv}{name} // '') eq $p))
+                        {
+                            _helper_mark($ctx, 'list_str');
+                            _helper_mark($ctx, 'method_isblank');
+                            _helper_mark($ctx, 'all_str');
+                            _helper_mark($ctx, 'all_str_isblank');
+                            return 'metac_all_str_isblank(&' . $rname . ')';
+                        }
+                    }
+                }
+                my $recv_hint = _expr_c_type_hint($recv_expr, $ctx);
+                if (defined($recv_hint) && $recv_hint eq 'struct metac_list_str'
+                    && defined($arg0) && ref($arg0) eq 'HASH'
+                    && ($arg0->{kind} // '') eq 'lambda1')
+                {
+                    my $cb = _lambda_callback_codegen(
+                        ctx => $ctx,
+                        lambda => $arg0,
+                        param_names => [ $arg0->{param} // 'x' ],
+                        param_types => [ 'const char *' ],
+                        return_c => 'int',
+                    );
+                    if (defined($cb)) {
+                        _helper_mark($ctx, 'list_str');
+                        _helper_mark($ctx, 'all_str');
+                        _helper_mark($ctx, 'all_str_value');
+                        return _with_callback_setup($cb->{pre}, 'metac_all_str_value(' . $recv . ', ' . $cb->{fn} . ')');
+                    }
+                }
+                if (defined($recv_hint) && $recv_hint eq 'struct metac_list_i64'
+                    && defined($arg0) && ref($arg0) eq 'HASH'
+                    && ($arg0->{kind} // '') eq 'lambda1')
+                {
+                    my $cb = _lambda_callback_codegen(
+                        ctx => $ctx,
+                        lambda => $arg0,
+                        param_names => [ $arg0->{param} // 'x' ],
+                        param_types => [ 'int64_t' ],
+                        return_c => 'int',
+                    );
+                    if (defined($cb)) {
+                        _helper_mark($ctx, 'list_i64');
+                        _helper_mark($ctx, 'all_i64');
+                        _helper_mark($ctx, 'all_i64_value');
+                        return _with_callback_setup($cb->{pre}, 'metac_all_i64_value(' . $recv . ', ' . $cb->{fn} . ')');
+                    }
+                }
+                if (defined($recv_hint) && $recv_hint eq 'struct metac_list_str'
+                    && defined($arg0) && ref($arg0) eq 'HASH'
+                    && ($arg0->{kind} // '') eq 'ident')
+                {
+                    _helper_mark($ctx, 'list_str');
+                    _helper_mark($ctx, 'all_str');
+                    _helper_mark($ctx, 'all_str_value');
+                    return 'metac_all_str_value(' . $recv . ', ' . ($args[0] // '0') . ')';
+                }
+                if (defined($recv_hint) && $recv_hint eq 'struct metac_list_i64'
+                    && defined($arg0) && ref($arg0) eq 'HASH'
+                    && ($arg0->{kind} // '') eq 'ident')
+                {
+                    _helper_mark($ctx, 'list_i64');
+                    _helper_mark($ctx, 'all_i64');
+                    _helper_mark($ctx, 'all_i64_value');
+                    return 'metac_all_i64_value(' . $recv . ', ' . ($args[0] // '0') . ')';
+                }
+            }
             if ($op_id eq 'method.map.v1') {
                 my $arg0 = $expr->{args}[0];
                 if (defined($recv_expr) && ref($recv_expr) eq 'HASH' && ($recv_expr->{kind} // '') eq 'ident') {
                     my $rname = $recv_expr->{name} // '';
                     my $rty = $ctx->{var_types}{$rname} // '';
+                    if ($rty eq 'struct metac_list_str'
+                        && defined($arg0) && ref($arg0) eq 'HASH'
+                        && ($arg0->{kind} // '') eq 'lambda1')
+                    {
+                        my $cb = _lambda_callback_codegen(
+                            ctx => $ctx,
+                            lambda => $arg0,
+                            param_names => [ $arg0->{param} // 'x' ],
+                            param_types => [ 'const char *' ],
+                            return_c => 'int64_t',
+                        );
+                        if (defined($cb)) {
+                            _helper_mark($ctx, 'list_str');
+                            _helper_mark($ctx, 'list_i64');
+                            _helper_mark($ctx, 'map_str_i64');
+                            return _with_callback_setup($cb->{pre}, 'metac_map_str_i64(&' . $rname . ', ' . $cb->{fn} . ')');
+                        }
+                    }
+                    if ($rty eq 'struct metac_list_i64'
+                        && defined($arg0) && ref($arg0) eq 'HASH'
+                        && ($arg0->{kind} // '') eq 'lambda1')
+                    {
+                        my $map_out_hint = _expr_c_type_hint($expr, $ctx) // 'struct metac_list_i64';
+                        my $ret_c = $map_out_hint eq 'struct metac_list_str' ? 'const char *' : 'int64_t';
+                        my $cb = _lambda_callback_codegen(
+                            ctx => $ctx,
+                            lambda => $arg0,
+                            param_names => [ $arg0->{param} // 'x' ],
+                            param_types => [ 'int64_t' ],
+                            return_c => $ret_c,
+                        );
+                        if (defined($cb)) {
+                            _helper_mark($ctx, 'list_i64');
+                            if ($map_out_hint eq 'struct metac_list_str') {
+                                _helper_mark($ctx, 'list_str');
+                                _helper_mark($ctx, 'map_i64_str');
+                                return _with_callback_setup($cb->{pre}, 'metac_map_i64_str(&' . $rname . ', ' . $cb->{fn} . ')');
+                            }
+                            _helper_mark($ctx, 'map_i64_i64');
+                            return _with_callback_setup($cb->{pre}, 'metac_map_i64_i64(&' . $rname . ', ' . $cb->{fn} . ')');
+                        }
+                    }
                     if ($rty eq 'struct metac_list_str'
                         && defined($arg0) && ref($arg0) eq 'HASH'
                         && ($arg0->{kind} // '') eq 'ident'
@@ -775,8 +1212,64 @@ sub _expr_to_c {
                         _helper_mark($ctx, 'map_i64_i64');
                         return 'metac_map_i64_i64(&' . $rname . ', ' . ($args[0] // '0') . ')';
                     }
+                    if ($rty eq 'struct metac_list_i64'
+                        && defined($arg0) && ref($arg0) eq 'HASH'
+                        && ($arg0->{kind} // '') eq 'lambda1')
+                    {
+                        my $b = $arg0->{body};
+                        if (defined($b) && ref($b) eq 'HASH' && (($b->{kind} // '') eq 'num')) {
+                            _helper_mark($ctx, 'list_i64');
+                            _helper_mark($ctx, 'map_i64_const');
+                            return 'metac_map_i64_const(&' . $rname . ', ' . _expr_to_c($b, $ctx) . ')';
+                        }
+                    }
                 }
                 my $recv_hint = _expr_c_type_hint($recv_expr, $ctx);
+                if (defined($recv_hint) && $recv_hint eq 'struct metac_list_str'
+                    && defined($arg0) && ref($arg0) eq 'HASH'
+                    && ($arg0->{kind} // '') eq 'lambda1')
+                {
+                    my $cb = _lambda_callback_codegen(
+                        ctx => $ctx,
+                        lambda => $arg0,
+                        param_names => [ $arg0->{param} // 'x' ],
+                        param_types => [ 'const char *' ],
+                        return_c => 'int64_t',
+                    );
+                    if (defined($cb)) {
+                        _helper_mark($ctx, 'list_str');
+                        _helper_mark($ctx, 'list_i64');
+                        _helper_mark($ctx, 'map_str_i64');
+                        _helper_mark($ctx, 'map_str_i64_value');
+                        return _with_callback_setup($cb->{pre}, 'metac_map_str_i64_value(' . $recv . ', ' . $cb->{fn} . ')');
+                    }
+                }
+                if (defined($recv_hint) && $recv_hint eq 'struct metac_list_i64'
+                    && defined($arg0) && ref($arg0) eq 'HASH'
+                    && ($arg0->{kind} // '') eq 'lambda1')
+                {
+                    my $map_out_hint = _expr_c_type_hint($expr, $ctx) // 'struct metac_list_i64';
+                    my $ret_c = $map_out_hint eq 'struct metac_list_str' ? 'const char *' : 'int64_t';
+                    my $cb = _lambda_callback_codegen(
+                        ctx => $ctx,
+                        lambda => $arg0,
+                        param_names => [ $arg0->{param} // 'x' ],
+                        param_types => [ 'int64_t' ],
+                        return_c => $ret_c,
+                    );
+                    if (defined($cb)) {
+                        _helper_mark($ctx, 'list_i64');
+                        if ($map_out_hint eq 'struct metac_list_str') {
+                            _helper_mark($ctx, 'list_str');
+                            _helper_mark($ctx, 'map_i64_str');
+                            _helper_mark($ctx, 'map_i64_str_value');
+                            return _with_callback_setup($cb->{pre}, 'metac_map_i64_str_value(' . $recv . ', ' . $cb->{fn} . ')');
+                        }
+                        _helper_mark($ctx, 'map_i64_i64');
+                        _helper_mark($ctx, 'map_i64_i64_value');
+                        return _with_callback_setup($cb->{pre}, 'metac_map_i64_i64_value(' . $recv . ', ' . $cb->{fn} . ')');
+                    }
+                }
                 if (defined($recv_hint) && $recv_hint eq 'struct metac_list_str'
                     && defined($arg0) && ref($arg0) eq 'HASH'
                     && ($arg0->{kind} // '') eq 'ident'
@@ -809,11 +1302,59 @@ sub _expr_to_c {
                     _helper_mark($ctx, 'map_i64_i64_value');
                     return 'metac_map_i64_i64_value(' . $recv . ', ' . ($args[0] // '0') . ')';
                 }
+                if (defined($recv_hint) && $recv_hint eq 'struct metac_list_i64'
+                    && defined($arg0) && ref($arg0) eq 'HASH'
+                    && ($arg0->{kind} // '') eq 'lambda1')
+                {
+                    my $b = $arg0->{body};
+                    if (defined($b) && ref($b) eq 'HASH' && (($b->{kind} // '') eq 'num')) {
+                        _helper_mark($ctx, 'list_i64');
+                        _helper_mark($ctx, 'map_i64_const');
+                        _helper_mark($ctx, 'map_i64_const_value');
+                        return 'metac_map_i64_const_value(' . $recv . ', ' . _expr_to_c($b, $ctx) . ')';
+                    }
+                }
             }
             if ($op_id eq 'method.reduce.v1') {
                 my $recv_hint = _expr_c_type_hint($recv_expr, $ctx);
                 my $init = $args[0] // '0';
                 my $lam = $expr->{args}[1];
+                if (defined($recv_hint) && ($recv_hint eq 'struct metac_list_i64' || $recv_hint eq 'struct metac_list_str')
+                    && defined($lam) && ref($lam) eq 'HASH')
+                {
+                    my ($param_types, $helper, $helper_value, $list_helper) = $recv_hint eq 'struct metac_list_i64'
+                      ? (['int64_t', 'int64_t'], 'reduce_i64_cb', 'reduce_i64_cb_value', 'list_i64')
+                      : (['int64_t', 'const char *'], 'reduce_str_cb', 'reduce_str_cb_value', 'list_str');
+                    my $cb;
+                    if (($lam->{kind} // '') eq 'lambda2') {
+                        $cb = _lambda_callback_codegen(
+                            ctx => $ctx,
+                            lambda => $lam,
+                            param_names => [ $lam->{param1} // 'acc', $lam->{param2} // 'x' ],
+                            param_types => $param_types,
+                            return_c => 'int64_t',
+                        );
+                    } elsif (($lam->{kind} // '') eq 'ident') {
+                        $cb = { fn => ($lam->{name} // ''), pre => '' };
+                    }
+                    if (defined($cb) && ($cb->{fn} // '') ne '') {
+                        _helper_mark($ctx, $list_helper);
+                        _helper_mark($ctx, $helper);
+                        my $call;
+                        if (defined($recv_expr) && ref($recv_expr) eq 'HASH' && ($recv_expr->{kind} // '') eq 'ident') {
+                            my $rname = $recv_expr->{name} // '';
+                            $call = $recv_hint eq 'struct metac_list_i64'
+                              ? 'metac_reduce_i64_cb(&' . $rname . ', ' . $init . ', ' . $cb->{fn} . ')'
+                              : 'metac_reduce_str_cb(&' . $rname . ', ' . $init . ', ' . $cb->{fn} . ')';
+                        } else {
+                            _helper_mark($ctx, $helper_value);
+                            $call = $recv_hint eq 'struct metac_list_i64'
+                              ? 'metac_reduce_i64_cb_value(' . $recv . ', ' . $init . ', ' . $cb->{fn} . ')'
+                              : 'metac_reduce_str_cb_value(' . $recv . ', ' . $init . ', ' . $cb->{fn} . ')';
+                        }
+                        return _with_callback_setup($cb->{pre}, $call);
+                    }
+                }
                 if (defined($recv_hint) && $recv_hint eq 'struct metac_list_i64'
                     && defined($lam) && ref($lam) eq 'HASH' && (($lam->{kind} // '') eq 'lambda2'))
                 {
@@ -861,6 +1402,46 @@ sub _expr_to_c {
                 }
             }
             if ($op_id eq 'method.assert.v1') {
+                my $pred = $expr->{args}[0];
+                my $msg = $args[1] // '""';
+                my $recv_hint = _expr_c_type_hint($recv_expr, $ctx);
+                if (defined($recv_hint) && ($recv_hint eq 'struct metac_list_i64' || $recv_hint eq 'struct metac_list_str')
+                    && defined($pred) && ref($pred) eq 'HASH')
+                {
+                    my ($param_ty, $helper, $helper_value, $list_helper) = $recv_hint eq 'struct metac_list_i64'
+                      ? ('struct metac_list_i64', 'assert_i64_cb', 'assert_i64_cb_value', 'list_i64')
+                      : ('struct metac_list_str', 'assert_str_cb', 'assert_str_cb_value', 'list_str');
+                    my $cb;
+                    if (($pred->{kind} // '') eq 'lambda1') {
+                        $cb = _lambda_callback_codegen(
+                            ctx => $ctx,
+                            lambda => $pred,
+                            param_names => [ $pred->{param} // 'x' ],
+                            param_types => [ $param_ty ],
+                            return_c => 'int',
+                        );
+                    } elsif (($pred->{kind} // '') eq 'ident') {
+                        $cb = { fn => ($pred->{name} // ''), pre => '' };
+                    }
+                    if (defined($cb) && ($cb->{fn} // '') ne '') {
+                        _helper_mark($ctx, $list_helper);
+                        _helper_mark($ctx, $helper);
+                        _helper_mark($ctx, 'error_flag');
+                        my $call;
+                        if (defined($recv_expr) && ref($recv_expr) eq 'HASH' && ($recv_expr->{kind} // '') eq 'ident') {
+                            my $rname = $recv_expr->{name} // '';
+                            $call = $recv_hint eq 'struct metac_list_i64'
+                              ? 'metac_assert_i64_cb(&' . $rname . ', ' . $cb->{fn} . ', ' . $msg . ')'
+                              : 'metac_assert_str_cb(&' . $rname . ', ' . $cb->{fn} . ', ' . $msg . ')';
+                        } else {
+                            _helper_mark($ctx, $helper_value);
+                            $call = $recv_hint eq 'struct metac_list_i64'
+                              ? 'metac_assert_i64_cb_value(' . $recv . ', ' . $cb->{fn} . ', ' . $msg . ')'
+                              : 'metac_assert_str_cb_value(' . $recv . ', ' . $cb->{fn} . ', ' . $msg . ')';
+                        }
+                        return _with_callback_setup($cb->{pre}, $call);
+                    }
+                }
                 if (defined($recv_expr) && ref($recv_expr) eq 'HASH' && ($recv_expr->{kind} // '') eq 'ident') {
                     my $rname = $recv_expr->{name} // '';
                     my $rty = $ctx->{var_types}{$rname} // '';
@@ -886,6 +1467,48 @@ sub _expr_to_c {
                                 return 'metac_assert_size_i64(&' . $rname . ', ' . $need . ', ' . $msg . ')';
                             }
                         }
+                    }
+                }
+            }
+            if ($op_id eq 'method.scan.v1') {
+                my $recv_hint = _expr_c_type_hint($recv_expr, $ctx);
+                my $init = $args[0] // '0';
+                my $lam = $expr->{args}[1];
+                if (defined($recv_hint) && ($recv_hint eq 'struct metac_list_i64' || $recv_hint eq 'struct metac_list_str')
+                    && defined($lam) && ref($lam) eq 'HASH')
+                {
+                    my ($param_types, $helper, $helper_value, $list_helper) = $recv_hint eq 'struct metac_list_i64'
+                      ? (['int64_t', 'int64_t'], 'scan_i64_cb', 'scan_i64_cb_value', 'list_i64')
+                      : (['int64_t', 'const char *'], 'scan_str_cb', 'scan_str_cb_value', 'list_str');
+                    my $cb;
+                    if (($lam->{kind} // '') eq 'lambda2') {
+                        $cb = _lambda_callback_codegen(
+                            ctx => $ctx,
+                            lambda => $lam,
+                            param_names => [ $lam->{param1} // 'acc', $lam->{param2} // 'x' ],
+                            param_types => $param_types,
+                            return_c => 'int64_t',
+                        );
+                    } elsif (($lam->{kind} // '') eq 'ident') {
+                        $cb = { fn => ($lam->{name} // ''), pre => '' };
+                    }
+                    if (defined($cb) && ($cb->{fn} // '') ne '') {
+                        _helper_mark($ctx, $list_helper);
+                        _helper_mark($ctx, 'list_i64');
+                        _helper_mark($ctx, $helper);
+                        my $call;
+                        if (defined($recv_expr) && ref($recv_expr) eq 'HASH' && ($recv_expr->{kind} // '') eq 'ident') {
+                            my $rname = $recv_expr->{name} // '';
+                            $call = $recv_hint eq 'struct metac_list_i64'
+                              ? 'metac_scan_i64_cb(&' . $rname . ', ' . $init . ', ' . $cb->{fn} . ')'
+                              : 'metac_scan_str_cb(&' . $rname . ', ' . $init . ', ' . $cb->{fn} . ')';
+                        } else {
+                            _helper_mark($ctx, $helper_value);
+                            $call = $recv_hint eq 'struct metac_list_i64'
+                              ? 'metac_scan_i64_cb_value(' . $recv . ', ' . $init . ', ' . $cb->{fn} . ')'
+                              : 'metac_scan_str_cb_value(' . $recv . ', ' . $init . ', ' . $cb->{fn} . ')';
+                        }
+                        return _with_callback_setup($cb->{pre}, $call);
                     }
                 }
             }

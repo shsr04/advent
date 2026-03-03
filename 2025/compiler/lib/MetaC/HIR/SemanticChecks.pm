@@ -156,6 +156,15 @@ sub _derive_if_narrowing {
     return (\%then_types, \%else_types, \%then_facts, \%else_facts);
 }
 
+sub _normalize_fallible_expr_type_for_try_assignment {
+    my ($expr, $expr_t, $ctx) = @_;
+    return $expr_t if !defined($expr_t) || $expr_t eq '';
+    return $expr_t if scalar_is_error($expr_t);
+    return $expr_t if is_union_type($expr_t) && union_contains_member($expr_t, 'error');
+    return $expr_t if !_expr_is_fallible($expr, $ctx);
+    return $expr_t . ' | error';
+}
+
 sub _list_length_proved {
     my ($expr, $ctx, $need) = @_;
     return 0 if !defined($expr) || ref($expr) ne 'HASH';
@@ -452,6 +461,68 @@ sub _len_source_var_from_expr {
     return undef;
 }
 
+sub _len_bounds_for_var {
+    my ($name, $ctx) = @_;
+    return (undef, undef) if !defined($name) || $name eq '';
+    my $facts = $ctx->{facts} // {};
+    my @vals;
+    for my $k (keys %$facts) {
+        next if $k !~ /^len_var:\Q$name\E:(-?\d+)$/;
+        push @vals, int($1);
+    }
+    return (undef, undef) if !@vals;
+    my ($min, $max) = ($vals[0], $vals[0]);
+    for my $v (@vals) {
+        $min = $v if $v < $min;
+        $max = $v if $v > $max;
+    }
+    return ($min, $max);
+}
+
+sub _static_int_expr {
+    my ($expr) = @_;
+    return undef if !defined($expr) || ref($expr) ne 'HASH';
+    my $kind = $expr->{kind} // '';
+    if ($kind eq 'num') {
+        my $v = $expr->{value};
+        return undef if !defined($v) || $v !~ /^-?\d+$/;
+        return int($v);
+    }
+    return undef if $kind ne 'binop';
+    my $op = $expr->{op} // '';
+    return undef if $op ne '+' && $op ne '-';
+    my $l = _static_int_expr($expr->{left});
+    my $r = _static_int_expr($expr->{right});
+    return undef if !defined($l) || !defined($r);
+    return $op eq '+' ? ($l + $r) : ($l - $r);
+}
+
+sub _expr_as_len_plus_offset {
+    my ($expr, $ctx) = @_;
+    return undef if !defined($expr) || ref($expr) ne 'HASH';
+    my $n = _static_int_expr($expr);
+    return { src => undef, offset => $n } if defined($n);
+
+    my $src = _len_source_var_from_expr($expr, $ctx);
+    return { src => $src, offset => 0 } if defined($src) && $src ne '';
+
+    return undef if ($expr->{kind} // '') ne 'binop';
+    my $op = $expr->{op} // '';
+    return undef if $op ne '+' && $op ne '-';
+    my $l = _expr_as_len_plus_offset($expr->{left}, $ctx);
+    my $r = _expr_as_len_plus_offset($expr->{right}, $ctx);
+    return undef if !defined($l) || !defined($r);
+
+    if ($op eq '+') {
+        return undef if defined($l->{src}) && defined($r->{src});
+        my $src_sum = defined($l->{src}) ? $l->{src} : $r->{src};
+        return { src => $src_sum, offset => int($l->{offset}) + int($r->{offset}) };
+    }
+
+    return undef if defined($r->{src});
+    return { src => $l->{src}, offset => int($l->{offset}) - int($r->{offset}) };
+}
+
 sub _for_seq_index_bound_fact {
     my ($iterable, $var, $ctx) = @_;
     return undef if !defined($iterable) || ref($iterable) ne 'HASH' || !defined($var) || $var eq '';
@@ -459,12 +530,35 @@ sub _for_seq_index_bound_fact {
     my $args = $iterable->{args} // [];
     return undef if ref($args) ne 'ARRAY' || @$args != 2;
     my ($start, $end) = @$args;
-    return undef if !defined($start) || ref($start) ne 'HASH' || ($start->{kind} // '') ne 'num' || int($start->{value} // 0) != 0;
-    return undef if !defined($end) || ref($end) ne 'HASH' || ($end->{kind} // '') ne 'binop' || ($end->{op} // '') ne '-';
-    my $rhs = $end->{right};
-    return undef if !defined($rhs) || ref($rhs) ne 'HASH' || ($rhs->{kind} // '') ne 'num' || int($rhs->{value} // 0) != 1;
-    my $src = _len_source_var_from_expr($end->{left}, $ctx);
+
+    my $start_form = _expr_as_len_plus_offset($start, $ctx);
+    my $end_form = _expr_as_len_plus_offset($end, $ctx);
+    return undef if !defined($start_form) || !defined($end_form);
+
+    my $src = defined($start_form->{src}) ? $start_form->{src} : $end_form->{src};
     return undef if !defined($src) || $src eq '';
+    return undef if defined($start_form->{src}) && defined($end_form->{src}) && $start_form->{src} ne $end_form->{src};
+
+    my ($len_min, $len_max) = _len_bounds_for_var($src, $ctx);
+    my $start_ok = 0;
+    if (!defined($start_form->{src})) {
+        $start_ok = int($start_form->{offset}) >= 0 ? 1 : 0;
+    } elsif ($start_form->{src} eq $src) {
+        $start_ok = int($start_form->{offset}) >= 0 ? 1 : 0;
+        $start_ok = 1 if !$start_ok && defined($len_min) && ($len_min + int($start_form->{offset}) >= 0);
+    }
+    return undef if !$start_ok;
+
+    my $end_ok = 0;
+    if (!defined($end_form->{src})) {
+        $end_ok = 1 if defined($len_min) && int($end_form->{offset}) < $len_min;
+    } elsif ($end_form->{src} eq $src) {
+        $end_ok = int($end_form->{offset}) <= -1 ? 1 : 0;
+        $end_ok = 1 if !$end_ok && defined($len_min) && defined($len_max)
+          && ($len_max + int($end_form->{offset}) < $len_min);
+    }
+    return undef if !$end_ok;
+
     return "idx_in_bounds:$var:$src";
 }
 
@@ -733,6 +827,7 @@ sub _validate_stmt {
         if ($kind ne 'expr_stmt_try') {
             my $name = $stmt->{name} // '';
             my $inner_t = _infer_expr_type($expr, $ctx);
+            $inner_t = _normalize_fallible_expr_type_for_try_assignment($expr, $inner_t, $ctx);
             my $without_error = _type_without_error_union_member($inner_t);
             compile_error("Semantic/F053-Type: try-assignment requires an error-union expression")
               if !defined($without_error);
@@ -757,6 +852,7 @@ sub _validate_stmt {
           if !_expr_is_fallible($first, $ctx);
 
         my $cur_t = _infer_expr_type($first, $ctx);
+        $cur_t = _normalize_fallible_expr_type_for_try_assignment($first, $cur_t, $ctx);
         my $ok_t = _type_without_error_union_member($cur_t);
         compile_error("Semantic/F053-Type: try-assignment requires an error-union expression")
           if !defined($ok_t);
@@ -805,6 +901,7 @@ sub _validate_stmt {
         compile_error("Semantic/F053-Fallibility: try-expression requires fallible expression")
           if !_expr_is_fallible($first, $ctx);
         my $cur_t = _infer_expr_type($first, $ctx);
+        $cur_t = _normalize_fallible_expr_type_for_try_assignment($first, $cur_t, $ctx);
         my $ok_t = _type_without_error_union_member($cur_t);
         compile_error("Semantic/F053-Type: try-assignment requires an error-union expression")
           if !defined($ok_t);

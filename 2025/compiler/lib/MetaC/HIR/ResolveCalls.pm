@@ -571,6 +571,7 @@ sub _infer_mapped_sequence_type_hint {
 
     my $base = _single_non_error_member_from_error_union($cb_ret);
     $base = $cb_ret if !defined($base);
+    $base = _sequence_member_base_type($base);
     my $mapped = sequence_type_for_element($base);
     return $mapped . ' | error' if is_union_type($cb_ret) && union_contains_member($cb_ret, 'error');
     return $mapped;

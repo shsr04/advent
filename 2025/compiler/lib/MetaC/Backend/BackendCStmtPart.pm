@@ -2,6 +2,17 @@ package MetaC::HIR::BackendC;
 use strict;
 use warnings;
 
+sub _matrix_meta_alias_source_name_stmt {
+    my ($expr) = @_;
+    return '' if !defined($expr) || ref($expr) ne 'HASH';
+    my $k = $expr->{kind} // '';
+    return $expr->{name} // '' if $k eq 'ident';
+    if ($k eq 'method_call') {
+        return _matrix_meta_alias_source_name_stmt($expr->{recv});
+    }
+    return '';
+}
+
 sub _emit_stmt {
     my ($stmt, $out, $indent, $seen_decl, $suppress_step_return, $ctx) = @_;
     my $sp = ' ' x $indent;
@@ -66,6 +77,10 @@ sub _emit_stmt {
             my $init = "metac_matrix_meta_init($dim, (int64_t[]){$sizes_c}, " . ($has_size ? 1 : 0) . ')';
             push @$out, $mdecl ? "${sp}$mvar = $init;" : "${sp}struct metac_matrix_meta $mvar = $init;";
             $ctx->{matrix_meta_vars}{$name} = $mvar;
+        } elsif ($name ne '') {
+            my $src_name = _matrix_meta_alias_source_name_stmt($stmt->{expr});
+            my $src_mvar = $ctx->{matrix_meta_vars}{$src_name} // '';
+            $ctx->{matrix_meta_vars}{$name} = $src_mvar if $src_mvar ne '';
         }
         return;
     }
@@ -359,10 +374,8 @@ sub _emit_stmt {
             $ctx->{var_constraints}{$name} = $constraints;
         }
         my $mvar = $ctx->{matrix_meta_vars}{$name} // '';
-        if ($mvar ne '' && defined($stmt->{expr}) && ref($stmt->{expr}) eq 'HASH'
-            && ($stmt->{expr}{kind} // '') eq 'ident')
-        {
-            my $src = $stmt->{expr}{name} // '';
+        if ($mvar ne '') {
+            my $src = _matrix_meta_alias_source_name_stmt($stmt->{expr});
             my $src_mvar = $ctx->{matrix_meta_vars}{$src} // '';
             push @$out, "${sp}$mvar = $src_mvar;" if $src_mvar ne '';
         }
@@ -490,12 +503,17 @@ sub _emit_stmt {
         }
 
         for my $inner (@{ $stmt->{body} // [] }) {
+            local $ctx->{inline_loop_depth} = ($ctx->{inline_loop_depth} // 0) + 1;
             _emit_stmt($inner, $out, $indent + 2, $seen_decl, 0, $ctx);
         }
         push @$out, "${sp}}";
         return;
     }
     if ($k eq 'break' || $k eq 'continue') {
+        if (($ctx->{inline_loop_depth} // 0) > 0) {
+            push @$out, "${sp}$k;";
+            return;
+        }
         my $to = $ctx->{current_region_exit_target};
         if (($ctx->{current_region_exit_kind} // '') eq 'Goto' && defined($to) && $to ne '') {
             push @$out, "${sp}goto region_$to;";

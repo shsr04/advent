@@ -43,7 +43,7 @@ sub expr_tokens {
             push @tokens, { type => 'op', value => '~/' };
             next;
         }
-        if ($expr =~ /\G[<>,\+\-\*\/%\.\(\)\[\]\?]/gc) {
+        if ($expr =~ /\G[<>,\+\-\*\/%\.\(\)\[\]\?\{\};]/gc) {
             push @tokens, { type => 'op', value => $& };
             next;
         }
@@ -107,6 +107,7 @@ sub parse_expr {
     my $parse_and;
     my $parse_or;
     my $parse_lambda;
+    my $parse_lambda_body;
 
     $parse_atom = sub {
         my $tok = $peek->();
@@ -318,6 +319,22 @@ sub parse_expr {
         return $left;
     };
 
+    $parse_lambda_body = sub {
+        return $parse_lambda->() if !$accept_op->('{');
+
+        my $tok = $peek->();
+        compile_error("Lambda scope body cannot be empty") if defined($tok) && $tok->{type} eq 'op' && $tok->{value} eq '}';
+
+        if (defined($tok) && $tok->{type} eq 'ident' && $tok->{value} eq 'return') {
+            $idx++;
+        }
+
+        my $body = $parse_lambda->();
+        $accept_op->(';');
+        $expect_op->('}', "to close lambda scope body");
+        return $body;
+    };
+
     $parse_lambda = sub {
         my $tok = $peek->();
 
@@ -337,7 +354,7 @@ sub parse_expr {
                         if ($accept_op->(')') && $accept_op->('=>')) {
                             compile_error("Two-parameter lambda parameter names must be distinct")
                               if $param1 eq $param2;
-                            my $body = $parse_lambda->();
+                            my $body = $parse_lambda_body->();
                             return {
                                 kind   => 'lambda2',
                                 param1 => $param1,
@@ -347,7 +364,7 @@ sub parse_expr {
                         }
                     }
                 } elsif ($accept_op->(')') && $accept_op->('=>')) {
-                    my $body = $parse_lambda->();
+                    my $body = $parse_lambda_body->();
                     return {
                         kind  => 'lambda1',
                         param => $param1,
@@ -362,7 +379,7 @@ sub parse_expr {
         if (defined($tok) && defined($next) && $tok->{type} eq 'ident' && $next->{type} eq 'op' && $next->{value} eq '=>') {
             my $param = $tok->{value};
             $idx += 2;
-            my $body = $parse_lambda->();
+            my $body = $parse_lambda_body->();
             return {
                 kind  => 'lambda1',
                 param => $param,

@@ -2,6 +2,17 @@ package MetaC::HIR::BackendC;
 use strict;
 use warnings;
 
+sub _matrix_meta_source_name_expr {
+    my ($expr) = @_;
+    return '' if !defined($expr) || ref($expr) ne 'HASH';
+    my $k = $expr->{kind} // '';
+    return $expr->{name} // '' if $k eq 'ident';
+    if ($k eq 'method_call') {
+        return _matrix_meta_source_name_expr($expr->{recv});
+    }
+    return '';
+}
+
 sub _emit_exit {
     my ($exit, $out, $indent, $default_return, $ctx, $fn_name) = @_;
     my $sp = ' ' x $indent;
@@ -112,8 +123,9 @@ sub _emit_exit {
 }
 
 sub _collect_forin_loops {
-    my ($ordered_regions, $seed_var_types) = @_;
+    my ($ordered_regions, $seed_var_types, $seed_matrix_meta) = @_;
     my %var_types = %{ $seed_var_types // {} };
+    my %matrix_meta_vars = %{ $seed_matrix_meta // {} };
     my $tmp_ctx = { var_types => \%var_types };
     my %seen;
     my @loops;
@@ -129,6 +141,14 @@ sub _collect_forin_loops {
                 my $inferred = _expr_c_type_hint($expr, $tmp_ctx);
                 my $c_ty = _type_to_c($stmt->{type}, $inferred // 'int64_t');
                 $var_types{$name} = $c_ty;
+                my $mmeta = _matrix_meta_for_type($stmt->{type});
+                if (defined($mmeta) && ref($mmeta) eq 'HASH') {
+                    $matrix_meta_vars{$name} = _matrix_meta_var_name($name);
+                } else {
+                    my $src_name = _matrix_meta_source_name_expr($expr);
+                    my $src_mvar = $matrix_meta_vars{$src_name} // '';
+                    $matrix_meta_vars{$name} = $src_mvar if $src_mvar ne '';
+                }
                 next;
             }
             if ($k eq 'const_try_tail_expr') {
@@ -195,6 +215,19 @@ sub _collect_forin_loops {
             if ($op_id eq 'method.sort.v1') {
                 $index_expr = "metac_sort_index_at(__loop_idx_$id - 1)";
             }
+            if ($op_id eq 'method.members.v1') {
+                my $recv = $iter_expr->{recv};
+                my $recv_name = (defined($recv) && ref($recv) eq 'HASH' && ($recv->{kind} // '') eq 'ident')
+                  ? ($recv->{name} // '')
+                  : '';
+                my $recv_hint = $meta->{receiver_type_hint} // '';
+                if ($recv_name ne '' && defined($recv_hint) && $recv_hint =~ /^matrix</) {
+                    my $mvar = $matrix_meta_vars{$recv_name} // '';
+                    if ($mvar ne '') {
+                        $index_expr = "metac_matrix_member_index_at(&$mvar, (__loop_idx_$id - 1))";
+                    }
+                }
+            }
         }
         my $item_ty = $iter_ty eq 'struct metac_list_str' ? 'const char *'
           : ($iter_ty eq 'struct metac_list_list_i64' ? 'struct metac_list_i64' : 'int64_t');
@@ -231,6 +264,10 @@ sub _emit_function {
         var_types => {},
         var_constraints => {},
         matrix_meta_vars => {},
+        generated_globals => {},
+        generated_globals_order => [],
+        generated_callbacks => [],
+        callback_counter => 0,
         fn_default_return => $default_return,
         fn_c_return_type => $ret_type,
         fn_name => $name,
@@ -266,7 +303,9 @@ sub _emit_function {
                 @sizes = map { -1 } (1 .. $dim);
             }
             my $sizes_c = @sizes ? join(', ', @sizes) : '-1';
-            push @out, "  struct metac_matrix_meta $mvar = metac_matrix_meta_init($dim, (int64_t[]){$sizes_c}, " . ($has_size ? 1 : 0) . ');';
+            my $base = "metac_matrix_meta_init($dim, (int64_t[]){$sizes_c}, " . ($has_size ? 1 : 0) . ')';
+            my $init = "metac_take_last_matrix_meta($base)";
+            push @out, "  struct metac_matrix_meta $mvar = $init;";
         }
     }
 
@@ -283,7 +322,7 @@ sub _emit_function {
     }
     my %regions_by_id = map { (($_->{id} // '') => $_) } @ordered_regions;
 
-    my $loops = _collect_forin_loops(\@ordered_regions, $ctx->{var_types});
+    my $loops = _collect_forin_loops(\@ordered_regions, $ctx->{var_types}, $ctx->{matrix_meta_vars});
     $ctx->{loop_meta} = { map { ($_->{loop_id} // '') => $_ } @$loops };
     for my $loop (@$loops) {
         my $lid = $loop->{loop_id};
@@ -317,8 +356,18 @@ sub _emit_function {
         $ctx->{var_types}{$item} = $item_ty;
         my $idx_expr = $loop->{index_expr};
         if (defined($idx_expr) && $idx_expr ne '') {
-            _helper_mark($ctx, 'list_i64');
-            _helper_mark($ctx, 'sort_i64');
+            if ($idx_expr =~ /metac_sort_index_at/) {
+                _helper_mark($ctx, 'list_i64');
+                _helper_mark($ctx, 'sort_i64');
+            }
+            if ($idx_expr =~ /metac_matrix_axis_size/) {
+                _helper_mark($ctx, 'list_i64');
+                _helper_mark($ctx, 'matrix_meta');
+            }
+            if ($idx_expr =~ /metac_matrix_member_index_at/) {
+                _helper_mark($ctx, 'list_i64');
+                _helper_mark($ctx, 'matrix_meta');
+            }
             $ctx->{loop_item_index_expr}{$item} = $idx_expr;
         } else {
             $ctx->{loop_item_index_expr}{$item} = "(__loop_idx_$lid - 1)";
@@ -432,7 +481,13 @@ sub _emit_function {
 
     push @out, "  return $default_return;";
     push @out, '}';
-    return (join("\n", @out), $ctx->{helpers});
+    my @generated_top_level;
+    for my $g (@{ $ctx->{generated_globals_order} // [] }) {
+        my $decl = $ctx->{generated_globals}{$g};
+        push @generated_top_level, $decl if defined($decl) && $decl ne '';
+    }
+    push @generated_top_level, @{ $ctx->{generated_callbacks} // [] };
+    return (join("\n", @out), $ctx->{helpers}, \@generated_top_level);
 }
 
 sub _emit_used_helpers {
@@ -463,11 +518,13 @@ sub _emit_function_prototypes {
 sub codegen_from_vnf_hir {
     my ($hir) = @_;
     my @fn_blocks;
+    my @generated_blocks;
     my %helpers_used;
 
     for my $fn (@{ $hir->{functions} // [] }) {
-        my ($code, $helpers) = _emit_function($fn // {});
+        my ($code, $helpers, $generated) = _emit_function($fn // {});
         push @fn_blocks, $code;
+        push @generated_blocks, grep { defined($_) && $_ ne '' } @{ $generated // [] };
         for my $k (keys %{ $helpers // {} }) {
             $helpers_used{$k} = 1;
         }
@@ -487,6 +544,10 @@ sub codegen_from_vnf_hir {
 
     _emit_used_helpers(\@out, \%helpers_used);
     push @out, @{ _emit_function_prototypes($hir) };
+    if (@generated_blocks) {
+        push @out, @generated_blocks;
+        push @out, '';
+    }
 
     for my $fn_code (@fn_blocks) {
         push @out, $fn_code;

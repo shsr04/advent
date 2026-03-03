@@ -1,0 +1,18 @@
+@Test({
+   "exit" : 0,
+   "stdout" : "Result: 9\n"
+})
+function main() {
+  const xs = [2, 3, 4]
+  const result = applyOperator("+", xs)
+  log("Result: ${result}")
+}
+
+function applyOperator(operator: string, values: number[]): number {
+  if operator == "*" {
+    return values.reduce(1, (acc, x) => acc*x)
+  } else if operator == "+" {
+    return values.reduce(0, (acc, x) => acc+x)
+  }
+  return -1
+}

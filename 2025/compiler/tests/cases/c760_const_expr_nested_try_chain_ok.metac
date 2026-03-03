@@ -1,0 +1,16 @@
+@Test({
+   "exit" : 0,
+   "stdout" : "7\nResult: 7\n"
+})
+function main() {
+  const value = compute()?
+  log("Result: ${value}")
+}
+
+function compute(): number | error {
+  let column: string[] = []
+  column.push("7")
+  const i = 0
+  const value = 0 + parseNumber(column[i]?)?.log()
+  return value
+}

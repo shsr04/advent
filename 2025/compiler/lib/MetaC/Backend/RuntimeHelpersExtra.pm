@@ -17,7 +17,30 @@ sub emit_runtime_helpers_extra {
     my %h = %{ $helpers // {} };
     if ($h{list_list_i64}) {
         _emit_block($out, <<'C');
-struct metac_list_list_i64 { int64_t len; int64_t cap; struct metac_list_i64 data[256]; };
+static struct metac_list_i64 *metac_list_list_i64_allocs[8192];
+static int64_t metac_list_list_i64_allocs_len = 0;
+static int metac_list_list_i64_allocs_free_registered = 0;
+static void metac_list_list_i64_free_allocs(void) {
+  for (int64_t i = 0; i < metac_list_list_i64_allocs_len; ++i) {
+    if (metac_list_list_i64_allocs[i]) free(metac_list_list_i64_allocs[i]);
+    metac_list_list_i64_allocs[i] = NULL;
+  }
+  metac_list_list_i64_allocs_len = 0;
+}
+static struct metac_list_i64 *metac_list_list_i64_clone_item(struct metac_list_i64 v) {
+  if (!metac_list_list_i64_allocs_free_registered) {
+    atexit(metac_list_list_i64_free_allocs);
+    metac_list_list_i64_allocs_free_registered = 1;
+  }
+  struct metac_list_i64 *p = (struct metac_list_i64 *)malloc(sizeof(struct metac_list_i64));
+  if (!p) return NULL;
+  *p = v;
+  if (metac_list_list_i64_allocs_len < 8192) {
+    metac_list_list_i64_allocs[metac_list_list_i64_allocs_len++] = p;
+  }
+  return p;
+}
+struct metac_list_list_i64 { int64_t len; int64_t cap; struct metac_list_i64 *data[256]; };
 static struct metac_list_list_i64 metac_list_list_i64_empty(void) {
   struct metac_list_list_i64 out; out.len = 0; out.cap = 256; return out;
 }
@@ -25,13 +48,13 @@ static struct metac_list_list_i64 metac_list_list_i64_from_array(const struct me
   struct metac_list_list_i64 out = metac_list_list_i64_empty();
   if (n < 0) n = 0;
   if (n > out.cap) n = out.cap;
-  for (int64_t i = 0; i < n; ++i) out.data[i] = items[i];
+  for (int64_t i = 0; i < n; ++i) out.data[i] = metac_list_list_i64_clone_item(items[i]);
   out.len = n;
   return out;
 }
 static int64_t metac_list_list_i64_push(struct metac_list_list_i64 *l, struct metac_list_i64 v) {
   if (!l) return 0;
-  if (l->len < l->cap) l->data[l->len++] = v;
+  if (l->len < l->cap) l->data[l->len++] = metac_list_list_i64_clone_item(v);
   return l->len;
 }
 static int64_t metac_list_list_i64_size(const struct metac_list_list_i64 *l) {
@@ -39,7 +62,8 @@ static int64_t metac_list_list_i64_size(const struct metac_list_list_i64 *l) {
 }
 static struct metac_list_i64 metac_list_list_i64_get(const struct metac_list_list_i64 *l, int64_t idx) {
   if (!l || idx < 0 || idx >= l->len) return metac_list_i64_empty();
-  return l->data[idx];
+  if (!l->data[idx]) return metac_list_i64_empty();
+  return *l->data[idx];
 }
 C
         if ($h{method_sortby_pair}) {
@@ -47,14 +71,14 @@ C
             push @$out, '  struct metac_list_list_i64 out = recv;';
             push @$out, '  for (int64_t i = 0; i < out.len; ++i) {';
             push @$out, '    for (int64_t j = i + 1; j < out.len; ++j) {';
-            push @$out, '      struct metac_list_i64 a = out.data[i];';
-            push @$out, '      struct metac_list_i64 b = out.data[j];';
+            push @$out, '      struct metac_list_i64 a = out.data[i] ? *out.data[i] : metac_list_i64_empty();';
+            push @$out, '      struct metac_list_i64 b = out.data[j] ? *out.data[j] : metac_list_i64_empty();';
             push @$out, '      int64_t a0 = a.len > 0 ? a.data[0] : 0;';
             push @$out, '      int64_t b0 = b.len > 0 ? b.data[0] : 0;';
             push @$out, '      int64_t a1 = a.len > 1 ? a.data[1] : 0;';
             push @$out, '      int64_t b1 = b.len > 1 ? b.data[1] : 0;';
             push @$out, '      if (a0 > b0 || (a0 == b0 && a1 > b1)) {';
-            push @$out, '        struct metac_list_i64 t = out.data[i];';
+            push @$out, '        struct metac_list_i64 *t = out.data[i];';
             push @$out, '        out.data[i] = out.data[j];';
             push @$out, '        out.data[j] = t;';
             push @$out, '      }';
@@ -69,7 +93,8 @@ C
         push @$out, 'static int metac_any_range_contains(const struct metac_list_list_i64 *ranges, int64_t value) {';
         push @$out, '  if (!ranges) return 0;';
         push @$out, '  for (int64_t i = 0; i < ranges->len; ++i) {';
-        push @$out, '    struct metac_list_i64 r = ranges->data[i];';
+        push @$out, '    if (!ranges->data[i]) continue;';
+        push @$out, '    struct metac_list_i64 r = *ranges->data[i];';
         push @$out, '    if (r.len >= 2 && r.data[0] <= value && value <= r.data[1]) return 1;';
         push @$out, '  }';
         push @$out, '  return 0;';
@@ -183,10 +208,23 @@ C
         push @$out, '  return recv;';
         push @$out, '}';
         if ($h{matrix_meta}) {
+            push @$out, 'static struct metac_list_i64 metac_method_insert_i64_matrix_meta_value(struct metac_list_i64 recv, int64_t value, struct metac_list_i64 idx, struct metac_matrix_meta *meta) {';
+            push @$out, '  if (!metac_matrix_apply_index(meta, idx)) return recv;';
+            push @$out, '  if (recv.len < recv.cap) {';
+            push @$out, '    recv.data[recv.len++] = value;';
+            push @$out, '    metac_matrix_record_member_index(meta, idx);';
+            push @$out, '  }';
+            push @$out, '  return recv;';
+            push @$out, '}';
+        }
+        if ($h{matrix_meta}) {
             push @$out, 'static struct metac_list_i64 metac_method_insert_i64_matrix_meta(struct metac_list_i64 *recv, int64_t value, struct metac_list_i64 idx, struct metac_matrix_meta *meta) {';
             push @$out, '  if (!recv) return metac_list_i64_empty();';
             push @$out, '  if (!metac_matrix_apply_index(meta, idx)) return *recv;';
-            push @$out, '  if (recv->len < recv->cap) recv->data[recv->len++] = value;';
+            push @$out, '  if (recv->len < recv->cap) {';
+            push @$out, '    recv->data[recv->len++] = value;';
+            push @$out, '    metac_matrix_record_member_index(meta, idx);';
+            push @$out, '  }';
             push @$out, '  return *recv;';
             push @$out, '}';
         }
@@ -212,10 +250,23 @@ C
             push @$out, '  return recv;';
             push @$out, '}';
             if ($h{matrix_meta}) {
+                push @$out, 'static struct metac_list_str metac_method_insert_str_matrix_meta_value(struct metac_list_str recv, const char *value, struct metac_list_i64 idx, struct metac_matrix_meta *meta) {';
+                push @$out, '  if (!metac_matrix_apply_index(meta, idx)) return recv;';
+                push @$out, '  if (recv.len < recv.cap) {';
+                push @$out, '    recv.data[recv.len++] = value ? value : "";';
+                push @$out, '    metac_matrix_record_member_index(meta, idx);';
+                push @$out, '  }';
+                push @$out, '  return recv;';
+                push @$out, '}';
+            }
+            if ($h{matrix_meta}) {
                 push @$out, 'static struct metac_list_str metac_method_insert_str_matrix_meta(struct metac_list_str *recv, const char *value, struct metac_list_i64 idx, struct metac_matrix_meta *meta) {';
                 push @$out, '  if (!recv) return metac_list_str_empty();';
                 push @$out, '  if (!metac_matrix_apply_index(meta, idx)) return *recv;';
-                push @$out, '  if (recv->len < recv->cap) recv->data[recv->len++] = value ? value : "";';
+                push @$out, '  if (recv->len < recv->cap) {';
+                push @$out, '    recv->data[recv->len++] = value ? value : "";';
+                push @$out, '    metac_matrix_record_member_index(meta, idx);';
+                push @$out, '  }';
                 push @$out, '  return *recv;';
                 push @$out, '}';
             }

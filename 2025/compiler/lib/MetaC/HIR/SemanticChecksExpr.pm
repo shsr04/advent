@@ -335,6 +335,9 @@ sub _infer_numeric_kind {
         return undef;
     }
     if ($kind eq 'try') {
+        my $narrowed_t = _infer_expr_type($expr, $ctx);
+        my $narrowed_k = _numeric_kind_for_type($narrowed_t);
+        return $narrowed_k if defined($narrowed_k) && $narrowed_k ne '';
         return _infer_numeric_kind($expr->{expr}, $ctx);
     }
     if ($kind eq 'binop') {
@@ -458,14 +461,28 @@ sub _infer_expr_type {
     }
 
     if ($kind eq 'unary') {
-        return 'number' if ($expr->{op} // '') eq '-';
+        if (($expr->{op} // '') eq '-') {
+            my $inner_t = _infer_expr_type($expr->{expr}, $ctx);
+            my $base = 'number';
+            return _type_with_error_member($base) if _type_has_member($inner_t, 'error');
+            return $base;
+        }
         return undef;
     }
 
     if ($kind eq 'binop') {
         my $op = $expr->{op} // '';
-        return 'number' if $op eq '+' || $op eq '-' || $op eq '*' || $op eq '/' || $op eq '~/' || $op eq '%';
-        return 'bool' if $op eq '&&' || $op eq '||' || $op eq '==' || $op eq '!=' || $op eq '<' || $op eq '>' || $op eq '<=' || $op eq '>=';
+        my $lt = _infer_expr_type($expr->{left}, $ctx);
+        my $rt = _infer_expr_type($expr->{right}, $ctx);
+        my $has_error = _type_has_member($lt, 'error') || _type_has_member($rt, 'error');
+        if ($op eq '+' || $op eq '-' || $op eq '*' || $op eq '/' || $op eq '~/' || $op eq '%') {
+            return _type_with_error_member('number') if $has_error;
+            return 'number';
+        }
+        if ($op eq '&&' || $op eq '||' || $op eq '==' || $op eq '!=' || $op eq '<' || $op eq '>' || $op eq '<=' || $op eq '>=') {
+            return _type_with_error_member('bool') if $has_error;
+            return 'bool';
+        }
         return undef;
     }
 
@@ -613,6 +630,7 @@ sub _infer_method_dynamic_result_type {
         if (defined($cb_t) && $cb_t ne '') {
             my $base = _type_without_error_union_member($cb_t);
             $base = $cb_t if !defined($base);
+            $base = _base_member_type($base);
             my $mapped = sequence_type_for_element($base);
             return _type_with_error_member($mapped) if _type_has_member($cb_t, 'error');
             return $mapped;
@@ -741,6 +759,18 @@ sub _expr_is_fallible {
     return 0 if !defined($expr) || ref($expr) ne 'HASH';
     my $kind = $expr->{kind} // '';
     return 0 if $kind eq 'try';
+    return _expr_is_fallible($expr->{expr}, $ctx) ? 1 : 0 if $kind eq 'unary';
+    if ($kind eq 'binop') {
+        return 1 if _expr_is_fallible($expr->{left}, $ctx);
+        return 1 if _expr_is_fallible($expr->{right}, $ctx);
+        return 0;
+    }
+    if ($kind eq 'list_literal') {
+        for my $it (@{ $expr->{items} // [] }) {
+            return 1 if _expr_is_fallible($it, $ctx);
+        }
+        return 0;
+    }
 
     if ($kind eq 'index') {
         return _index_has_bounds_proof($expr, $ctx) ? 0 : 1;
@@ -921,24 +951,32 @@ sub _validate_expr {
     }
 
     if ($kind eq 'unary') {
-        my $t = _validate_expr($expr->{expr}, $ctx, 0);
+        my $t = _validate_expr($expr->{expr}, $ctx, $handled);
         compile_error("Semantic/F053-Type: unary '-' requires number operand")
           if !_is_number_type($t);
         return 'number';
     }
 
     if ($kind eq 'binop') {
-        my $lt = _validate_expr($expr->{left}, $ctx, 0);
-        my $rt = _validate_expr($expr->{right}, $ctx, 0);
+        my $lt = _validate_expr($expr->{left}, $ctx, $handled);
+        my $rt = _validate_expr($expr->{right}, $ctx, $handled);
+        my $lt_eff = $lt;
+        my $rt_eff = $rt;
+        if ($handled) {
+            my $l_wo = _type_without_error_union_member($lt);
+            my $r_wo = _type_without_error_union_member($rt);
+            $lt_eff = $l_wo if defined($l_wo);
+            $rt_eff = $r_wo if defined($r_wo);
+        }
         my $op = $expr->{op} // '';
 
         if ($op eq '+' || $op eq '-' || $op eq '*' || $op eq '/' || $op eq '~/' || $op eq '%') {
             compile_error("Semantic/F053-Type: Operator '$op' requires number operand, got $lt")
-              if !_is_number_type($lt);
+              if !_is_number_type($lt_eff);
             compile_error("Semantic/F053-Type: Operator '$op' requires number operand, got $rt")
-              if !_is_number_type($rt);
-            my $lk = _infer_numeric_kind($expr->{left}, $ctx);
-            my $rk = _infer_numeric_kind($expr->{right}, $ctx);
+              if !_is_number_type($rt_eff);
+            my $lk = _infer_numeric_kind($handled ? { kind => 'try', expr => $expr->{left} } : $expr->{left}, $ctx);
+            my $rk = _infer_numeric_kind($handled ? { kind => 'try', expr => $expr->{right} } : $expr->{right}, $ctx);
             if ($op eq '/' || $op eq '~/') {
                 compile_error("Semantic/F053-Type: '$op' requires strict numeric operand kinds")
                   if !defined($lk) || !defined($rk);
@@ -954,25 +992,25 @@ sub _validate_expr {
         }
         if ($op eq '&&' || $op eq '||') {
             compile_error("Semantic/F053-Type: Operator '$op' requires bool operands")
-              if !_is_bool_type($lt) || !_is_bool_type($rt);
+              if !_is_bool_type($lt_eff) || !_is_bool_type($rt_eff);
             return 'bool';
         }
         if ($op eq '==' || $op eq '!=') {
             my $l_kind = $expr->{left}{kind} // '';
             my $r_kind = $expr->{right}{kind} // '';
-            if (is_union_type($lt) && is_union_type($rt) && $l_kind ne 'null' && $r_kind ne 'null') {
-                my $bad = is_union_type($lt) ? $lt : $rt;
+            if (is_union_type($lt_eff) && is_union_type($rt_eff) && $l_kind ne 'null' && $r_kind ne 'null') {
+                my $bad = is_union_type($lt_eff) ? $lt_eff : $rt_eff;
                 compile_error("Semantic/F053-Type: Unsupported '$op' operand type: $bad");
             }
             compile_error("Semantic/F053-Type: Type mismatch in '$op'")
-              if !_has_shared_member($lt, $rt);
+              if !_has_shared_member($lt_eff, $rt_eff);
             return 'bool';
         }
         if ($op eq '<' || $op eq '>' || $op eq '<=' || $op eq '>=') {
             compile_error("Semantic/F053-Type: '$op' requires operands with at least one shared ordered type")
-              if !_has_shared_member($lt, $rt);
+              if !_has_shared_member($lt_eff, $rt_eff);
             compile_error("Semantic/F053-Type: '$op' is not defined for boolean operands")
-              if _is_bool_type($lt) || _is_bool_type($rt);
+              if _is_bool_type($lt_eff) || _is_bool_type($rt_eff);
             return 'bool';
         }
         return _infer_expr_type($expr, $ctx);
@@ -1038,13 +1076,14 @@ sub _validate_expr {
                 && defined($recv_t) && is_sequence_type($recv_t))
             {
                 my $elem = sequence_element_type($recv_t);
+                my $elem_base = _base_member_type($elem);
                 my $ok = 0;
-                $ok = 1 if scalar_is_numeric($elem) || scalar_is_string($elem);
+                $ok = 1 if scalar_is_numeric($elem_base) || scalar_is_string($elem_base);
                 $ok = 1 if defined($elem) && is_matrix_member_type($elem);
                 if (!$ok) {
                     my $label = 'sequence';
-                    if (defined($elem)) {
-                        my $elem_label = sequence_elem_label($elem);
+                    if (defined($elem_base)) {
+                        my $elem_label = sequence_elem_label($elem_base);
                         $label = $elem_label if defined($elem_label) && $elem_label ne '';
                     }
                     compile_error("Semantic/F053-Type: filter(...) receiver must be string_list, number_list, or matrix member list, got $label");
@@ -1055,7 +1094,15 @@ sub _validate_expr {
             {
                 my $args = $expr->{args} // [];
                 my $idx = (ref($args) eq 'ARRAY') ? $args->[1] : undef;
-                if (!defined($idx) || ref($idx) ne 'HASH' || (($idx->{kind} // '') ne 'num')) {
+                my $idx_ok = 0;
+                if (defined($idx) && ref($idx) eq 'HASH') {
+                    $idx_ok = _index_has_bounds_proof({
+                        kind  => 'index',
+                        recv  => $expr->{recv},
+                        index => $idx,
+                    }, $ctx) ? 1 : 0;
+                }
+                if (!$idx_ok) {
                     my $label = _receiver_diag_label($recv_t) // 'sequence';
                     compile_error("Semantic/F053-Entailment: Method 'insert(...)' on '$label' requires compile-time in-bounds proof");
                 }

@@ -22,15 +22,43 @@ sub emit_runtime_helpers_core {
       if $h{error_flag} || $h{error_message};
     if ($h{stdin_read}) {
         _emit_block($out, <<'C');
+static char *metac_stdin_buf = NULL;
+static size_t metac_stdin_cap = 0;
+static int metac_stdin_loaded = 0;
+static void metac_stdin_free_buffer(void) {
+  if (metac_stdin_buf) free(metac_stdin_buf);
+  metac_stdin_buf = NULL;
+  metac_stdin_cap = 0;
+  metac_stdin_loaded = 0;
+}
 static const char *metac_stdin_read_all(void) {
-  static char buf[65536];
-  static int loaded = 0;
-  if (!loaded) {
-    size_t n = fread(buf, 1, sizeof(buf) - 1, stdin);
-    buf[n] = 0;
-    loaded = 1;
+  static int free_registered = 0;
+  if (!metac_stdin_loaded) {
+    if (!free_registered) {
+      atexit(metac_stdin_free_buffer);
+      free_registered = 1;
+    }
+    size_t len = 0;
+    for (;;) {
+      if (metac_stdin_cap - len < 4096) {
+        size_t new_cap = metac_stdin_cap ? metac_stdin_cap * 2 : 8192;
+        char *next = (char *)realloc(metac_stdin_buf, new_cap);
+        if (!next) break;
+        metac_stdin_buf = next;
+        metac_stdin_cap = new_cap;
+      }
+      size_t n = fread(metac_stdin_buf + len, 1, metac_stdin_cap - len - 1, stdin);
+      len += n;
+      if (n == 0) break;
+    }
+    if (!metac_stdin_buf) {
+      metac_stdin_buf = (char *)calloc(1, 1);
+      metac_stdin_cap = 1;
+    }
+    metac_stdin_buf[len] = 0;
+    metac_stdin_loaded = 1;
   }
-  return buf;
+  return metac_stdin_buf ? metac_stdin_buf : "";
 }
 C
     }
@@ -122,9 +150,9 @@ C
     }
 
     if ($h{list_i64}) {
-        push @$out, 'struct metac_list_i64 { int64_t len; int64_t cap; int64_t data[1024]; };';
+        push @$out, 'struct metac_list_i64 { int64_t len; int64_t cap; int64_t data[65536]; };';
         push @$out, 'static struct metac_list_i64 metac_list_i64_empty(void) {';
-        push @$out, '  struct metac_list_i64 out; out.len = 0; out.cap = 1024; return out;';
+        push @$out, '  struct metac_list_i64 out; out.len = 0; out.cap = 65536; return out;';
         push @$out, '}';
         push @$out, 'static struct metac_list_i64 metac_list_i64_from_array(const int64_t *items, int64_t n) {';
         push @$out, '  struct metac_list_i64 out = metac_list_i64_empty();';
@@ -218,12 +246,58 @@ C
         push @$out, '  int constrained;';
         push @$out, '  int64_t fixed[16];';
         push @$out, '  int64_t extent[16];';
+        push @$out, '  int64_t member_count;';
+        push @$out, '  int64_t member_capacity;';
+        push @$out, '  int64_t *member_coords;';
         push @$out, '};';
+        push @$out, 'static int metac_last_matrix_meta_valid = 0;';
+        push @$out, 'static struct metac_matrix_meta metac_last_matrix_meta;';
+        push @$out, 'static int64_t *metac_matrix_member_blocks[1024];';
+        push @$out, 'static int64_t metac_matrix_member_blocks_len = 0;';
+        push @$out, 'static int metac_matrix_member_blocks_free_registered = 0;';
+        push @$out, 'static void metac_matrix_free_member_blocks(void) {';
+        push @$out, '  for (int64_t i = 0; i < metac_matrix_member_blocks_len; ++i) {';
+        push @$out, '    if (metac_matrix_member_blocks[i]) free(metac_matrix_member_blocks[i]);';
+        push @$out, '    metac_matrix_member_blocks[i] = NULL;';
+        push @$out, '  }';
+        push @$out, '  metac_matrix_member_blocks_len = 0;';
+        push @$out, '}';
+        push @$out, 'static void metac_matrix_track_member_block(int64_t *ptr) {';
+        push @$out, '  if (!ptr) return;';
+        push @$out, '  if (!metac_matrix_member_blocks_free_registered) {';
+        push @$out, '    atexit(metac_matrix_free_member_blocks);';
+        push @$out, '    metac_matrix_member_blocks_free_registered = 1;';
+        push @$out, '  }';
+        push @$out, '  if (metac_matrix_member_blocks_len >= 1024) return;';
+        push @$out, '  metac_matrix_member_blocks[metac_matrix_member_blocks_len++] = ptr;';
+        push @$out, '}';
+        push @$out, 'static void metac_matrix_ensure_member_capacity(struct metac_matrix_meta *meta, int64_t need_count) {';
+        push @$out, '  if (!meta) return;';
+        push @$out, '  if (need_count <= meta->member_capacity) return;';
+        push @$out, '  int64_t next_cap = meta->member_capacity > 0 ? meta->member_capacity : 16;';
+        push @$out, '  while (next_cap < need_count && next_cap < (1LL << 30)) next_cap *= 2;';
+        push @$out, '  if (next_cap < need_count) next_cap = need_count;';
+        push @$out, '  size_t words = (size_t)next_cap * 16u;';
+        push @$out, '  int64_t *next = (int64_t *)calloc(words, sizeof(int64_t));';
+        push @$out, '  if (!next) return;';
+        push @$out, '  if (meta->member_coords && meta->member_capacity > 0) {';
+        push @$out, '    size_t old_words = (size_t)meta->member_capacity * 16u;';
+        push @$out, '    if (old_words > words) old_words = words;';
+        push @$out, '    memcpy(next, meta->member_coords, old_words * sizeof(int64_t));';
+        push @$out, '  }';
+        push @$out, '  meta->member_coords = next;';
+        push @$out, '  meta->member_capacity = next_cap;';
+        push @$out, '  metac_matrix_track_member_block(next);';
+        push @$out, '}';
         push @$out, 'static struct metac_matrix_meta metac_matrix_meta_init(int64_t dim, const int64_t *sizes, int constrained) {';
         push @$out, '  struct metac_matrix_meta out;';
         push @$out, '  out.dim = dim;';
         push @$out, '  out.constrained = constrained ? 1 : 0;';
         push @$out, '  for (int i = 0; i < 16; ++i) { out.fixed[i] = -1; out.extent[i] = 0; }';
+        push @$out, '  out.member_count = 0;';
+        push @$out, '  out.member_capacity = 1024;';
+        push @$out, '  out.member_coords = (int64_t *)calloc((size_t)out.member_capacity * 16u, sizeof(int64_t));';
+        push @$out, '  metac_matrix_track_member_block(out.member_coords);';
         push @$out, '  int64_t n = dim;';
         push @$out, '  if (n < 0) n = 0;';
         push @$out, '  if (n > 16) n = 16;';
@@ -264,12 +338,59 @@ C
         push @$out, '  }';
         push @$out, '  return 1;';
         push @$out, '}';
+        push @$out, 'static void metac_set_last_matrix_meta(struct metac_matrix_meta meta) {';
+        push @$out, '  metac_last_matrix_meta = meta;';
+        push @$out, '  metac_last_matrix_meta_valid = 1;';
+        push @$out, '}';
+        push @$out, 'static struct metac_matrix_meta metac_take_last_matrix_meta(struct metac_matrix_meta fallback) {';
+        push @$out, '  if (!metac_last_matrix_meta_valid) return fallback;';
+        push @$out, '  return metac_last_matrix_meta;';
+        push @$out, '}';
+        push @$out, 'static void metac_matrix_record_member_index(struct metac_matrix_meta *meta, struct metac_list_i64 idx) {';
+        push @$out, '  if (!meta) return;';
+        push @$out, '  if (meta->member_count < 0) meta->member_count = 0;';
+        push @$out, '  int64_t at = meta->member_count++;';
+        push @$out, '  metac_matrix_ensure_member_capacity(meta, at + 1);';
+        push @$out, '  if (!meta->member_coords || at >= meta->member_capacity) return;';
+        push @$out, '  int64_t dim = meta->dim;';
+        push @$out, '  if (dim < 0) dim = 0;';
+        push @$out, '  if (dim > 16) dim = 16;';
+        push @$out, '  for (int64_t i = 0; i < dim; ++i) {';
+        push @$out, '    int64_t v = (i < idx.len) ? idx.data[i] : 0;';
+        push @$out, '    meta->member_coords[at * 16 + i] = v;';
+        push @$out, '  }';
+        push @$out, '}';
+        push @$out, 'static struct metac_list_i64 metac_matrix_member_index_at(const struct metac_matrix_meta *meta, int64_t pos) {';
+        push @$out, '  struct metac_list_i64 out = metac_list_i64_empty();';
+        push @$out, '  if (!meta || pos < 0 || pos >= meta->member_count) return out;';
+        push @$out, '  int64_t dim = meta->dim;';
+        push @$out, '  if (dim < 0) dim = 0;';
+        push @$out, '  if (dim > 16) dim = 16;';
+        push @$out, '  out.len = dim;';
+        push @$out, '  if (meta->member_coords && pos < meta->member_capacity) {';
+        push @$out, '    for (int64_t i = 0; i < dim; ++i) out.data[i] = meta->member_coords[pos * 16 + i];';
+        push @$out, '    return out;';
+        push @$out, '  }';
+        push @$out, '  if (dim == 2) {';
+        push @$out, '    int64_t w = metac_matrix_axis_size(meta, 1);';
+        push @$out, '    int64_t h = metac_matrix_axis_size(meta, 0);';
+        push @$out, '    if (w > 0) {';
+        push @$out, '      int64_t row = pos / w;';
+        push @$out, '      int64_t col = pos % w;';
+        push @$out, '      if (h <= 0 || row < h) {';
+        push @$out, '        out.data[0] = row;';
+        push @$out, '        out.data[1] = col;';
+        push @$out, '      }';
+        push @$out, '    }';
+        push @$out, '  }';
+        push @$out, '  return out;';
+        push @$out, '}';
     }
 
     if ($h{list_str}) {
-        push @$out, 'struct metac_list_str { int64_t len; int64_t cap; const char *data[1024]; };';
+        push @$out, 'struct metac_list_str { int64_t len; int64_t cap; const char *data[65536]; };';
         push @$out, 'static struct metac_list_str metac_list_str_empty(void) {';
-        push @$out, '  struct metac_list_str out; out.len = 0; out.cap = 1024; return out;';
+        push @$out, '  struct metac_list_str out; out.len = 0; out.cap = 65536; return out;';
         push @$out, '}';
         push @$out, 'static struct metac_list_str metac_list_str_from_array(const char *const *items, int64_t n) {';
         push @$out, '  struct metac_list_str out = metac_list_str_empty();';
@@ -302,7 +423,7 @@ C
         }
         if ($h{list_str_render}) {
             push @$out, 'static const char *metac_list_str_render(const struct metac_list_str *l) {';
-            push @$out, '  static char buf[4096];';
+            push @$out, '  static char buf[1048576];';
             push @$out, '  int off = 0;';
             push @$out, '  off += snprintf(buf + off, sizeof(buf) - (size_t)off, "[");';
             push @$out, '  int64_t n = l ? l->len : 0;';
@@ -315,20 +436,42 @@ C
             push @$out, '}';
         }
         if ($h{builtin_split}) {
+            push @$out, 'static char *metac_split_buffer = NULL;';
+            push @$out, 'static size_t metac_split_buffer_cap = 0;';
+            push @$out, 'static int metac_split_buffer_free_registered = 0;';
+            push @$out, 'static void metac_split_buffer_free(void) {';
+            push @$out, '  if (metac_split_buffer) free(metac_split_buffer);';
+            push @$out, '  metac_split_buffer = NULL;';
+            push @$out, '  metac_split_buffer_cap = 0;';
+            push @$out, '}';
             push @$out, 'static struct metac_list_str metac_builtin_split(const char *s, const char *delim) {';
             push @$out, '  struct metac_list_str out = metac_list_str_empty();';
             push @$out, '  if (!s || !delim || !*delim) { metac_last_error = 1; metac_last_error_message = "split failed"; return out; }';
             push @$out, '  const char d = delim[0];';
-            push @$out, '  static char buf[4096];';
             push @$out, '  size_t n = strlen(s);';
-            push @$out, '  if (n >= sizeof(buf)) n = sizeof(buf) - 1;';
-            push @$out, '  memcpy(buf, s, n); buf[n] = 0;';
-            push @$out, '  char *start = buf;';
+            push @$out, '  if (n + 1 > metac_split_buffer_cap) {';
+            push @$out, '    size_t next_cap = metac_split_buffer_cap ? metac_split_buffer_cap : 1024;';
+            push @$out, '    while (next_cap < n + 1) next_cap *= 2;';
+            push @$out, '    char *next = (char *)realloc(metac_split_buffer, next_cap);';
+            push @$out, '    if (!next) {';
+            push @$out, '      metac_last_error = 1;';
+            push @$out, '      metac_last_error_message = "split alloc failed";';
+            push @$out, '      return out;';
+            push @$out, '    }';
+            push @$out, '    metac_split_buffer = next;';
+            push @$out, '    metac_split_buffer_cap = next_cap;';
+            push @$out, '  }';
+            push @$out, '  if (!metac_split_buffer_free_registered) {';
+            push @$out, '    atexit(metac_split_buffer_free);';
+            push @$out, '    metac_split_buffer_free_registered = 1;';
+            push @$out, '  }';
+            push @$out, '  memcpy(metac_split_buffer, s, n); metac_split_buffer[n] = 0;';
+            push @$out, '  char *start = metac_split_buffer;';
             push @$out, '  for (size_t i = 0; i <= n; ++i) {';
-            push @$out, '    if (buf[i] == d || buf[i] == 0) {';
-            push @$out, '      buf[i] = 0;';
+            push @$out, '    if (metac_split_buffer[i] == d || metac_split_buffer[i] == 0) {';
+            push @$out, '      metac_split_buffer[i] = 0;';
             push @$out, '      if (out.len < out.cap) out.data[out.len++] = start;';
-            push @$out, '      start = &buf[i + 1];';
+            push @$out, '      start = &metac_split_buffer[i + 1];';
             push @$out, '    }';
             push @$out, '  }';
             push @$out, '  metac_last_error = 0;';
@@ -350,8 +493,8 @@ C
             push @$out, 'static struct metac_list_str metac_method_chars(const char *s) {';
             push @$out, '  struct metac_list_str out = metac_list_str_empty();';
             push @$out, '  if (!s) return out;';
-            push @$out, '  static char pool[8192];';
-            push @$out, '  size_t used = 0;';
+            push @$out, '  static char pool[1048576];';
+            push @$out, '  static size_t used = 0;';
             push @$out, '  size_t n = strlen(s);';
             push @$out, '  for (size_t i = 0; i < n && out.len < out.cap; ) {';
             push @$out, '    unsigned char b = (unsigned char)s[i];';
@@ -375,8 +518,8 @@ C
             push @$out, 'static struct metac_list_str metac_method_chunk(const char *s, int64_t width) {';
             push @$out, '  struct metac_list_str out = metac_list_str_empty();';
             push @$out, '  if (!s || width <= 0) return out;';
-            push @$out, '  static char pool[8192];';
-            push @$out, '  size_t used = 0;';
+            push @$out, '  static char pool[1048576];';
+            push @$out, '  static size_t used = 0;';
             push @$out, '  size_t start = 0;';
             push @$out, '  size_t i = 0;';
             push @$out, '  int64_t count = 0;';
@@ -452,6 +595,205 @@ C
         if ($h{map_i64_i64_value}) {
             push @$out, 'static struct metac_list_i64 metac_map_i64_i64_value(struct metac_list_i64 src, int64_t (*fn)(int64_t)) {';
             push @$out, '  return metac_map_i64_i64(&src, fn);';
+            push @$out, '}';
+        }
+    }
+    if ($h{map_i64_str}) {
+        push @$out, 'static struct metac_list_str metac_map_i64_str(const struct metac_list_i64 *src, const char *(*fn)(int64_t)) {';
+        push @$out, '  struct metac_list_str out = metac_list_str_empty();';
+        push @$out, '  if (!src || !fn) return out;';
+        push @$out, '  for (int64_t i = 0; i < src->len && out.len < out.cap; ++i) out.data[out.len++] = fn(src->data[i]);';
+        push @$out, '  return out;';
+        push @$out, '}';
+        if ($h{map_i64_str_value}) {
+            push @$out, 'static struct metac_list_str metac_map_i64_str_value(struct metac_list_i64 src, const char *(*fn)(int64_t)) {';
+            push @$out, '  return metac_map_i64_str(&src, fn);';
+            push @$out, '}';
+        }
+    }
+    if ($h{map_i64_const}) {
+        push @$out, 'static struct metac_list_i64 metac_map_i64_const(const struct metac_list_i64 *src, int64_t value) {';
+        push @$out, '  struct metac_list_i64 out = metac_list_i64_empty();';
+        push @$out, '  if (!src) return out;';
+        push @$out, '  for (int64_t i = 0; i < src->len && out.len < out.cap; ++i) out.data[out.len++] = value;';
+        push @$out, '  return out;';
+        push @$out, '}';
+        if ($h{map_i64_const_value}) {
+            push @$out, 'static struct metac_list_i64 metac_map_i64_const_value(struct metac_list_i64 src, int64_t value) {';
+            push @$out, '  return metac_map_i64_const(&src, value);';
+            push @$out, '}';
+        }
+    }
+    if ($h{all_i64}) {
+        push @$out, 'static int metac_all_i64(const struct metac_list_i64 *src, int (*pred)(int64_t)) {';
+        push @$out, '  if (!src || !pred) return 0;';
+        push @$out, '  for (int64_t i = 0; i < src->len; ++i) {';
+        push @$out, '    if (!pred(src->data[i])) return 0;';
+        push @$out, '  }';
+        push @$out, '  return 1;';
+        push @$out, '}';
+        if ($h{all_i64_value}) {
+            push @$out, 'static int metac_all_i64_value(struct metac_list_i64 src, int (*pred)(int64_t)) {';
+            push @$out, '  return metac_all_i64(&src, pred);';
+            push @$out, '}';
+        }
+    }
+    if ($h{all_str}) {
+        push @$out, 'static int metac_all_str(const struct metac_list_str *src, int (*pred)(const char *)) {';
+        push @$out, '  if (!src || !pred) return 0;';
+        push @$out, '  for (int64_t i = 0; i < src->len; ++i) {';
+        push @$out, '    if (!pred(src->data[i])) return 0;';
+        push @$out, '  }';
+        push @$out, '  return 1;';
+        push @$out, '}';
+        if ($h{all_str_value}) {
+            push @$out, 'static int metac_all_str_value(struct metac_list_str src, int (*pred)(const char *)) {';
+            push @$out, '  return metac_all_str(&src, pred);';
+            push @$out, '}';
+        }
+        if ($h{all_str_isblank}) {
+            push @$out, 'static int metac_all_str_isblank(const struct metac_list_str *src) {';
+            push @$out, '  return metac_all_str(src, metac_method_isblank);';
+            push @$out, '}';
+        }
+    }
+    if ($h{any_i64}) {
+        push @$out, 'static int metac_any_i64(const struct metac_list_i64 *src, int (*pred)(int64_t)) {';
+        push @$out, '  if (!src || !pred) return 0;';
+        push @$out, '  for (int64_t i = 0; i < src->len; ++i) {';
+        push @$out, '    if (pred(src->data[i])) return 1;';
+        push @$out, '  }';
+        push @$out, '  return 0;';
+        push @$out, '}';
+    }
+    if ($h{any_str}) {
+        push @$out, 'static int metac_any_str(const struct metac_list_str *src, int (*pred)(const char *)) {';
+        push @$out, '  if (!src || !pred) return 0;';
+        push @$out, '  for (int64_t i = 0; i < src->len; ++i) {';
+        push @$out, '    if (pred(src->data[i])) return 1;';
+        push @$out, '  }';
+        push @$out, '  return 0;';
+        push @$out, '}';
+    }
+    if ($h{filter_i64_cb}) {
+        push @$out, 'static struct metac_list_i64 metac_filter_i64_cb(const struct metac_list_i64 *src, int (*pred)(int64_t)) {';
+        push @$out, '  struct metac_list_i64 out = metac_list_i64_empty();';
+        push @$out, '  if (!src || !pred) return out;';
+        push @$out, '  for (int64_t i = 0; i < src->len && out.len < out.cap; ++i) {';
+        push @$out, '    int64_t v = src->data[i];';
+        push @$out, '    if (pred(v)) out.data[out.len++] = v;';
+        push @$out, '  }';
+        push @$out, '  return out;';
+        push @$out, '}';
+        if ($h{filter_i64_cb_value}) {
+            push @$out, 'static struct metac_list_i64 metac_filter_i64_cb_value(struct metac_list_i64 src, int (*pred)(int64_t)) {';
+            push @$out, '  return metac_filter_i64_cb(&src, pred);';
+            push @$out, '}';
+        }
+    }
+    if ($h{filter_str_cb}) {
+        push @$out, 'static struct metac_list_str metac_filter_str_cb(const struct metac_list_str *src, int (*pred)(const char *)) {';
+        push @$out, '  struct metac_list_str out = metac_list_str_empty();';
+        push @$out, '  if (!src || !pred) return out;';
+        push @$out, '  for (int64_t i = 0; i < src->len && out.len < out.cap; ++i) {';
+        push @$out, '    const char *v = src->data[i];';
+        push @$out, '    if (pred(v)) out.data[out.len++] = v;';
+        push @$out, '  }';
+        push @$out, '  return out;';
+        push @$out, '}';
+        if ($h{filter_str_cb_value}) {
+            push @$out, 'static struct metac_list_str metac_filter_str_cb_value(struct metac_list_str src, int (*pred)(const char *)) {';
+            push @$out, '  return metac_filter_str_cb(&src, pred);';
+            push @$out, '}';
+        }
+    }
+    if ($h{reduce_i64_cb}) {
+        push @$out, 'static int64_t metac_reduce_i64_cb(const struct metac_list_i64 *src, int64_t init, int64_t (*fn)(int64_t, int64_t)) {';
+        push @$out, '  int64_t acc = init;';
+        push @$out, '  if (!src || !fn) return acc;';
+        push @$out, '  for (int64_t i = 0; i < src->len; ++i) acc = fn(acc, src->data[i]);';
+        push @$out, '  return acc;';
+        push @$out, '}';
+        if ($h{reduce_i64_cb_value}) {
+            push @$out, 'static int64_t metac_reduce_i64_cb_value(struct metac_list_i64 src, int64_t init, int64_t (*fn)(int64_t, int64_t)) {';
+            push @$out, '  return metac_reduce_i64_cb(&src, init, fn);';
+            push @$out, '}';
+        }
+    }
+    if ($h{reduce_str_cb}) {
+        push @$out, 'static int64_t metac_reduce_str_cb(const struct metac_list_str *src, int64_t init, int64_t (*fn)(int64_t, const char *)) {';
+        push @$out, '  int64_t acc = init;';
+        push @$out, '  if (!src || !fn) return acc;';
+        push @$out, '  for (int64_t i = 0; i < src->len; ++i) acc = fn(acc, src->data[i]);';
+        push @$out, '  return acc;';
+        push @$out, '}';
+        if ($h{reduce_str_cb_value}) {
+            push @$out, 'static int64_t metac_reduce_str_cb_value(struct metac_list_str src, int64_t init, int64_t (*fn)(int64_t, const char *)) {';
+            push @$out, '  return metac_reduce_str_cb(&src, init, fn);';
+            push @$out, '}';
+        }
+    }
+    if ($h{scan_i64_cb}) {
+        push @$out, 'static struct metac_list_i64 metac_scan_i64_cb(const struct metac_list_i64 *src, int64_t init, int64_t (*fn)(int64_t, int64_t)) {';
+        push @$out, '  struct metac_list_i64 out = metac_list_i64_empty();';
+        push @$out, '  int64_t acc = init;';
+        push @$out, '  if (!src || !fn) return out;';
+        push @$out, '  for (int64_t i = 0; i < src->len && out.len < out.cap; ++i) {';
+        push @$out, '    acc = fn(acc, src->data[i]);';
+        push @$out, '    out.data[out.len++] = acc;';
+        push @$out, '  }';
+        push @$out, '  return out;';
+        push @$out, '}';
+        if ($h{scan_i64_cb_value}) {
+            push @$out, 'static struct metac_list_i64 metac_scan_i64_cb_value(struct metac_list_i64 src, int64_t init, int64_t (*fn)(int64_t, int64_t)) {';
+            push @$out, '  return metac_scan_i64_cb(&src, init, fn);';
+            push @$out, '}';
+        }
+    }
+    if ($h{scan_str_cb}) {
+        push @$out, 'static struct metac_list_i64 metac_scan_str_cb(const struct metac_list_str *src, int64_t init, int64_t (*fn)(int64_t, const char *)) {';
+        push @$out, '  struct metac_list_i64 out = metac_list_i64_empty();';
+        push @$out, '  int64_t acc = init;';
+        push @$out, '  if (!src || !fn) return out;';
+        push @$out, '  for (int64_t i = 0; i < src->len && out.len < out.cap; ++i) {';
+        push @$out, '    acc = fn(acc, src->data[i]);';
+        push @$out, '    out.data[out.len++] = acc;';
+        push @$out, '  }';
+        push @$out, '  return out;';
+        push @$out, '}';
+        if ($h{scan_str_cb_value}) {
+            push @$out, 'static struct metac_list_i64 metac_scan_str_cb_value(struct metac_list_str src, int64_t init, int64_t (*fn)(int64_t, const char *)) {';
+            push @$out, '  return metac_scan_str_cb(&src, init, fn);';
+            push @$out, '}';
+        }
+    }
+    if ($h{assert_i64_cb}) {
+        push @$out, 'static struct metac_list_i64 metac_assert_i64_cb(const struct metac_list_i64 *src, int (*pred)(struct metac_list_i64), const char *msg) {';
+        push @$out, '  struct metac_list_i64 out = src ? *src : metac_list_i64_empty();';
+        push @$out, '  (void)msg;';
+        push @$out, '  if (!src || !pred) { metac_last_error = 1; return out; }';
+        push @$out, '  if (!pred(*src)) { metac_last_error = 1; return out; }';
+        push @$out, '  metac_last_error = 0;';
+        push @$out, '  return out;';
+        push @$out, '}';
+        if ($h{assert_i64_cb_value}) {
+            push @$out, 'static struct metac_list_i64 metac_assert_i64_cb_value(struct metac_list_i64 src, int (*pred)(struct metac_list_i64), const char *msg) {';
+            push @$out, '  return metac_assert_i64_cb(&src, pred, msg);';
+            push @$out, '}';
+        }
+    }
+    if ($h{assert_str_cb}) {
+        push @$out, 'static struct metac_list_str metac_assert_str_cb(const struct metac_list_str *src, int (*pred)(struct metac_list_str), const char *msg) {';
+        push @$out, '  struct metac_list_str out = src ? *src : metac_list_str_empty();';
+        push @$out, '  (void)msg;';
+        push @$out, '  if (!src || !pred) { metac_last_error = 1; return out; }';
+        push @$out, '  if (!pred(*src)) { metac_last_error = 1; return out; }';
+        push @$out, '  metac_last_error = 0;';
+        push @$out, '  return out;';
+        push @$out, '}';
+        if ($h{assert_str_cb_value}) {
+            push @$out, 'static struct metac_list_str metac_assert_str_cb_value(struct metac_list_str src, int (*pred)(struct metac_list_str), const char *msg) {';
+            push @$out, '  return metac_assert_str_cb(&src, pred, msg);';
             push @$out, '}';
         }
     }

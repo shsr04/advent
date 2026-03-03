@@ -1,0 +1,15 @@
+@Test({
+   "exit" : 0,
+   "stdout" : "Result: 1\n"
+})
+function main() {
+  const xs = seq(0, 3).map((x) => { return 0 })
+  const blanks = [" ", "\t", ""]
+  const ok = blanks.all((x) => { return x.isBlank() })
+
+  let result = 0
+  if ok && xs.max() == 0 {
+    result = 1
+  }
+  log("Result: ${result}")
+}

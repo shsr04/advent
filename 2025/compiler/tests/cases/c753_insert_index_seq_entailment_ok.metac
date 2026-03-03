@@ -1,0 +1,22 @@
+@Test({
+   "exit" : 0,
+   "stdout" : "Result: 6\n"
+})
+function main() {
+  const result = probe()?
+  log("Result: ${result}")
+}
+
+function probe(): number | error {
+  const base = split("1,2,3", ",")?
+    .map(parseNumber)?
+    .assert(x => x.size() == 3, "expected 3")?
+
+  let xs = base
+  const n = xs.size()
+  for const i in seq(0, n-1) {
+    xs.insert(xs[i], i)
+  }
+
+  return xs[0] + xs[1] + xs[2]
+}

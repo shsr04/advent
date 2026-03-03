@@ -40,6 +40,11 @@ sub parse_block {
             $$idx_ref++;
             return (\@stmts, 'close_else');
         }
+        if ($line =~ /^\}\s*else\s+if\s+(.+)\s*\{$/) {
+            my $cond = trim($1);
+            $$idx_ref++;
+            return (\@stmts, 'close_else_if:' . $cond);
+        }
 
         # Normalize inline if forms into multiline block syntax so downstream parsing stays uniform.
         # Examples:
@@ -146,6 +151,53 @@ sub parse_block {
                     cond      => parse_expr($cond),
                     then_body => $then_body,
                     else_body => $else_body,
+                    line      => $line_no,
+                };
+                next;
+            }
+            if ($end_reason =~ /^close_else_if:(.*)$/) {
+                my $else_if_cond = trim($1);
+                my ($else_if_then, $else_end_reason) = parse_block($lines, $idx_ref, $base_line);
+                my $else_if_node = {
+                    kind      => 'if',
+                    cond      => parse_expr($else_if_cond),
+                    then_body => $else_if_then,
+                    else_body => undef,
+                    line      => $line_no,
+                };
+                my $chain_node = $else_if_node;
+                while (1) {
+                    if ($else_end_reason eq 'close') {
+                        last;
+                    }
+                    if ($else_end_reason eq 'close_else') {
+                        my ($else_body, $end2) = parse_block($lines, $idx_ref, $base_line);
+                        compile_error("if-else missing closing brace") if $end2 ne 'close';
+                        $chain_node->{else_body} = $else_body;
+                        last;
+                    }
+                    if ($else_end_reason =~ /^close_else_if:(.*)$/) {
+                        my $next_cond = trim($1);
+                        my ($next_then, $next_end_reason) = parse_block($lines, $idx_ref, $base_line);
+                        my $next_node = {
+                            kind      => 'if',
+                            cond      => parse_expr($next_cond),
+                            then_body => $next_then,
+                            else_body => undef,
+                            line      => $line_no,
+                        };
+                        $chain_node->{else_body} = [$next_node];
+                        $chain_node = $next_node;
+                        $else_end_reason = $next_end_reason;
+                        next;
+                    }
+                    compile_error("if-else missing closing brace");
+                }
+                push @stmts, {
+                    kind      => 'if',
+                    cond      => parse_expr($cond),
+                    then_body => $then_body,
+                    else_body => [$else_if_node],
                     line      => $line_no,
                 };
                 next;
@@ -283,8 +335,9 @@ sub parse_block {
                 };
                 next;
             }
+            my $rhs_expr = parse_expr($rhs);
             my $segments = split_try_chain_segments($rhs);
-            if (@$segments > 1) {
+            if (@$segments > 1 && expr_is_try_tail_chain_candidate($rhs_expr)) {
                 my $first = $segments->[0];
                 my @tail_parts = @$segments[1 .. $#$segments];
                 my $tail_raw = join('.', @tail_parts);
@@ -301,7 +354,7 @@ sub parse_block {
                 next;
             }
 
-            push @stmts, { kind => 'const', name => $name, expr => parse_expr($rhs), line => $line_no };
+            push @stmts, { kind => 'const', name => $name, expr => $rhs_expr, line => $line_no };
             $$idx_ref++;
             next;
         }

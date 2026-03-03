@@ -125,6 +125,22 @@ sub split_try_chain_segments {
     return \@parts;
 }
 
+sub _expr_chain_has_try_recv {
+    my ($expr) = @_;
+    return 0 if !defined($expr) || ref($expr) ne 'HASH';
+    my $k = $expr->{kind} // '';
+    return 1 if $k eq 'try';
+    return _expr_chain_has_try_recv($expr->{recv}) if $k eq 'method_call';
+    return 0;
+}
+
+sub expr_is_try_tail_chain_candidate {
+    my ($expr) = @_;
+    return 0 if !defined($expr) || ref($expr) ne 'HASH';
+    return 0 if ($expr->{kind} // '') ne 'method_call';
+    return _expr_chain_has_try_recv($expr->{recv}) ? 1 : 0;
+}
+
 sub parse_method_step {
     my ($text) = @_;
     my $src = trim($text);

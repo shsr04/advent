@@ -6,6 +6,10 @@ use Exporter 'import';
 use MetaC::Backend::RuntimeHelpers qw(emit_runtime_helpers);
 use MetaC::Backend::TemplateEmitter qw(template_expr_to_c);
 use MetaC::HIR::OpRegistry qw(
+    builtin_is_known
+    builtin_op_id
+    method_is_known
+    method_op_id
     method_has_length_semantics
     method_traceability_hint
     method_result_type
@@ -215,6 +219,20 @@ sub _expr_c_type_hint {
             my $hinted_result = method_result_type($m, $recv_type_hint);
             my $hinted_c = _result_type_to_c($hinted_result);
             return $hinted_c if defined($hinted_c);
+            my $recv_c = _expr_c_type_hint($expr->{recv}, $ctx);
+            return $recv_c if ($m eq 'filter' || $m eq 'slice' || $m eq 'assert' || $m eq 'sort' || $m eq 'sortBy')
+              && defined($recv_c);
+            return 'int' if $m eq 'all' || $m eq 'any' || $m eq 'isBlank';
+            return 'int64_t' if $m eq 'max' || $m eq 'last' || $m eq 'count' || method_has_length_semantics($m);
+            return 'struct metac_list_i64' if $m eq 'scan' || $m eq 'map' || $m eq 'index';
+            if ($m eq 'neighbours') {
+                return 'struct metac_list_str' if defined($recv_c) && $recv_c eq 'const char *';
+                return 'struct metac_list_i64';
+            }
+            if ($m eq 'members') {
+                return 'struct metac_list_str' if defined($recv_c) && $recv_c eq 'struct metac_list_str';
+                return 'struct metac_list_i64';
+            }
             my $traceability = method_traceability_hint($m) // '';
             return 'int64_t'
               if method_has_length_semantics($m)
