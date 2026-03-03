@@ -1,0 +1,22 @@
+@Test({
+   "exit" : 0,
+   "stdout" : "Result: 1\n"
+})
+function main() {
+  let m: matrix(number) with dim(2) + matrixSize([2, 2]) = []
+  m.insert(7, [0, 0])
+  m.insert(8, [0, 1])
+  m.insert(9, [1, 0])
+  m.insert(10, [1, 1])
+
+  let sum = 0
+  let count = 0
+  for const cell in m.members() {
+    const [row, col] = cell.index()
+    sum = sum + (row * 2 + col)
+    count = count + 1
+  }
+
+  const ok = (sum == 6) && (count == 4)
+  log("Result: ${ok}")
+}

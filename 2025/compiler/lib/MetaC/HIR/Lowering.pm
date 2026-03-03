@@ -6,6 +6,12 @@ use Exporter 'import';
 use MetaC::Support qw(compile_error);
 use MetaC::Parser qw(collect_functions parse_function_params parse_function_body);
 use MetaC::TypeSpec qw(normalize_type_annotation);
+use MetaC::HIR::OpRegistry qw(
+    builtin_is_known
+    builtin_may_be_fallible
+    method_is_known
+    method_fallibility_hint
+);
 use MetaC::HIR::TypedNodes qw(stmt_to_payload step_payload_to_stmt);
 
 our @EXPORT_OK = qw(lower_source_to_vnf_hir);
@@ -259,6 +265,25 @@ sub _expand_try_exit {
     );
 }
 
+sub _try_expr_may_be_fallible {
+    my ($expr) = @_;
+    return 0 if !defined($expr) || ref($expr) ne 'HASH';
+    my $kind = $expr->{kind} // '';
+    if ($kind eq 'call') {
+        my $name = $expr->{name} // '';
+        return builtin_may_be_fallible($name) if builtin_is_known($name);
+        return 1 if defined($name) && $name ne '';
+        return 0;
+    }
+    if ($kind eq 'method_call') {
+        my $m = $expr->{method} // '';
+        return 1 if !method_is_known($m);
+        my $hint = method_fallibility_hint($m, undef) // 'never';
+        return $hint eq 'never' ? 0 : 1;
+    }
+    return 0;
+}
+
 sub _inject_structured_exit_regions {
     my ($regions, $alloc) = @_;
     my $i = 0;
@@ -279,7 +304,8 @@ sub _inject_structured_exit_regions {
         @extra = _expand_loop_exit(region => $region, stmt => $stmt, next => $next, alloc => $alloc, for_mode => 1)
           if $kind eq 'for_each' || $kind eq 'for_each_try';
         @extra = _expand_try_exit($region, $stmt, $next, $alloc)
-          if $kind eq 'const_try_expr' || $kind eq 'const_try_tail_expr' || $kind eq 'expr_stmt_try';
+          if ($kind eq 'const_try_expr' || $kind eq 'const_try_tail_expr' || $kind eq 'expr_stmt_try')
+          && _try_expr_may_be_fallible(defined($stmt->{expr}) ? $stmt->{expr} : $stmt->{first});
 
         push @$regions, @extra if @extra;
     }
@@ -352,6 +378,7 @@ sub _lower_function_hir {
         name         => $fn->{name},
         params       => $fn->{parsed_params},
         return_type  => $fn->{return_type},
+        declared_return_numeric_kind => $fn->{declared_return_numeric_kind},
         regions      => $regions,
         region_schedule => $lowered->{schedule},
         edges        => $edges,

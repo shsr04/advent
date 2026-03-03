@@ -1,0 +1,9 @@
+@Test({
+   "compile_err" : "'/' requires operands of type float"
+})
+function main(): int {
+  const a: number = 8
+  const b: number = 2
+  const c = a / b
+  return c
+}

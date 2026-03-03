@@ -61,6 +61,7 @@ Track all language features here. Add items as we iterate.
 47. `F-047` Compiler architecture split (`parser -> IR -> correctness gates -> codegen`) - `draft`
 48. `F-051` HIR-native cutover completion (typed steps, canonical calls, direct backend emission) - `ready`
 49. `F-052` Remove legacy lowerings in `BlockStageDecls` - `draft`
+50. `F-053` HIR semantic enforcement closure (type + entailment + fallibility) - `implemented`
 
 ## Feature Record Template
 
@@ -542,7 +543,7 @@ Use this block for each feature:
     - backend/materialization purity invariant active in test runner (`type_is_*` forbidden in `HIR/BackendC.pm` and `HIR/MaterializeC.pm`).
 
 ### F-050 `Normative Domain Alignment`
-- Status: in_progress (reopened)
+- Status: rejected (superseded by F-053)
 - Spec file: `instructions/normative-domain-alignment-f050.md` (planned)
 - Correctness classes: C0/C1/C2/C3/C4
 - Key guarantees:
@@ -585,10 +586,10 @@ Use this block for each feature:
     - `B4` closed: generic array domains like `(number | string)[]` accepted across declaration/return/call paths (covered by `f050_blocker_b4_union_array_domain_ok`).
 
 ### F-051 `HIR-Native Cutover Completion`
-- Status: ready
+- Status: rejected (superseded by F-053)
 - Spec file: `instructions/hir-native-cutover-f051.md` (planned)
 - Correctness classes: C0/C1/C2/C3/C4
-- Key guarantees:
+- Key guarantees (target state):
   - replace `step->{stmt}` with typed HIR step payloads only (no parser AST objects in HIR).
   - replace `top_level` traversal hacks with explicit region scheduling/ordering in HIR.
   - make lowering emit canonical `CallExpr(kind=user|builtin|intrinsic, op_id, args, result_type)` directly.
@@ -603,13 +604,131 @@ Use this block for each feature:
   - migration sequencing to preserve deterministic output and avoid mixed-model regressions during cutover.
 - Notes/evidence:
   - requested as a single consolidated feature request to complete F-047/F-048/F-049 architectural intent and eliminate remaining legacy lowering surfaces.
+  - Reality check (2026-03-02):
+    - legacy stage dispatch remains on the active HIR path (`MaterializeC` -> `_compile_block_stage_*`).
+    - method-specific branches remain in active lowering (`ExprMethodCall.pm`, `BlockStageControl.pm`), including statement-specific `insert(...)` handling.
+    - therefore, full legacy lowering-surface removal has not yet been achieved.
   - Progress tracker (started 2026-02-26):
     - `completed` [1/9]: replace `step->{stmt}` with typed HIR step payloads only (2026-02-27: lowering now emits `step.payload = { node_kind: Stmt, stmt_kind, line, fields }`; HIR gates/resolve/materialization consume payload adapters; no direct `step->{stmt}` remains; regression suite green `191 passed, 0 failed`).
     - `completed` [2/9]: replace `top_level` traversal hacks with explicit region scheduling/ordering in HIR (2026-02-27: materializer now requires `region_schedule`, fallback entry-region walk removed, `step->{top_level}` removed from lowering/HIR passes, regression suite green `191 passed, 0 failed`).
     - `completed` [3/9]: lowering/resolve now emit canonical call metadata (`canonical_call: CallExpr`) for HIR call sites, materialization enforces canonical+resolved call contracts for call-like expressions, and codegen routes HIR `call`/`method_call` through canonical call lowering first while preserving diagnostics (`ResolveCalls.pm`, `MaterializeC.pm`, `Codegen/Expr.pm`, `Codegen/MethodMetadata.pm`). HIR typed-node encoding/decoding is centralized (`MetaC::HIR::TypedNodes`). Verification: `make test` with Makefile `prlimit` gate is green (`191 passed, 0 failed`) on 2026-02-27. Note: parser-local helper expressions (`parse_expr`-generated, outside HIR) retain a constrained legacy fallback path; completing that cutover is tracked under [5/9] (HIR-native emission path) and [8/9] (legacy parser/codegen surface removal), so no separate [10/x] subtask is added at this time.
-    - `completed` [4/9]: shared intrinsic registry (`MetaC::IntrinsicRegistry`) now carries method signatures/fallibility/op-id plus data-driven C-lowering templates for intrinsic methods; codegen method-call lowering now resolves straightforward intrinsics via registry templates (replacing large direct switch branches), and synthetic try-chain canonical contracts use registry op-id helpers (`Codegen/ExprMethodCall.pm`, `Codegen/BlockStageTry.pm`). Remaining method logic in `ExprMethodCall.pm` is limited to receiver-sensitive/lambda-heavy handlers (matrix methods, `filter/any/all/reduce/sortBy/push`) rather than generic template branches. Verification: `make test` with Makefile `prlimit` gate is green (`191 passed, 0 failed`) on 2026-02-27.
-    - `completed` [5/9]: HIR materialization now emits by scheduled regions with explicit step+exit handling instead of flattening only top-level steps; statement emission uses deterministic kind-based dispatch (`_emit_hir_stmt_direct`) rather than `compile_block`-style stage probing in the HIR path, and region exits are consumed through an explicit emitter hook (`_emit_hir_exit`) for return/error-propagation compatibility (`HIR/MaterializeC.pm`). Verification: `make test` with Makefile `prlimit` gate is green (`191 passed, 0 failed`) on 2026-02-27.
+    - `in_progress` [4/9]: shared intrinsic registry (`MetaC::IntrinsicRegistry`) is integrated and handles straightforward intrinsic templates/op-id mapping, but receiver-specific/manual method branches are still present in active lowering (`Codegen/ExprMethodCall.pm`, `Codegen/BlockStageControl.pm`). Full deletion of method switch trees remains outstanding. Baseline verification on 2026-03-02: `196 passed, 0 failed`.
+    - `in_progress` [5/9]: scheduled-region step/exit emission hooks exist (`_emit_hir_stmt_direct`, `_emit_hir_exit`), but statement emission still delegates to legacy `_compile_block_stage_*` handlers in the active HIR path (`HIR/MaterializeC.pm`). Full replacement of `compile_block`/`BlockStage*` semantics in the HIR path remains outstanding. Baseline verification on 2026-03-02: `196 passed, 0 failed`.
     - `completed` [6/9]: HIR gates now validate typed step payload structure (`node_kind: Stmt`, typed `fields`) and perform effect/fact-flow checks from typed step categories (`step.kind`) plus payload fields, removing statement-kind string branching from gate logic (`HIR/Gates.pm`; `Gate-Effect` and fact transfer updated). Statement-kind strings remain only in deterministic dump output for trace readability, not verification decisions. Verification: `make test` with Makefile `prlimit` gate is green (`191 passed, 0 failed`) on 2026-02-27.
     - `completed` [7/9]: proof/bounds reasoning is now fact/contract-oriented: gate-time fact flow derives branch-sensitive list-length facts (`len_var:<name>:<n>`), materialization seeds region `facts_in` into codegen fact scopes, loop binding records explicit upper-bound contracts (`size/count - k` via receiver metadata) and lower-bound fact keys, and index-proof evaluation in `ProofIter.pm` no longer depends on generic AST deep-equality helpers. Verification: `make test` with Makefile `prlimit` gate is green (`191 passed, 0 failed`) on 2026-02-27.
     - `completed` [8/9]: dead compile surfaces and parser coupling were removed from codegen root for the cutover path: `Codegen.pm` dropped unused parser imports (`collect_functions`, `parse_function_params`, `parse_function_body`), and legacy unused direct function-builder entrypoints were pruned from `Codegen/Compile.pm` (retaining HIR-used context/prototype/entry wrappers). Verification after pruning remains green (`191 passed, 0 failed`) on 2026-02-27.
-    - `completed` [9/9]: backend now consumes HIR directly at codegen time by emitting each function from normalized HIR on demand (`BackendC` -> `emit_function_c_from_hir`), and the standalone materialization pass was removed from the compile pipeline (`HIR.pm`). This eliminates required dependence on pre-populated `backend_c_template` fields while preserving deterministic output/diagnostics (`HIR/BackendC.pm`, `HIR/MaterializeC.pm`, `HIR.pm`). Verification: `make test` with Makefile `prlimit` gate is green (`191 passed, 0 failed`) on 2026-02-27.
+    - `in_progress` [9/9]: backend emits per-function from normalized HIR on demand (`BackendC` -> `emit_function_c_from_hir`) and no longer requires pre-populated `backend_c_template` fields. However, emission still flows through the materialization adapter and legacy stage handlers; direct HIR-native backend emission without legacy lowering surfaces remains outstanding. Baseline verification on 2026-03-02: `196 passed, 0 failed`.
+
+### F-053 `HIR Semantic Enforcement Closure (Type + Entailment + Fallibility)`
+- Status: implemented
+- Spec file: `instructions/hir-semantic-enforcement-f053.md` (planned)
+- Correctness classes: C1/C2/C3/C4
+- Key guarantees:
+  - type enforcement in HIR validates operator signatures, assignment compatibility, union-operation restrictions, and conversion legality according to `instructions/normative-reference.md` sections `2`, `2.1`, `2.3`, `5.1`, `5.2`, and `5.3`.
+  - entailment enforcement in HIR provides path-sensitive proof obligations for nullable/union narrowing, size/index bounds safety, and mutable-variable narrowing invalidation according to sections `2.4` and `5.4`.
+  - fallibility enforcement in HIR guarantees that all fallible expressions are either handled (`?` / `or catch`) or rejected, with diagnostics aligned to section `4` and operation-level fallibility rules in section `5`.
+  - call-contract validation already implemented in `ResolveCalls` remains the shared front-door, but this feature extends enforcement to non-call expressions and fact/flow obligations.
+- Closure notes (2026-03-02):
+  - strict `int` vs `float` arithmetic/division enforcement is now active in HIR semantic validation without changing canonical type normalization, by carrying numeric-kind metadata (`int`/`float`/`number`) from parser declarations/params into semantic context and enforcing operand-kind contracts in `SemanticChecksExpr`.
+  - matrix-size entailment proof consumers are now active for matrix method calls requiring compile-time index/axis proofs:
+    - `matrix.size(axis)` enforces proved `axis in [0, dim-1]`.
+    - `matrix.insert(value, index)` enforces proved coordinate bounds against known `matrixSize(...)` constraints.
+  - statement-level semantic context now propagates and invalidates numeric/range/size facts on declarations, typed assignments, mutable reassignment, branches, and loops, so proofs remain path-sensitive and sound.
+- Notes/evidence:
+  - Implemented HIR semantic pass split by concern:
+    - expression/type/fallibility core: `compiler/lib/MetaC/HIR/SemanticChecksExpr.pm`
+    - statement/flow/orchestration layer: `compiler/lib/MetaC/HIR/SemanticChecks.pm`
+  - Parser/HIR bridge for strict numeric enforcement:
+    - parser records declared numeric kind for params/typed declarations/typed assignments in `compiler/lib/MetaC/Parser/Functions.pm` and `compiler/lib/MetaC/Parser/BlockParse.pm`.
+    - HIR semantic contexts seed numeric kinds from parser metadata and apply strict assignment compatibility checks (`compiler/lib/MetaC/HIR/SemanticChecks.pm`).
+  - Pipeline integration: `compiler/lib/MetaC/HIR.pm:55-63` now runs `enforce_hir_semantics(...)` before `resolve_hir_calls(...)` so semantic obligations fail fast at HIR level.
+  - Type enforcement coverage (examples):
+    - strict arithmetic/division signature checks plus numeric-kind inference in `_validate_expr` / `_infer_numeric_kind` (`compiler/lib/MetaC/HIR/SemanticChecksExpr.pm`), aligned with normref `5.2`.
+    - declaration/assignment compatibility + numeric-kind contracts in `_validate_stmt` (`compiler/lib/MetaC/HIR/SemanticChecks.pm`).
+    - comparison shared-type/ordered-type checks in `_validate_expr` (`compiler/lib/MetaC/HIR/SemanticChecksExpr.pm`) aligned with normref `5.1`.
+  - Entailment/proof coverage (examples):
+    - nullable narrowing + size/count fact derivation in `_derive_if_narrowing` (`compiler/lib/MetaC/HIR/SemanticChecks.pm`).
+    - range/size fact seeding + reassignment invalidation for sound path proofs (`compiler/lib/MetaC/HIR/SemanticChecks.pm`).
+    - index bounds proof via facts/literals in `_index_has_bounds_proof` (`compiler/lib/MetaC/HIR/SemanticChecksExpr.pm`).
+    - matrix-size proof consumers in `_validate_expr` (`compiler/lib/MetaC/HIR/SemanticChecksExpr.pm`) for `size(...)` and `insert(...)`.
+  - Fallibility enforcement coverage (examples):
+    - mandatory handling checks for `call`, `method_call`, and `index` in `_validate_expr` (`compiler/lib/MetaC/HIR/SemanticChecksExpr.pm`).
+    - `?`/`or catch` applicability checks in `_validate_expr` + `_validate_stmt` (`compiler/lib/MetaC/HIR/SemanticChecksExpr.pm`, `compiler/lib/MetaC/HIR/SemanticChecks.pm`).
+    - contextual callback fallibility inference through op-registry callback contracts in `_method_contextual_fallible` with registry-backed fallback hints (`compiler/lib/MetaC/HIR/SemanticChecksExpr.pm`).
+  - Strict call-result typing closure:
+    - resolved call contracts now store required `result_type` (not `result_type_hint`) and fail when unresolved in `compiler/lib/MetaC/HIR/ResolveCalls.pm:347-368`, `:386-410`, `:572-584`, and `:618-632`.
+    - expression inference consumes strict `resolved_call.result_type` in `compiler/lib/MetaC/HIR/SemanticChecksExpr.pm:195-223`.
+    - op registry now exposes strict APIs `builtin_result_type` / `method_result_type` with compatibility aliases retained only as wrappers in `compiler/lib/MetaC/HIR/OpRegistry.pm:268-284` and `:409-425`.
+  - Verification evidence:
+    - targeted F-053 harness run: `/tmp/f053-verify/report.md` and `/tmp/f053-verify/report.json` (`9 passed, 0 failed`, generated 2026-03-02).
+    - targeted semantic-gap closure run: `/tmp/f053-gap-verify/report.md` and `/tmp/f053-gap-verify/report.json` (`8 passed, 0 failed`, generated 2026-03-02), including strict arithmetic/division cases and matrix axis/index proof cases.
+    - syntax checks green:
+      - `perl -I compiler/lib -c compiler/lib/MetaC/HIR/SemanticChecksExpr.pm`
+      - `perl -I compiler/lib -c compiler/lib/MetaC/HIR/SemanticChecks.pm`
+      - `perl -I compiler/lib -c compiler/lib/MetaC/HIR.pm`
+
+### F-054 `Synthetic C Backend (Mechanical HIR->C Translation Only)`
+- Status: planned
+- Spec file: `instructions/hir-synthetic-c-backend-f054.md` (planned)
+- Correctness classes: C0/C1/C2/C3/C4
+- Key guarantees:
+  - the C backend is purely synthetic: it must not perform semantic interpretation, proof checks, type-repair, or policy decisions.
+  - backend emission is mechanical over incoming HIR nodes/contracts only; each supported HIR node kind maps to deterministic C emission templates/routines.
+  - semantic validity is exclusively upstream responsibility (HIR lowering, gates, semantic checks, call resolution).
+  - if incoming HIR is malformed due to internal compiler errors, emitted C may also be malformed; this is expected behavior for this feature.
+  - the synthetic C backend must not reject, sanitize, or attempt to correct malformed HIR structures.
+- Scope boundaries:
+  - includes: deterministic node-to-C lowering from verified/unverified HIR payloads, stable emission order, and explicit node coverage diagnostics only for missing emitter wiring.
+  - excludes: any backend-side entailment/fallibility/type validation logic and any backend-side recovery heuristics.
+- Notes/evidence:
+  - Implement entirely new C backend. Do not refer to old code.
+  - Motivation: enforce strict architecture separation where all semantic decisions happen before backend emission.
+  - Primary implementation surfaces:
+    - `compiler/lib/MetaC/HIR/BackendC.pm`
+    - `compiler/lib/MetaC/Codegen/*` (migration target: remove semantic branches, keep mechanical formatting/runtime glue only)
+  - Acceptance criteria:
+    - backend code paths contain no semantic branch logic keyed to language rules (type/fallibility/entailment decisions).
+    - malformed HIR fixture tests demonstrate passthrough emission behavior (malformed-in -> malformed-out C) without backend rejection.
+    - conformance tests are green.
+    - conformance tests confirm semantic diagnostics are produced upstream, not by backend emission.
+  - Subtasks (from-scratch, one unattended run each):
+    - `F-054-S1` Backend skeleton + deterministic region scheduling
+      - Status: completed (2026-03-02)
+      - Scope: create `HIR::BackendC` with function/region/exit scaffolding, label emission, and no semantic rejection paths.
+      - Acceptance gate: `perl -I compiler/lib -c compiler/lib/MetaC/HIR/BackendC.pm` passes; `perl compiler/metac.pl <smoke.metac> -o <out.c>` emits valid C text (not HIR dump).
+      - Deferred: non-trivial expression/statement kinds and runtime behavior.
+    - `F-054-S2` Scalar expression/statement mechanical emitters
+      - Status: completed (2026-03-02)
+      - Scope: emit `num/str/bool/null/ident/unary/binop`, `let/const/assign/assign_op/incdec/return/expr_stmt`, and CFG exits (`Goto/IfExit/WhileExit/Return`) with deterministic templates.
+      - Acceptance gate: targeted scalar/control tests compile and run without backend placeholder comments for covered kinds.
+      - Deferred: collections, method calls, fallible-flow lowering.
+    - `F-054-S3` Call-contract-driven call/method emission
+      - Status: completed (2026-03-02)
+      - Scope: mechanically emit `call`/`method_call` using resolved canonical call metadata (`op_id`, `call_kind`, arity), with no backend policy inference.
+      - Acceptance gate: call-heavy targeted suite (user calls, builtins, fluent methods) passes.
+      - Deferred: list/matrix runtime helper completeness.
+    - `F-054-S4` Runtime glue split (mechanical helpers only)
+      - Status: completed (2026-03-02)
+      - Scope: add backend runtime prelude/helper registry required by emitted intrinsics (logging, strings, utf8, basic list storage), keeping helper selection usage-driven and non-semantic.
+      - Acceptance gate: string/logging/utf8 targeted tests pass.
+      - Deferred: full list/matrix/fallible helper set.
+    - `F-054-S5` Sequence/list/matrix structural operations
+      - Status: completed (2026-03-02)
+      - Scope: mechanical emission + runtime helpers for list literals, push/size/index/destructure, seq/split/chars/chunk/reduce/filter/map scaffolding, and matrix core operations used by current tests.
+      - Acceptance gate: collection/matrix targeted tests pass.
+      - Deferred: error-flow integration and remaining edge cases.
+    - `F-054-S6` Mechanical fallibility/try/or-catch lowering
+      - Status: completed (2026-03-02)
+      - Scope: emit error-channel structs/flags and region wiring for `TryExit`, `?`, and `or catch` strictly from HIR contracts; no backend fallibility decisions.
+      - Acceptance gate: fallibility-focused targeted tests pass; upstream still owns unhandled-fallible diagnostics.
+      - Deferred: conformance-wide hardening.
+    - `F-054-S7` Semantic/backend boundary hardening
+      - Status: completed (2026-03-02)
+      - Scope: remove backend branches keyed to language policy; keep only structural node coverage checks and passthrough behavior on malformed HIR.
+      - Acceptance gate: purity checks pass (`type_is_*` and similar policy helpers absent from backend/materialization surfaces); malformed-HIR passthrough fixtures pass.
+      - Deferred: full-suite closure only.
+    - `F-054-S8` Full conformance closure
+      - Status: in_progress (2026-03-02)
+      - Scope: close remaining emitter/runtime gaps revealed by regression corpus without reintroducing backend semantic enforcement.
+      - Acceptance gate: `make test` reports all passing.
+      - Deferred: none (feature closure).

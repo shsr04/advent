@@ -9,9 +9,15 @@ sub parse_match_statement {
 
     my ($vars_raw, $source_var, $pattern) = ($1, $2, $3);
     my @vars = map { trim($_) } split /\s*,\s*/, $vars_raw;
+    my $groups = parse_capture_groups($pattern);
+    my @var_types = map {
+        my $g = $groups->[$_];
+        defined($g) ? infer_group_type($g) : 'string'
+    } 0 .. $#vars;
     return {
         kind       => 'destructure_match',
         vars       => \@vars,
+        var_types  => \@var_types,
         source_var => $source_var,
         pattern    => $pattern,
     };
@@ -117,6 +123,22 @@ sub split_try_chain_segments {
     compile_error("Unbalanced '(' in try-chain expression") if $depth != 0;
     push @parts, trim($current) if trim($current) ne '';
     return \@parts;
+}
+
+sub _expr_chain_has_try_recv {
+    my ($expr) = @_;
+    return 0 if !defined($expr) || ref($expr) ne 'HASH';
+    my $k = $expr->{kind} // '';
+    return 1 if $k eq 'try';
+    return _expr_chain_has_try_recv($expr->{recv}) if $k eq 'method_call';
+    return 0;
+}
+
+sub expr_is_try_tail_chain_candidate {
+    my ($expr) = @_;
+    return 0 if !defined($expr) || ref($expr) ne 'HASH';
+    return 0 if ($expr->{kind} // '') ne 'method_call';
+    return _expr_chain_has_try_recv($expr->{recv}) ? 1 : 0;
 }
 
 sub parse_method_step {

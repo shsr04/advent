@@ -1,0 +1,11 @@
+@Test({
+   "exit" : 0,
+   "stdout" : "Result: 13\n"
+})
+function main() {
+  const xs = seq(1, 3)
+  const sum = xs.reduce(1, (acc, x) => { acc + x })
+  const pref = xs.scan(0, (acc, x) => { acc + x })
+
+  log("Result: ${sum + pref.max()}")
+}

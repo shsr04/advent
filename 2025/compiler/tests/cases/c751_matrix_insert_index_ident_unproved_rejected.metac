@@ -1,0 +1,9 @@
+@Test({
+   "compile_err" : "Method 'insert(...)' requires compile-time matrix index proof against matrixSize constraints"
+})
+function main(): int {
+  let grid: matrix(number) with dim(2) + matrixSize([2, 3]) = []
+  const idx: int[] with size(2) = [1, 0]
+  grid.insert(9, idx)
+  return 0
+}

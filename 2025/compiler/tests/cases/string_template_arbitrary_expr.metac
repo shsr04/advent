@@ -1,0 +1,12 @@
+@Test({
+  "stdout": "sum=5 mid=20 label=ok\n",
+  "exit": 0
+})
+function main(): number {
+  const xs: number[] = [10, 20, 30]
+  const a = 2
+  const b = 3
+  const label = "ok"
+  log("sum=${a + b} mid=${xs[1]} label=${label}")
+  return 0
+}

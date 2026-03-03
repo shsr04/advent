@@ -4,7 +4,7 @@ function bad(m: matrix(number)): int {
 }
 
 @Test({
-   "compile_err" : "requires number[] coordinates"
+   "compile_err" : "requires value with source matrix-member metadata"
 })
 function main(): int {
   return 0

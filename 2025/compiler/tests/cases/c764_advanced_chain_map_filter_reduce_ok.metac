@@ -1,0 +1,12 @@
+@Test({
+  "stdout": "Result: 3\n",
+  "exit": 0
+})
+function main() {
+  const column = ["1", "2", " ", "3", "+"]
+  const value = seq(0, column.size()-2)
+    .map(i => column[i])
+    .filter(x => x.isBlank()==false)
+    .reduce(0, (acc, x) => acc+x.size())
+  log("Result: ${value}")
+}

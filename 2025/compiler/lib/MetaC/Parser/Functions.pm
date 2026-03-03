@@ -5,12 +5,7 @@ use warnings;
 sub _constraint_applicable_to_type {
     my ($constraint_name, $type) = @_;
     return 1 if $constraint_name eq 'size'
-      && ($type eq 'string'
-          || $type eq 'number_list'
-          || $type eq 'number_list_list'
-          || $type eq 'string_list'
-          || $type eq 'bool_list'
-          || is_array_type($type));
+      && ($type eq 'string' || is_sequence_type($type));
     return 1 if ($constraint_name eq 'range' || $constraint_name eq 'wrap' || $constraint_name eq 'positive' || $constraint_name eq 'negative') && $type eq 'number';
     return 1 if ($constraint_name eq 'dim' || $constraint_name eq 'matrixSize') && is_matrix_type($type);
     return 0;
@@ -98,20 +93,49 @@ sub _split_type_and_constraints_top_level {
     return (trim($raw), undef);
 }
 
+sub _declared_numeric_kind_from_raw {
+    my ($raw) = @_;
+    my $t = trim($raw // '');
+    return undef if $t eq '';
+
+    # Strip balanced outer parens for simple annotations.
+    while ($t =~ /^\((.*)\)$/) {
+        my $inner = $1;
+        my $depth = 0;
+        my $ok = 1;
+        for my $ch (split //, $inner) {
+            $depth++ if $ch eq '(';
+            $depth-- if $ch eq ')';
+            if ($depth < 0) {
+                $ok = 0;
+                last;
+            }
+        }
+        last if !$ok || $depth != 0;
+        $t = trim($inner);
+    }
+    $t =~ s/\s+//g;
+    return 'int' if $t eq 'int';
+    return 'float' if $t eq 'float';
+    return 'number' if $t eq 'number';
+    return undef;
+}
+
 sub parse_declared_type_and_constraints {
     my (%args) = @_;
     my $raw = trim($args{raw} // '');
     my $where = $args{where} // 'declaration';
     my ($type_raw, $constraint_raw) = _split_type_and_constraints_top_level($raw);
+    my $declared_numeric_kind = _declared_numeric_kind_from_raw($type_raw);
     my $nested_number_list_size;
 
     if ($type_raw =~ /^\((.+)\)\[\]$/) {
         my $inner_raw = trim($1);
-        my ($inner_type, $inner_constraints) = parse_declared_type_and_constraints(
+        my ($inner_type, $inner_constraints, undef) = parse_declared_type_and_constraints(
             raw   => $inner_raw,
             where => "nested list element type in $where",
         );
-        if ($inner_type eq 'number_list') {
+        if ((sequence_element_type($inner_type) // '') eq 'number') {
             my $inner_nodes = constraint_nodes($inner_constraints);
             my @unsupported = grep { $_->{kind} ne 'size' } @$inner_nodes;
             compile_error("Only size(...) constraint is supported on nested list element type in $where")
@@ -122,7 +146,7 @@ sub parse_declared_type_and_constraints {
             compile_error("Nested element size(...) must be >= 0 in $where")
               if $inner_size < 0;
             $nested_number_list_size = $inner_size;
-            $type_raw = 'number[][]';
+            $type_raw = "($inner_type)[]";
         } else {
             $type_raw = "($inner_type)[]";
         }
@@ -136,10 +160,6 @@ sub parse_declared_type_and_constraints {
         next if $m eq 'bool';
         next if $m eq 'error';
         next if $m eq 'null';
-        next if $m eq 'number_list';
-        next if $m eq 'number_list_list';
-        next if $m eq 'string_list';
-        next if $m eq 'bool_list';
         next if is_array_type($m);
         next if is_matrix_type($m);
         compile_error("Unsupported type annotation '$type_raw' in $where");
@@ -156,9 +176,9 @@ sub parse_declared_type_and_constraints {
     );
     if (is_matrix_type($type)) {
         my $final = apply_matrix_constraints($type, $constraints, $where);
-        return ($final, $constraints);
+        return ($final, $constraints, $declared_numeric_kind);
     }
-    return ($type, $constraints);
+    return ($type, $constraints, $declared_numeric_kind);
 }
 
 sub parse_function_header {
@@ -195,15 +215,18 @@ sub parse_function_header {
     $rest = trim($rest);
 
     my $return_type;
+    my $declared_return_numeric_kind;
     if ($rest ne '') {
         return undef if $rest !~ /^:\s*(.+)$/;
         $return_type = trim($1);
+        $declared_return_numeric_kind = _declared_numeric_kind_from_raw($return_type);
     }
 
     return {
-        name        => $name,
-        args        => $args,
-        return_type => $return_type,
+        name                         => $name,
+        args                         => $args,
+        return_type                  => $return_type,
+        declared_return_numeric_kind => $declared_return_numeric_kind,
     };
 }
 
@@ -227,7 +250,12 @@ sub collect_functions {
 
         my $header = parse_function_header($trimmed);
         if (defined $header) {
-            my ($name, $args, $return_type) = ($header->{name}, $header->{args}, $header->{return_type});
+            my ($name, $args, $return_type, $declared_return_numeric_kind) = (
+                $header->{name},
+                $header->{args},
+                $header->{return_type},
+                $header->{declared_return_numeric_kind},
+            );
             my $header_line_no = $idx + 1;
 
             compile_error("Duplicate function definition: $name") if exists $functions{$name};
@@ -261,6 +289,7 @@ sub collect_functions {
                 name               => $name,
                 args               => $args,
                 return_type        => $return_type,
+                declared_return_numeric_kind => $declared_return_numeric_kind,
                 header_line_no     => $header_line_no,
                 body_start_line_no => $header_line_no + 1,
                 body_lines         => \@body,
@@ -296,7 +325,7 @@ sub parse_function_params {
           or compile_error("Invalid parameter declaration in function '$fn->{name}': $part");
 
         my ($name, $type_and_constraints) = ($1, trim($2));
-        my ($type, $constraints) = parse_declared_type_and_constraints(
+        my ($type, $constraints, $declared_numeric_kind) = parse_declared_type_and_constraints(
             raw   => $type_and_constraints,
             where => "parameter '$name' in function '$fn->{name}'",
         );
@@ -307,6 +336,7 @@ sub parse_function_params {
         push @params, {
             name        => $name,
             type        => $type,
+            declared_numeric_kind => $declared_numeric_kind,
             constraints => $constraints,
             c_in_name   => "__metac_in_$name",
         };

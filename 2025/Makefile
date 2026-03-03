@@ -6,7 +6,7 @@ MEM_LIMIT := 2147483648
 PERL := prlimit -v=$(MEM_LIMIT) perl
 
 METAC_SOURCES := $(sort $(wildcard day*/day*.metac))
-COMPILER_SOURCES := compiler/metac.pl $(sort $(wildcard compiler/lib/MetaC/*.pm))
+COMPILER_SOURCES := compiler/metac.pl $(sort $(shell find compiler/lib -type f -name '*.pm'))
 
 source_to_c = $(dir $1)build/$(notdir $(basename $1)).c
 source_to_bin = $(dir $1)build/$(notdir $(basename $1))

@@ -15,12 +15,6 @@ our @EXPORT_OK = qw(
     union_contains_member
     is_supported_value_type
     is_supported_generic_union_return
-    type_is_number_or_error
-    type_is_bool_or_error
-    type_is_string_or_error
-    type_is_number_or_null
-    non_error_member_of_error_union
-    type_without_union_member
     apply_matrix_constraints
     is_matrix_type
     matrix_type_meta
@@ -31,6 +25,12 @@ our @EXPORT_OK = qw(
     is_matrix_member_list_type
     matrix_member_list_meta
     matrix_neighbor_list_type
+    sequence_member_type
+    is_sequence_member_type
+    sequence_member_meta
+    is_sequence_type
+    sequence_element_type
+    sequence_type_for_element
     is_array_type
     array_type_meta
 );
@@ -161,22 +161,14 @@ sub _normalize_single_type {
     my $t = trim($type // '');
     $t = _strip_outer_parens($t);
     $t = _strip_outer_parens(_type_without_top_level_constraints($t));
+    $t =~ s/\s+//g;
     if ($t =~ /^(.*)\[\]$/) {
         my $inner = normalize_type_annotation($1);
-        return 'number_list' if $inner eq 'number';
-        return 'bool_list' if $inner eq 'bool';
-        return 'string_list' if $inner eq 'string';
-        return 'number_list_list' if $inner eq 'number_list';
         return _build_array_type(elem => $inner);
     }
-    $t =~ s/\s+//g;
     return 'number' if $t eq 'int';
     return 'number' if $t eq 'float';
     return 'bool' if $t eq 'boolean';
-    return 'bool_list' if $t eq 'bool[]' || $t eq 'boolean[]';
-    return 'number_list' if $t eq 'number[]' || $t eq 'int[]';
-    return 'number_list_list' if $t eq 'number[][]' || $t eq 'int[][]';
-    return 'string_list' if $t eq 'string[]';
     my $matrix_inner = _matrix_inner_type($t);
     if (defined $matrix_inner) {
         my $inner = normalize_type_annotation($matrix_inner);
@@ -296,12 +288,9 @@ sub is_supported_value_type {
     return 1 if $member eq 'string';
     return 1 if $member eq 'error';
     return 1 if $member eq 'null';
-    return 1 if $member eq 'number_list';
-    return 1 if $member eq 'number_list_list';
-    return 1 if $member eq 'string_list';
-    return 1 if $member eq 'bool_list';
     return 1 if $member eq 'number_or_null';
     return 1 if is_array_type($member);
+    return 1 if is_sequence_member_type($member);
     return 1 if is_matrix_type($member);
     return 0;
 }
@@ -313,52 +302,6 @@ sub is_supported_generic_union_return {
         return 0 if !is_supported_value_type($m);
     }
     return 1;
-}
-sub type_is_number_or_error {
-    my ($type) = @_;
-    my $members = union_member_types($type);
-    return 0 if @$members != 2;
-    my %set = map { $_ => 1 } @$members;
-    return $set{number} && $set{error} ? 1 : 0;
-}
-sub type_is_bool_or_error {
-    my ($type) = @_;
-    my $members = union_member_types($type);
-    return 0 if @$members != 2;
-    my %set = map { $_ => 1 } @$members;
-    return $set{bool} && $set{error} ? 1 : 0;
-}
-sub type_is_string_or_error {
-    my ($type) = @_;
-    my $members = union_member_types($type);
-    return 0 if @$members != 2;
-    my %set = map { $_ => 1 } @$members;
-    return $set{string} && $set{error} ? 1 : 0;
-}
-sub type_is_number_or_null {
-    my ($type) = @_;
-    my $members = union_member_types($type);
-    return 0 if @$members != 2;
-    my %set = map { $_ => 1 } @$members;
-    return $set{number} && $set{null} ? 1 : 0;
-}
-sub non_error_member_of_error_union {
-    my ($type) = @_;
-    my $members = union_member_types($type);
-    return undef if @$members != 2;
-    my @non_error = grep { $_ ne 'error' } @$members;
-    return undef if @non_error != 1;
-    return undef if !union_contains_member($type, 'error');
-    return $non_error[0];
-}
-sub type_without_union_member {
-    my ($type, $member) = @_;
-    my $members = union_member_types($type);
-    my @rest = grep { $_ ne $member } @$members;
-    compile_error("Cannot remove '$member' from non-union type '$type'")
-      if @rest == @$members;
-    return $rest[0] if @rest == 1;
-    return normalize_type_annotation(join(' | ', @rest));
 }
 sub is_matrix_type {
     my ($type) = @_;
@@ -375,6 +318,54 @@ sub array_type_meta {
     return {
         elem => normalize_type_annotation(_decode_type_token($elem_token)),
     };
+}
+sub sequence_member_type {
+    my ($elem_type) = @_;
+    my $elem = normalize_type_annotation($elem_type // '');
+    return undef if $elem eq '' || $elem eq 'unknown';
+    return "sequence_member<e=" . _encode_type_token($elem) . ">";
+}
+sub is_sequence_member_type {
+    my ($type) = @_;
+    return defined($type) && $type =~ /^sequence_member<e=(?:[0-9A-F]{2})+>$/ ? 1 : 0;
+}
+sub sequence_member_meta {
+    my ($type) = @_;
+    return undef if !is_sequence_member_type($type);
+    my ($elem_token) = $type =~ /^sequence_member<e=((?:[0-9A-F]{2})+)>$/;
+    return {
+        elem => normalize_type_annotation(_decode_type_token($elem_token)),
+    };
+}
+sub sequence_type_for_element {
+    my ($elem_type) = @_;
+    my $elem = normalize_type_annotation($elem_type // '');
+    return undef if $elem eq '' || $elem eq 'unknown';
+    return _build_array_type(elem => $elem);
+}
+sub sequence_element_type {
+    my ($type) = @_;
+    my $t = normalize_type_annotation($type // '');
+    return undef if $t eq '' || $t eq 'unknown';
+    if (is_sequence_member_type($t)) {
+        my $meta = sequence_member_meta($t);
+        return $meta->{elem} if defined($meta) && defined($meta->{elem});
+    }
+    if (is_array_type($t)) {
+        my $meta = array_type_meta($t);
+        return $meta->{elem} if defined($meta) && defined($meta->{elem});
+    }
+    if (is_matrix_member_list_type($t)) {
+        my $meta = matrix_member_list_meta($t);
+        return undef if !defined $meta;
+        my $elem_token = _encode_type_token($meta->{elem});
+        return "matrix_member<e=$elem_token;d=$meta->{dim}>";
+    }
+    return undef;
+}
+sub is_sequence_type {
+    my ($type) = @_;
+    return defined(sequence_element_type($type)) ? 1 : 0;
 }
 sub matrix_type_meta {
     my ($type) = @_;
@@ -484,8 +475,9 @@ sub matrix_neighbor_list_type {
     my $meta = matrix_type_meta($matrix_type);
     compile_error("matrix_neighbor_list_type expects matrix type")
       if !defined $meta;
-    return 'number_list' if $meta->{elem} eq 'number';
-    return 'string_list' if $meta->{elem} eq 'string';
-    compile_error("matrix neighbour list is unsupported for element type '$meta->{elem}'");
+    my $out = sequence_type_for_element($meta->{elem});
+    compile_error("matrix neighbour list is unsupported for element type '$meta->{elem}'")
+      if !defined $out;
+    return $out;
 }
 1;

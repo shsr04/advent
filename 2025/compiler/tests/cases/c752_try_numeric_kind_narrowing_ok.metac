@@ -1,0 +1,12 @@
+@Test({
+   "exit" : 0,
+   "stdout" : "Result: 12\n"
+})
+function main() {
+  const result = solve()?
+  log("Result: ${result}")
+}
+
+function solve(): number | error {
+  return 10 + parseNumber("2")?
+}

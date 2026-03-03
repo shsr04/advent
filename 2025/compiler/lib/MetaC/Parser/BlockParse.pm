@@ -40,6 +40,11 @@ sub parse_block {
             $$idx_ref++;
             return (\@stmts, 'close_else');
         }
+        if ($line =~ /^\}\s*else\s+if\s+(.+)\s*\{$/) {
+            my $cond = trim($1);
+            $$idx_ref++;
+            return (\@stmts, 'close_else_if:' . $cond);
+        }
 
         # Normalize inline if forms into multiline block syntax so downstream parsing stays uniform.
         # Examples:
@@ -150,6 +155,53 @@ sub parse_block {
                 };
                 next;
             }
+            if ($end_reason =~ /^close_else_if:(.*)$/) {
+                my $else_if_cond = trim($1);
+                my ($else_if_then, $else_end_reason) = parse_block($lines, $idx_ref, $base_line);
+                my $else_if_node = {
+                    kind      => 'if',
+                    cond      => parse_expr($else_if_cond),
+                    then_body => $else_if_then,
+                    else_body => undef,
+                    line      => $line_no,
+                };
+                my $chain_node = $else_if_node;
+                while (1) {
+                    if ($else_end_reason eq 'close') {
+                        last;
+                    }
+                    if ($else_end_reason eq 'close_else') {
+                        my ($else_body, $end2) = parse_block($lines, $idx_ref, $base_line);
+                        compile_error("if-else missing closing brace") if $end2 ne 'close';
+                        $chain_node->{else_body} = $else_body;
+                        last;
+                    }
+                    if ($else_end_reason =~ /^close_else_if:(.*)$/) {
+                        my $next_cond = trim($1);
+                        my ($next_then, $next_end_reason) = parse_block($lines, $idx_ref, $base_line);
+                        my $next_node = {
+                            kind      => 'if',
+                            cond      => parse_expr($next_cond),
+                            then_body => $next_then,
+                            else_body => undef,
+                            line      => $line_no,
+                        };
+                        $chain_node->{else_body} = [$next_node];
+                        $chain_node = $next_node;
+                        $else_end_reason = $next_end_reason;
+                        next;
+                    }
+                    compile_error("if-else missing closing brace");
+                }
+                push @stmts, {
+                    kind      => 'if',
+                    cond      => parse_expr($cond),
+                    then_body => $then_body,
+                    else_body => [$else_if_node],
+                    line      => $line_no,
+                };
+                next;
+            }
 
             compile_error("Invalid if-block termination");
         }
@@ -217,7 +269,7 @@ sub parse_block {
 
         if ($line =~ /^const\s+([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(.+?)\s*=\s*(.+)$/) {
             my ($name, $type_with_constraints, $expr) = ($1, trim($2), trim($3));
-            my ($type, $constraints) = parse_declared_type_and_constraints(
+            my ($type, $constraints, $declared_numeric_kind) = parse_declared_type_and_constraints(
                 raw   => $type_with_constraints,
                 where => "constant '$name'",
             );
@@ -228,6 +280,7 @@ sub parse_block {
                 kind        => 'const_typed',
                 name        => $name,
                 type        => $type,
+                declared_numeric_kind => $declared_numeric_kind,
                 constraints => $constraints,
                 expr        => parse_expr($expr),
                 line        => $line_no,
@@ -282,30 +335,33 @@ sub parse_block {
                 };
                 next;
             }
+            my $rhs_expr = parse_expr($rhs);
             my $segments = split_try_chain_segments($rhs);
-            if (@$segments > 1) {
+            if (@$segments > 1 && expr_is_try_tail_chain_candidate($rhs_expr)) {
                 my $first = $segments->[0];
                 my @tail_parts = @$segments[1 .. $#$segments];
                 my $tail_raw = join('.', @tail_parts);
+                my @steps = map { parse_method_step($_) } @tail_parts;
                 push @stmts, {
                     kind     => 'const_try_tail_expr',
                     name     => $name,
                     first    => parse_expr($first),
                     tail_raw => $tail_raw,
+                    steps    => \@steps,
                     line     => $line_no,
                 };
                 $$idx_ref++;
                 next;
             }
 
-            push @stmts, { kind => 'const', name => $name, expr => parse_expr($rhs), line => $line_no };
+            push @stmts, { kind => 'const', name => $name, expr => $rhs_expr, line => $line_no };
             $$idx_ref++;
             next;
         }
 
         if ($line =~ /^let\s+([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(.+?)\s*=\s*(.+)$/) {
             my ($name, $type_with_constraints, $expr) = ($1, trim($2), trim($3));
-            my ($type, $constraints) = parse_declared_type_and_constraints(
+            my ($type, $constraints, $declared_numeric_kind) = parse_declared_type_and_constraints(
                 raw   => $type_with_constraints,
                 where => "variable '$name'",
             );
@@ -316,6 +372,7 @@ sub parse_block {
                 kind        => 'let',
                 name        => $name,
                 type        => $type,
+                declared_numeric_kind => $declared_numeric_kind,
                 constraints => $constraints,
                 expr        => parse_expr($expr),
                 line        => $line_no,
@@ -346,7 +403,7 @@ sub parse_block {
 
         if ($line =~ /^([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(.+?)\s*=\s*(.+)$/) {
             my ($name, $type_with_constraints, $expr) = ($1, trim($2), trim($3));
-            my ($type, $constraints) = parse_declared_type_and_constraints(
+            my ($type, $constraints, $declared_numeric_kind) = parse_declared_type_and_constraints(
                 raw   => $type_with_constraints,
                 where => "typed assignment for '$name'",
             );
@@ -357,6 +414,7 @@ sub parse_block {
                 kind        => 'typed_assign',
                 name        => $name,
                 type        => $type,
+                declared_numeric_kind => $declared_numeric_kind,
                 constraints => $constraints,
                 expr        => parse_expr($expr),
                 line        => $line_no,

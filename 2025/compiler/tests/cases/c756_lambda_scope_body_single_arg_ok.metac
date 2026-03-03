@@ -1,0 +1,12 @@
+@Test({
+   "exit" : 0,
+   "stdout" : "Result: 1\n"
+})
+function main() {
+  const xs = seq(0, 2).map(x => { 0 })
+  let result = 0
+  if xs.max() == 0 {
+    result = 1
+  }
+  log("Result: ${result}")
+}

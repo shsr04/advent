@@ -1,0 +1,16 @@
+@Test({
+   "exit" : 0,
+   "stdout" : "Result: 4\n"
+})
+function main() {
+  let sum = 0
+  for const x in seq(0, 1) {
+    for const i in seq(0, 2) {
+      if i == 1 {
+        continue
+      }
+      sum += i
+    }
+  }
+  log("Result: ${sum}")
+}
