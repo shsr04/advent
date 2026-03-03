@@ -22,12 +22,12 @@ function sumProblems(): number|error {
   for const x in seq(0, grid.size(1)) {
     const column = extractColumn(grid, x).log()
     if numbers.size() == 0 {
-      operator = column.last()
+      operator = column.last()?
       numbers = seq(0, column.size()).map(x => 0)
     }
     
     for const i in seq(0, numbers.size()-2) {
-    numbers.insert(numbers[i]*10+column[i], i)?²
+        numbers.insert(numbers[i]*10+column[i], i)?
     }
     
     if isSeparator(column) {

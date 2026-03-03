@@ -38,6 +38,7 @@ use MetaC::TypeSpec qw(
     sequence_member_meta
     is_matrix_type
     matrix_type_meta
+    matrix_member_meta
 );
 
 our @EXPORT_OK = qw(resolve_hir_calls);
@@ -50,6 +51,16 @@ sub _single_non_error_member_from_error_union {
     my @members = grep { $_ ne 'error' } @{ union_member_types($type) };
     return undef if @members != 1;
     return $members[0];
+}
+
+sub _type_without_error_union_member {
+    my ($type) = @_;
+    return undef if !defined($type) || !is_union_type($type) || !union_contains_member($type, 'error');
+    my %uniq = map { $_ => 1 } grep { $_ ne 'error' } @{ union_member_types($type) };
+    return undef if !%uniq;
+    my @members = sort keys %uniq;
+    return $members[0] if @members == 1;
+    return join(' | ', @members);
 }
 
 sub _function_sigs {
@@ -86,6 +97,7 @@ sub _iterable_item_type_hint {
     my ($iterable_type) = @_;
     my $elem = sequence_element_type($iterable_type);
     return undef if !defined($elem);
+    return $elem if is_matrix_member_type($elem);
     return sequence_member_type($elem);
 }
 
@@ -99,13 +111,23 @@ sub _sequence_member_base_type {
                 my $meta = sequence_member_meta($m);
                 $m = $meta->{elem} if defined($meta) && defined($meta->{elem});
             }
+            if (is_matrix_member_type($m)) {
+                my $meta = matrix_member_meta($m);
+                $m = $meta->{elem} if defined($meta) && defined($meta->{elem});
+            }
             $uniq{$m} = 1 if defined($m) && $m ne '';
         }
         return join(' | ', sort keys %uniq);
     }
-    return $type if !is_sequence_member_type($type);
-    my $meta = sequence_member_meta($type);
-    return defined($meta) ? $meta->{elem} : $type;
+    if (is_sequence_member_type($type)) {
+        my $meta = sequence_member_meta($type);
+        $type = defined($meta) ? $meta->{elem} : $type;
+    }
+    if (is_matrix_member_type($type)) {
+        my $meta = matrix_member_meta($type);
+        $type = defined($meta) ? $meta->{elem} : $type;
+    }
+    return $type;
 }
 
 sub _callback_type_valid {
@@ -152,12 +174,31 @@ sub _method_param_type_compatible {
     return 0 if !defined($actual) || $actual eq '' || $actual eq 'unknown';
     return 0 if !defined($expected) || $expected eq '' || $expected eq 'unknown';
     $actual = _sequence_member_base_type($actual);
-    return 1 if $expected eq 'any';
-    return 1 if $actual eq $expected;
-    return 1 if $expected eq 'number' && ($actual eq 'int' || $actual eq 'float' || $actual eq 'number');
     my $actual_non_error = _single_non_error_member_from_error_union($actual);
-    return 1 if defined($actual_non_error) && $actual_non_error eq $expected;
-    return 0;
+    $actual = $actual_non_error if defined($actual_non_error) && $actual_non_error ne '';
+
+    my @actual_members = is_union_type($actual) ? @{ union_member_types($actual) } : ($actual);
+    my @expected_members = is_union_type($expected) ? @{ union_member_types($expected) } : ($expected);
+
+    for my $a (@actual_members) {
+        my $ok = 0;
+        for my $e (@expected_members) {
+            if ($e eq 'any') {
+                $ok = 1;
+                last;
+            }
+            if ($a eq $e) {
+                $ok = 1;
+                last;
+            }
+            if ($e eq 'number' && ($a eq 'int' || $a eq 'float' || $a eq 'number')) {
+                $ok = 1;
+                last;
+            }
+        }
+        return 0 if !$ok;
+    }
+    return 1;
 }
 
 sub _expected_param_type_valid {
@@ -334,6 +375,14 @@ sub _verify_method_parameter_contract {
     my $contract = method_param_contract($method, $recv_type);
     compile_error("ResolveCalls/F050-Param-Policy: method '$method' has invalid parameter policy")
       if !defined($contract) || ref($contract) ne 'HASH';
+    if ($method eq 'neighbours' && defined($recv_type) && is_matrix_type($recv_type)) {
+        my $actual = (ref($arg_exprs) eq 'ARRAY' && @$arg_exprs)
+          ? _infer_expr_type_hint($arg_exprs->[0], $env, $sigs, {})
+          : undef;
+        my $expected = sequence_type_for_element('number');
+        compile_error("ResolveCalls/F050-Param-Policy: Method 'neighbours(...)' requires value with source matrix-member metadata")
+          if !_method_param_type_compatible($actual, $expected);
+    }
 
     return _verify_param_contract(
         label => "method '$method'",
@@ -393,6 +442,13 @@ sub _verify_named_call_parameter_contract {
     my $call_kind = $args{call_kind} // 'call';
     compile_error("ResolveCalls/F050-Param-Policy: $call_kind '$name' has invalid parameter policy")
       if !defined($contract) || ref($contract) ne 'HASH';
+
+    if ($call_kind eq 'builtin' && $name eq 'log') {
+        my $actual = _infer_expr_type_hint($arg_exprs->[0], $env, $sigs, {});
+        if (defined($actual) && is_union_type($actual) && @{ union_member_types($actual) } > 1) {
+            compile_error("ResolveCalls/F050-Param-Policy: Builtin 'log' does not support argument type '$actual'");
+        }
+    }
 
     _verify_param_contract(
         label => "$call_kind '$name'",
@@ -518,7 +574,7 @@ sub _infer_expr_type_hint {
     if ($kind eq 'try') {
         my $inner_t = _infer_expr_type_hint($expr->{expr}, $env, $sigs, $seen);
         return undef if !defined $inner_t;
-        my $non_error = _single_non_error_member_from_error_union($inner_t);
+        my $non_error = _type_without_error_union_member($inner_t);
         return defined($non_error) ? $non_error : $inner_t;
     }
 
@@ -775,22 +831,22 @@ sub _register_binding_from_stmt {
         return;
     }
 
-    if ($kind eq 'const_try_expr' || $kind eq 'const_try_tail_expr' || $kind eq 'const_or_catch') {
+    if ($kind eq 'const_try_expr' || $kind eq 'const_or_catch') {
         my $name = $stmt->{name};
         return if !defined($name) || $name eq '';
         my $expr = defined $stmt->{expr} ? $stmt->{expr} : $stmt->{first};
         my $type = _infer_expr_type_hint($expr, $env, $sigs, {});
-        my $non_error = _single_non_error_member_from_error_union($type);
+        my $non_error = _type_without_error_union_member($type);
         $env->{$name} = defined($non_error) ? $non_error : $type
           if defined($type) && $type ne '';
         return;
     }
 
-    if ($kind eq 'const_try_chain') {
+    if ($kind eq 'const_try_tail_expr') {
         my $name = $stmt->{name};
         return if !defined($name) || $name eq '';
         my $cur = _infer_expr_type_hint($stmt->{first}, $env, $sigs, {});
-        my $ok = _single_non_error_member_from_error_union($cur);
+        my $ok = _type_without_error_union_member($cur);
         $cur = defined($ok) ? $ok : $cur;
         for my $step (@{ $stmt->{steps} // [] }) {
             next if !defined($step) || ref($step) ne 'HASH';
@@ -803,7 +859,30 @@ sub _register_binding_from_stmt {
                 args   => $step->{args} // [],
             };
             my $t = _infer_expr_type_hint($call, $tmp_env, $sigs, {});
-            my $next = _single_non_error_member_from_error_union($t);
+            $cur = $t if defined($t) && $t ne '';
+        }
+        $env->{$name} = $cur if defined($cur) && $cur ne '';
+        return;
+    }
+
+    if ($kind eq 'const_try_chain') {
+        my $name = $stmt->{name};
+        return if !defined($name) || $name eq '';
+        my $cur = _infer_expr_type_hint($stmt->{first}, $env, $sigs, {});
+        my $ok = _type_without_error_union_member($cur);
+        $cur = defined($ok) ? $ok : $cur;
+        for my $step (@{ $stmt->{steps} // [] }) {
+            next if !defined($step) || ref($step) ne 'HASH';
+            my $tmp_env = _clone_env($env);
+            $tmp_env->{__chain_recv} = $cur if defined($cur) && $cur ne '';
+            my $call = {
+                kind   => 'method_call',
+                method => ($step->{name} // ''),
+                recv   => { kind => 'ident', name => '__chain_recv' },
+                args   => $step->{args} // [],
+            };
+            my $t = _infer_expr_type_hint($call, $tmp_env, $sigs, {});
+            my $next = _type_without_error_union_member($t);
             $cur = defined($next) ? $next : $t if defined($t) && $t ne '';
         }
         $env->{$name} = $cur if defined($cur) && $cur ne '';
@@ -821,9 +900,21 @@ sub _register_binding_from_stmt {
         return;
     }
 
-    if ($kind eq 'destructure_match' || $kind eq 'destructure_split_or') {
+    if ($kind eq 'destructure_split_or') {
         for my $v (@{ $stmt->{vars} // [] }) {
             $env->{$v} = 'string' if defined($v) && $v ne '';
+        }
+        return;
+    }
+
+    if ($kind eq 'destructure_match') {
+        my $types = $stmt->{var_types};
+        for my $i (0 .. $#{ $stmt->{vars} // [] }) {
+            my $v = $stmt->{vars}[$i];
+            next if !defined($v) || $v eq '';
+            my $vt = (defined($types) && ref($types) eq 'ARRAY') ? ($types->[$i] // 'string') : 'string';
+            $vt = 'string' if $vt ne 'number' && $vt ne 'string';
+            $env->{$v} = $vt;
         }
         return;
     }
@@ -868,9 +959,10 @@ sub _resolve_stmt_tree {
         }
     }
 
-    if (($stmt->{kind} // '') eq 'const_try_chain') {
+    if (($stmt->{kind} // '') eq 'const_try_chain' || ($stmt->{kind} // '') eq 'const_try_tail_expr') {
+        my $is_tail = (($stmt->{kind} // '') eq 'const_try_tail_expr') ? 1 : 0;
         my $cur = _infer_expr_type_hint($stmt->{first}, $env, $sigs, {});
-        my $ok = _single_non_error_member_from_error_union($cur);
+        my $ok = _type_without_error_union_member($cur);
         $cur = defined($ok) ? $ok : $cur;
         for my $chain_step (@{ $stmt->{steps} // [] }) {
             next if ref($chain_step) ne 'HASH';
@@ -891,8 +983,12 @@ sub _resolve_stmt_tree {
             $chain_step->{resolved_call} = $call->{resolved_call} if exists $call->{resolved_call};
             $chain_step->{canonical_call} = $call->{canonical_call} if exists $call->{canonical_call};
             my $next_t = _infer_expr_type_hint($call, $tmp_env, $sigs, {});
-            my $next_ok = _single_non_error_member_from_error_union($next_t);
-            $cur = defined($next_ok) ? $next_ok : $next_t if defined($next_t) && $next_t ne '';
+            my $next_ok = _type_without_error_union_member($next_t);
+            if ($is_tail) {
+                $cur = $next_t if defined($next_t) && $next_t ne '';
+            } else {
+                $cur = defined($next_ok) ? $next_ok : $next_t if defined($next_t) && $next_t ne '';
+            }
         }
         _register_binding_from_stmt(stmt => $stmt, env => $env, sigs => $sigs);
         return;
@@ -904,6 +1000,10 @@ sub _resolve_stmt_tree {
             $loop_env->{ $stmt->{var} } = 'string' if defined $stmt->{var};
         } else {
             my $iter_t = _infer_expr_type_hint($stmt->{iterable}, $env, $sigs, {});
+            if (($stmt->{kind} // '') eq 'for_each_try') {
+                my $ok = _type_without_error_union_member($iter_t);
+                $iter_t = $ok if defined($ok) && $ok ne '';
+            }
             my $item_t = _iterable_item_type_hint($iter_t);
             $loop_env->{ $stmt->{var} } = $item_t if defined($stmt->{var}) && defined($item_t);
         }
@@ -923,6 +1023,10 @@ sub _resolve_stmt_tree {
     for my $k (qw(then_body else_body body handler)) {
         next if !defined($stmt->{$k}) || ref($stmt->{$k}) ne 'ARRAY';
         my $child_env = _clone_env($env);
+        if ($k eq 'handler') {
+            my $err_name = $stmt->{err_name};
+            $child_env->{$err_name} = 'error' if defined($err_name) && $err_name ne '';
+        }
         for my $inner (@{ $stmt->{$k} }) {
             _resolve_stmt_tree(
                 stmt      => $inner,
@@ -935,6 +1039,25 @@ sub _resolve_stmt_tree {
     }
 
     _register_binding_from_stmt(stmt => $stmt, env => $env, sigs => $sigs);
+}
+
+sub _register_exit_bindings {
+    my (%args) = @_;
+    my $exit = $args{exit};
+    my $env = $args{env};
+    my $sigs = $args{sigs};
+    return if !defined($exit) || ref($exit) ne 'HASH';
+
+    my $kind = $exit->{kind} // '';
+    if ($kind eq 'ForInExit') {
+        my $item = $exit->{item_name};
+        return if !defined($item) || $item eq '';
+        my $iter_t = _infer_expr_type_hint($exit->{iterable_expr}, $env, $sigs, {});
+        my $ok = _type_without_error_union_member($iter_t);
+        $iter_t = $ok if defined($ok) && $ok ne '';
+        my $item_t = _iterable_item_type_hint($iter_t);
+        $env->{$item} = $item_t if defined($item_t) && $item_t ne '';
+    }
 }
 
 sub _resolve_function_calls {
@@ -968,17 +1091,18 @@ sub _resolve_function_calls {
                 _resolve_expr(expr => $exit->{$k}, env => $env, sigs => $sigs, seen => {})
                   if defined $exit->{$k} && ref($exit->{$k}) eq 'HASH';
             }
+            _register_exit_bindings(exit => $exit, env => $env, sigs => $sigs);
         }
     }
 
     for my $region (@{ $fn->{regions} // [] }) {
-        next if %scheduled && !$scheduled{$region->{id}};
+        next if %scheduled && $scheduled{$region->{id}};
         for my $step (@{ $region->{steps} // [] }) {
             my $stmt = step_payload_to_stmt($step->{payload});
             next if !defined $stmt;
             _resolve_stmt_tree(
                 stmt      => $stmt,
-                env       => _clone_env($env),
+                env       => $env,
                 sigs      => $sigs,
                 seen_expr => {},
                 seen_stmt => {},
@@ -990,6 +1114,7 @@ sub _resolve_function_calls {
             _resolve_expr(expr => $exit->{$k}, env => $env, sigs => $sigs, seen => {})
               if defined $exit->{$k} && ref($exit->{$k}) eq 'HASH';
         }
+        _register_exit_bindings(exit => $exit, env => $env, sigs => $sigs);
     }
 }
 

@@ -259,6 +259,25 @@ sub _expand_try_exit {
     );
 }
 
+sub _try_expr_may_be_fallible {
+    my ($expr) = @_;
+    return 0 if !defined($expr) || ref($expr) ne 'HASH';
+    my $kind = $expr->{kind} // '';
+    if ($kind eq 'call') {
+        my $name = $expr->{name} // '';
+        return 0 if $name eq 'max' || $name eq 'min' || $name eq 'log' || $name eq 'seq' || $name eq 'last';
+        return 1;
+    }
+    if ($kind eq 'method_call') {
+        my $m = $expr->{method} // '';
+        return 1 if $m eq 'split' || $m eq 'match' || $m eq 'map' || $m eq 'insert' || $m eq 'last'
+          || $m eq 'head' || $m eq 'slice' || $m eq 'reduce' || $m eq 'scan' || $m eq 'filter'
+          || $m eq 'sortBy' || $m eq 'assert';
+        return 0;
+    }
+    return 0;
+}
+
 sub _inject_structured_exit_regions {
     my ($regions, $alloc) = @_;
     my $i = 0;
@@ -279,7 +298,8 @@ sub _inject_structured_exit_regions {
         @extra = _expand_loop_exit(region => $region, stmt => $stmt, next => $next, alloc => $alloc, for_mode => 1)
           if $kind eq 'for_each' || $kind eq 'for_each_try';
         @extra = _expand_try_exit($region, $stmt, $next, $alloc)
-          if $kind eq 'const_try_expr' || $kind eq 'const_try_tail_expr' || $kind eq 'expr_stmt_try';
+          if ($kind eq 'const_try_expr' || $kind eq 'const_try_tail_expr' || $kind eq 'expr_stmt_try')
+          && _try_expr_may_be_fallible(defined($stmt->{expr}) ? $stmt->{expr} : $stmt->{first});
 
         push @$regions, @extra if @extra;
     }

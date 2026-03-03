@@ -9,9 +9,15 @@ sub parse_match_statement {
 
     my ($vars_raw, $source_var, $pattern) = ($1, $2, $3);
     my @vars = map { trim($_) } split /\s*,\s*/, $vars_raw;
+    my $groups = parse_capture_groups($pattern);
+    my @var_types = map {
+        my $g = $groups->[$_];
+        defined($g) ? infer_group_type($g) : 'string'
+    } 0 .. $#vars;
     return {
         kind       => 'destructure_match',
         vars       => \@vars,
+        var_types  => \@var_types,
         source_var => $source_var,
         pattern    => $pattern,
     };

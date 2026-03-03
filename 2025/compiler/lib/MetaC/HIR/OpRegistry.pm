@@ -15,6 +15,7 @@ use MetaC::TypeSpec qw(
     sequence_type_for_element
     sequence_member_type
     is_sequence_member_type
+    sequence_member_meta
 );
 
 our @EXPORT_OK = qw(
@@ -207,7 +208,7 @@ my %REGISTRY = (
         log       => { op_id => 'method.log.v1',       receiver_policy => 'any',                      param_policy => 'none',               result_policy => 'receiver',          fallibility => 'never' },
         members   => { op_id => 'method.members.v1',   receiver_policy => 'matrix',                   param_policy => 'none',               result_policy => 'matrix_members',    fallibility => 'never' },
         index     => { op_id => 'method.index.v1',     receiver_policy => 'sequence_member_or_matrix_member', param_policy => 'none',         result_policy => 'index_by_receiver', fallibility => 'never' },
-        neighbours => { op_id => 'method.neighbours.v1', receiver_policy => 'matrix_member',          param_policy => 'none',               result_policy => 'matrix_neighbours', fallibility => 'never' },
+        neighbours => { op_id => 'method.neighbours.v1', receiver_policy => 'matrix_or_member',        param_policy => 'neighbours_by_receiver', result_policy => 'matrix_neighbours', fallibility => 'never' },
         reduce    => {
             op_id => 'method.reduce.v1',
             receiver_policy => 'sequence',
@@ -377,7 +378,20 @@ sub _method_receiver_supported_by_policy {
     return 1 if $policy eq 'any' && defined($recv_type) && $recv_type ne '';
     return 0 if !defined($recv_type) || $recv_type eq '' || $recv_type eq 'unknown';
 
-    return $recv_type eq 'string' ? 1 : 0 if $policy eq 'string';
+    if ($policy eq 'string') {
+        return 1 if $recv_type eq 'string';
+        if (is_sequence_member_type($recv_type)) {
+            my $meta = sequence_member_meta($recv_type);
+            my $elem = defined($meta) ? ($meta->{elem} // '') : '';
+            return $elem eq 'string' ? 1 : 0;
+        }
+        if (is_matrix_member_type($recv_type)) {
+            my $meta = matrix_member_meta($recv_type);
+            my $elem = defined($meta) ? ($meta->{elem} // '') : '';
+            return $elem eq 'string' ? 1 : 0;
+        }
+        return 0;
+    }
     return $recv_type eq 'number' ? 1 : 0 if $policy eq 'number';
     return $recv_type eq 'comparison_result' ? 1 : 0 if $policy eq 'comparison_result';
     return _type_supports_default_comparison($recv_type) ? 1 : 0 if $policy eq 'default_comparison';
@@ -418,7 +432,7 @@ sub _index_result_type {
     my ($recv_type) = @_;
     return sequence_type_for_element('number')
       if defined($recv_type) && is_matrix_member_type($recv_type);
-    return 'int' if defined($recv_type) && is_sequence_member_type($recv_type);
+    return 'number' if defined($recv_type) && is_sequence_member_type($recv_type);
     return 'number';
 }
 
@@ -446,6 +460,11 @@ sub method_result_type {
     my ($method, $recv_type) = @_;
     my $spec = _method_spec($method);
     my $policy = $spec->{result_policy} // 'unknown';
+
+    if ($method eq 'max') {
+        my $elem = sequence_element_type($recv_type);
+        return 'number' if defined($elem) && $elem eq 'string';
+    }
 
     return $spec->{result_type} if $policy eq 'fixed';
     return $recv_type if $policy eq 'receiver';
@@ -539,6 +558,15 @@ sub method_param_contract {
             my $elem = matrix_type_meta($recv_type)->{elem};
             return undef if !defined($elem) || $elem eq '';
             return { policy => 'fixed', arity => 2, param_types => [$elem, sequence_type_for_element('number')] };
+        }
+        return undef;
+    }
+    if ($policy eq 'neighbours_by_receiver') {
+        if (defined($recv_type) && is_matrix_type($recv_type)) {
+            return { policy => 'fixed', arity => 1, param_types => [sequence_type_for_element('number')] };
+        }
+        if (defined($recv_type) && is_matrix_member_type($recv_type)) {
+            return { policy => 'none', arity => 0, param_types => [] };
         }
         return undef;
     }

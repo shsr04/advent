@@ -299,9 +299,6 @@ sub _gate_effect {
             my $exit_kind = $region->{exit}{kind} // '';
             next if $exit_kind ne 'TryExit';
 
-            compile_error("Gate-Effect/F047-Gate-Effect: '?' propagation is only allowed in error-capable functions (or main); function '$fn->{name}' returns '$fn->{return_type}'")
-              if !_return_allows_error_propagation($fn);
-
             compile_error("Gate-Effect/F047-Gate-Effect: TryExit missing fallible expression in '$fn->{name}'")
               if !defined($region->{exit}{fallible_expr}) || ref($region->{exit}{fallible_expr}) ne 'HASH';
             compile_error("Gate-Effect/F047-Gate-Effect: TryExit region has no steps in '$fn->{name}'")

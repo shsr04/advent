@@ -288,11 +288,13 @@ sub parse_block {
                 my $first = $segments->[0];
                 my @tail_parts = @$segments[1 .. $#$segments];
                 my $tail_raw = join('.', @tail_parts);
+                my @steps = map { parse_method_step($_) } @tail_parts;
                 push @stmts, {
                     kind     => 'const_try_tail_expr',
                     name     => $name,
                     first    => parse_expr($first),
                     tail_raw => $tail_raw,
+                    steps    => \@steps,
                     line     => $line_no,
                 };
                 $$idx_ref++;
