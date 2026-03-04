@@ -1,0 +1,16 @@
+@Test({
+   "exit" : 0,
+   "stdout" : "Result: 4\n"
+})
+function main() {
+  let sum = 0
+  for const y in seq(0, 1) {
+    sum = sum + coordArity([0, y])
+  }
+
+  log("Result: ${sum}")
+}
+
+function coordArity(xs: number[]): number {
+  return xs.size()
+}

@@ -286,6 +286,56 @@ C
             }
         }
     }
+    if ($h{method_at}) {
+        push @$out, 'static int64_t metac_method_at_i64_matrix_meta(const struct metac_list_i64 *recv, struct metac_list_i64 idx, const struct metac_matrix_meta *meta) {';
+        push @$out, '  if (!recv || !meta) return 0;';
+        push @$out, '  int64_t dim = meta->dim;';
+        push @$out, '  if (dim < 0) dim = 0;';
+        push @$out, '  if (dim > 16) dim = 16;';
+        push @$out, '  if (idx.len != dim) return 0;';
+        push @$out, '  int64_t limit = recv->len;';
+        push @$out, '  if (meta->member_count < limit) limit = meta->member_count;';
+        push @$out, '  if (!meta->member_coords) return 0;';
+        push @$out, '  for (int64_t pos = 0; pos < limit; ++pos) {';
+        push @$out, '    int match = 1;';
+        push @$out, '    for (int64_t i = 0; i < dim; ++i) {';
+        push @$out, '      int64_t want = idx.data[i];';
+        push @$out, '      int64_t got = meta->member_coords[pos * 16 + i];';
+        push @$out, '      if (want != got) { match = 0; break; }';
+        push @$out, '    }';
+        push @$out, '    if (match) return recv->data[pos];';
+        push @$out, '  }';
+        push @$out, '  return 0;';
+        push @$out, '}';
+        push @$out, 'static int64_t metac_method_at_i64_matrix_meta_value(struct metac_list_i64 recv, struct metac_list_i64 idx, const struct metac_matrix_meta *meta) {';
+        push @$out, '  return metac_method_at_i64_matrix_meta(&recv, idx, meta);';
+        push @$out, '}';
+        if ($h{list_str}) {
+            push @$out, 'static const char *metac_method_at_str_matrix_meta(const struct metac_list_str *recv, struct metac_list_i64 idx, const struct metac_matrix_meta *meta) {';
+            push @$out, '  if (!recv || !meta) return "";';
+            push @$out, '  int64_t dim = meta->dim;';
+            push @$out, '  if (dim < 0) dim = 0;';
+            push @$out, '  if (dim > 16) dim = 16;';
+            push @$out, '  if (idx.len != dim) return "";';
+            push @$out, '  int64_t limit = recv->len;';
+            push @$out, '  if (meta->member_count < limit) limit = meta->member_count;';
+            push @$out, '  if (!meta->member_coords) return "";';
+            push @$out, '  for (int64_t pos = 0; pos < limit; ++pos) {';
+            push @$out, '    int match = 1;';
+            push @$out, '    for (int64_t i = 0; i < dim; ++i) {';
+            push @$out, '      int64_t want = idx.data[i];';
+            push @$out, '      int64_t got = meta->member_coords[pos * 16 + i];';
+            push @$out, '      if (want != got) { match = 0; break; }';
+            push @$out, '    }';
+            push @$out, '    if (match) return recv->data[pos] ? recv->data[pos] : "";';
+            push @$out, '  }';
+            push @$out, '  return "";';
+            push @$out, '}';
+            push @$out, 'static const char *metac_method_at_str_matrix_meta_value(struct metac_list_str recv, struct metac_list_i64 idx, const struct metac_matrix_meta *meta) {';
+            push @$out, '  return metac_method_at_str_matrix_meta(&recv, idx, meta);';
+            push @$out, '}';
+        }
+    }
     if ($h{method_filter}) {
         push @$out, 'static struct metac_list_i64 metac_method_filter_identity(struct metac_list_i64 recv) {';
         push @$out, '  return recv;';

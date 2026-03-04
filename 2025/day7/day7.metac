@@ -1,0 +1,34 @@
+function main() {
+  const result = sumBeams() or catch(e) {
+    log("Error! ${e}")
+    return 1
+  }
+  log("Result: ${result}")
+}
+
+function sumBeams(): number | error {
+  let grid: matrix(string) with dim(2) = []
+  let sum = 0
+
+  for const row in split(STDIN, "\n")? {
+    for const c in row.chars() { 
+      grid.insert(c, [row.index(), c.index()])?
+    }
+  }
+  
+  const start = findStart(grid)
+  
+  let next: int[][] = [[1, start-1], [1, start+1]]
+
+    // ...
+  
+  grid.log()
+}
+
+function findStart(grid: matrix(string) with dim(2)): number {
+  for const y in seq(0, grid.size(1)-1) {
+    if grid.at([0, y]) == "S" {
+      return y
+    }
+  }
+}

@@ -221,6 +221,7 @@ my %REGISTRY = (
             },
         },
         insert    => { op_id => 'method.insert.v1',    receiver_policy => 'sequence_or_matrix',       param_policy => 'insert_by_receiver', result_policy => 'receiver',          fallibility => 'matrix_insert', tags => ['mutates_receiver', 'conditional_sequence_requires_known_size', 'fallible_diag_insert_matrix_unconstrained', 'entailment_insert_sequence_index_literal_if_size_known', 'entailment_insert_matrix_index_proof_if_size_known'] },
+        at        => { op_id => 'method.at.v1',        receiver_policy => 'matrix',                   param_policy => 'fixed',              param_type_symbols => ['number_list'], result_policy => 'matrix_elem',      fallibility => 'never' },
         log       => { op_id => 'method.log.v1',       receiver_policy => 'any',                      param_policy => 'none',               result_policy => 'receiver',          fallibility => 'never' },
         members   => { op_id => 'method.members.v1',   receiver_policy => 'matrix',                   param_policy => 'none',               result_policy => 'matrix_members',    fallibility => 'never' },
         index     => { op_id => 'method.index.v1',     receiver_policy => 'sequence_member_or_matrix_member', param_policy => 'none',         result_policy => 'index_by_receiver', fallibility => 'never', traceability => 'requires_source_index_metadata' },
@@ -500,6 +501,14 @@ sub _matrix_neighbours_result_type {
     return undef;
 }
 
+sub _matrix_elem_result_type {
+    my ($recv_type) = @_;
+    return undef if !defined($recv_type) || !is_matrix_type($recv_type);
+    my $meta = matrix_type_meta($recv_type);
+    return undef if !defined($meta) || ref($meta) ne 'HASH';
+    return $meta->{elem};
+}
+
 sub method_result_type {
     my ($method, $recv_type) = @_;
     my $spec = _method_spec($method);
@@ -515,6 +524,7 @@ sub method_result_type {
     return $recv_type if $policy eq 'receiver';
     return _member_result_type($recv_type) if $policy eq 'traceable_member';
     return _matrix_members_result_type($recv_type) if $policy eq 'matrix_members';
+    return _matrix_elem_result_type($recv_type) if $policy eq 'matrix_elem';
     return _index_result_type($recv_type) if $policy eq 'index_by_receiver';
     return _matrix_neighbours_result_type($recv_type) if $policy eq 'matrix_neighbours';
     return undef;

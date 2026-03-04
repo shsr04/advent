@@ -814,6 +814,36 @@ sub _expr_to_c {
                 }
                 return 'metac_method_insert_i64_value(' . $recv . ', ' . ($args[0] // '0') . ', ' . ($args[1] // '0') . ')';
             }
+            if ($op_id eq 'method.at.v1') {
+                my $idx = $args[0] // 'metac_list_i64_empty()';
+                if (defined($recv_expr) && ref($recv_expr) eq 'HASH' && ($recv_expr->{kind} // '') eq 'ident') {
+                    my $rname = $recv_expr->{name} // '';
+                    my $rty = $ctx->{var_types}{$rname} // '';
+                    my $mvar = $ctx->{matrix_meta_vars}{$rname} // '';
+                    return ($rty eq 'struct metac_list_str') ? '""' : '0' if $mvar eq '';
+                    _helper_mark($ctx, 'method_at');
+                    _helper_mark($ctx, 'matrix_meta');
+                    _helper_mark($ctx, 'list_i64');
+                    if ($rty eq 'struct metac_list_str') {
+                        _helper_mark($ctx, 'list_str');
+                        return 'metac_method_at_str_matrix_meta(&' . $rname . ', ' . $idx . ', &' . $mvar . ')';
+                    }
+                    return 'metac_method_at_i64_matrix_meta(&' . $rname . ', ' . $idx . ', &' . $mvar . ')';
+                }
+                my $src_ident = _root_ident_name($recv_expr);
+                my $src_mvar = $ctx->{matrix_meta_vars}{$src_ident} // '';
+                my $recv_hint = _expr_c_type_hint($recv_expr, $ctx);
+                return (defined($recv_hint) && $recv_hint eq 'struct metac_list_str') ? '""' : '0'
+                  if $src_mvar eq '';
+                _helper_mark($ctx, 'method_at');
+                _helper_mark($ctx, 'matrix_meta');
+                _helper_mark($ctx, 'list_i64');
+                if (defined($recv_hint) && $recv_hint eq 'struct metac_list_str') {
+                    _helper_mark($ctx, 'list_str');
+                    return 'metac_method_at_str_matrix_meta_value(' . $recv . ', ' . $idx . ', &' . $src_mvar . ')';
+                }
+                return 'metac_method_at_i64_matrix_meta_value(' . $recv . ', ' . $idx . ', &' . $src_mvar . ')';
+            }
             if ($op_id eq 'method.log.v1') {
                 my $recv_hint = _expr_c_type_hint($recv_expr, $ctx);
                 if (defined($recv_hint) && $recv_hint eq 'struct metac_list_i64') {

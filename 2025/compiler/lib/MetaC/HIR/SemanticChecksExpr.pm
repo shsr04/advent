@@ -127,6 +127,15 @@ sub _base_member_type {
     return _unwrap_member_type($m);
 }
 
+sub _list_literal_item_type_category {
+    my ($type) = @_;
+    return undef if !defined($type) || $type eq '';
+    my $base = _base_member_type($type);
+    my $scalar_base = canonical_scalar_base($base);
+    return $scalar_base if defined($scalar_base) && $scalar_base ne '';
+    return $base;
+}
+
 sub _is_bool_member {
     my ($m) = @_;
     $m = _base_member_type($m) if defined($m);
@@ -455,9 +464,11 @@ sub _infer_expr_type {
                 return sequence_type_for_element("stringwithsize($n)");
             }
         }
-        my %uniq = map { $_ => 1 } @types;
+        my @cats = map { _list_literal_item_type_category($_) } @types;
+        return undef if grep { !defined($_) || $_ eq '' } @cats;
+        my %uniq = map { $_ => 1 } @cats;
         return undef if keys(%uniq) != 1;
-        return sequence_type_for_element($types[0]);
+        return sequence_type_for_element($cats[0]);
     }
 
     if ($kind eq 'unary') {
@@ -927,7 +938,10 @@ sub _validate_expr {
         if (@types) {
             compile_error("Semantic/F053-Type: List literal items must share the same type category")
               if grep { !defined($_) || $_ eq '' } @types;
-            my %uniq = map { $_ => 1 } @types;
+            my @cats = map { _list_literal_item_type_category($_) } @types;
+            compile_error("Semantic/F053-Type: List literal items must share the same type category")
+              if grep { !defined($_) || $_ eq '' } @cats;
+            my %uniq = map { $_ => 1 } @cats;
             compile_error("Semantic/F053-Type: List literal items must share the same type category")
               if keys(%uniq) > 1;
         }

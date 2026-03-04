@@ -383,6 +383,9 @@ The following operations are available on matrix types `M: matrix(<type>) with d
 - `<type>.index(): int[] with size(<dim>)`
   - Returns the coordinates of the member.
   - This operation is not available if the member cannot be traced back to a source matrix.
+- `M.at(coords: int[] with size(<dim>)): <type> [| error]`
+  - Returns the member at the given coordinates.
+  - Fallible: exactly if `<sizes>` cannot be inferred, thus making the matrix unconstrained.
 - `M.insert(value: <type>, index: int[] with size(<dim>)): M [| error]`
   - Inserts the value at the given index, modifying the matrix in place. Returns the matrix for chaining.
   - Fallible: exactly if `<sizes>` cannot be inferred, thus making the matrix unconstrained.

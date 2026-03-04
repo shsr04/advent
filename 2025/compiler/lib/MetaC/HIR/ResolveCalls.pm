@@ -28,6 +28,7 @@ use MetaC::HIR::OpRegistry qw(
     method_param_contract
 );
 use MetaC::HIR::TypeRegistry qw(
+    canonical_scalar_base
     scalar_is_boolean
     scalar_is_comparison
     scalar_is_numeric
@@ -141,6 +142,15 @@ sub _sequence_member_base_type {
         $type = defined($meta) ? $meta->{elem} : $type;
     }
     return $type;
+}
+
+sub _list_literal_item_type_category {
+    my ($type) = @_;
+    return undef if !defined($type) || $type eq '';
+    my $base = _sequence_member_base_type($type);
+    my $scalar_base = canonical_scalar_base($base);
+    return $scalar_base if defined($scalar_base) && $scalar_base ne '';
+    return $base;
 }
 
 sub _callback_type_valid {
@@ -660,8 +670,10 @@ sub _infer_expr_type_hint {
         return 'empty_list' if !@$items;
         my @types = map { _infer_expr_type_hint($_, $env, $sigs, $seen) } @$items;
         return undef if grep { !defined $_ } @types;
-        my %uniq = map { $_ => 1 } @types;
-        return sequence_type_for_element($types[0]) if keys(%uniq) == 1;
+        my @cats = map { _list_literal_item_type_category($_) } @types;
+        return undef if grep { !defined($_) || $_ eq '' } @cats;
+        my %uniq = map { $_ => 1 } @cats;
+        return sequence_type_for_element($cats[0]) if keys(%uniq) == 1;
         return undef;
     }
 
