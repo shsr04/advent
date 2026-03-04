@@ -22,22 +22,13 @@ function checkRanges(): number|error {
     fresh.push(range)
   }
   
-  const sorted = fresh.sortBy((x, y) => x[0].compareTo(y[0]).andThen(x[1].compareTo(y[1])))
-  
   let count = 0
-  let lastAdded: number|null = null
-  
-  for const range in sorted {
-    const [start,end] = range
-    if lastAdded == null || lastAdded < start {
-      count += end-start+1
-      lastAdded = end
+
+  for const range in fresh {
+    if range.size() != 2 {
       continue
     }
-    if start <= lastAdded && lastAdded < end {
-      count += end-lastAdded
-      lastAdded = end
-    }
+    count += range[1]-range[0]+1
   }
 
   return count

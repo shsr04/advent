@@ -1,8 +1,9 @@
 function main() {
-  printf("Result: %d\n", findAccessible() or (e) => {
-    printf("Error! %s\n", e.message)
+  const result = findAccessible() or catch(e) {
+    log("Error! ${e}")
     return 1
-  })
+  }
+  log("Result: ${result}")
 }
 
 function findAccessible(): number|error {
@@ -17,11 +18,8 @@ function findAccessible(): number|error {
   }
   
   let accessible = 0
-  for const cell in grid.members().filter((x) => x == "@") {
-      const adj = cell.neighbours()
-        .filter((x) => x == "@")
-        .count()
-      if adj < 4 { accessible++ }
+  for const member in grid.members().filter((x) => x == "@") {
+      accessible++
   }
   
   return accessible

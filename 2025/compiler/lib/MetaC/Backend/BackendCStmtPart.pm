@@ -363,6 +363,22 @@ sub _emit_stmt {
             $constraints = $ctx->{var_constraints}{$name};
         }
         my $target_ty = $ctx->{var_types}{$name} // '';
+        if (defined($stmt->{expr}) && ref($stmt->{expr}) eq 'HASH' && (($stmt->{expr}{kind} // '') eq 'list_literal')) {
+            my $items = $stmt->{expr}{items} // [];
+            if (ref($items) eq 'ARRAY' && !@$items) {
+                if ($target_ty eq 'struct metac_list_list_i64') {
+                    _helper_mark($ctx, 'list_i64');
+                    _helper_mark($ctx, 'list_list_i64');
+                    $rhs = 'metac_list_list_i64_empty()';
+                } elsif ($target_ty eq 'struct metac_list_str') {
+                    _helper_mark($ctx, 'list_str');
+                    $rhs = 'metac_list_str_empty()';
+                } elsif ($target_ty eq 'struct metac_list_i64') {
+                    _helper_mark($ctx, 'list_i64');
+                    $rhs = 'metac_list_i64_empty()';
+                }
+            }
+        }
         my $size_need = _constraint_exact_size($constraints);
         if ($target_ty eq 'const char *' && defined($size_need) && $size_need >= 0) {
             _helper_mark($ctx, 'error_flag');
@@ -441,6 +457,16 @@ sub _emit_stmt {
             for my $s (@{ $stmt->{else_body} }) {
                 _emit_stmt($s, $out, $indent + 2, \%else_seen, 0, $ctx);
             }
+        }
+        push @$out, "${sp}}";
+        return;
+    }
+    if ($k eq 'while') {
+        my $cond = _expr_to_c($stmt->{cond}, $ctx);
+        push @$out, "${sp}while ($cond) {";
+        for my $inner (@{ $stmt->{body} // [] }) {
+            local $ctx->{inline_loop_depth} = ($ctx->{inline_loop_depth} // 0) + 1;
+            _emit_stmt($inner, $out, $indent + 2, $seen_decl, 0, $ctx);
         }
         push @$out, "${sp}}";
         return;

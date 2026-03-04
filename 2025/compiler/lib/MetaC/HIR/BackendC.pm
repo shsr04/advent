@@ -206,6 +206,12 @@ sub _expr_c_type_hint {
         return 'struct metac_list_i64' if defined($recv_hint) && $recv_hint eq 'struct metac_list_list_i64';
         return 'int64_t';
     }
+    if ($k eq 'member_access') {
+        my $recv_hint = _expr_c_type_hint($expr->{recv}, $ctx);
+        my $member = $expr->{member} // '';
+        return 'const char *' if defined($recv_hint) && $recv_hint eq 'const char *' && $member eq 'message';
+        return undef;
+    }
     if ($k eq 'call' || $k eq 'method_call') {
         my $resolved = $expr->{resolved_call};
         my $canonical = $expr->{canonical_call};

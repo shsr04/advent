@@ -1,8 +1,9 @@
 function main() {
-  printf("Result: %d\n", findSum() or catch(e) {
-    printf("Error! %s\n", e.message)
+  const result = findSum() or catch(e) {
+    log("Error! ${e}")
     return 1
-  })
+  }
+  log("Result: ${result}")
 }
 
 function findSum(): number | error {

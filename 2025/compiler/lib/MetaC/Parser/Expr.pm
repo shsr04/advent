@@ -185,26 +185,34 @@ sub parse_expr {
                 my $name_tok = $peek->();
                 compile_error("Expected method name after '.' in expression")
                   if !defined($name_tok) || $name_tok->{type} ne 'ident';
-                my $method = $name_tok->{value};
+                my $member = $name_tok->{value};
                 $idx++;
 
-                $expect_op->('(', "after method name");
-                my @args;
-                if (!$accept_op->(')')) {
-                    while (1) {
-                        push @args, $parse_lambda->();
-                        if ($accept_op->(')')) {
-                            last;
+                if ($accept_op->('(')) {
+                    my @args;
+                    if (!$accept_op->(')')) {
+                        while (1) {
+                            push @args, $parse_lambda->();
+                            if ($accept_op->(')')) {
+                                last;
+                            }
+                            $expect_op->(',', "after method-call argument");
                         }
-                        $expect_op->(',', "after method-call argument");
                     }
+
+                    $node = {
+                        kind   => 'method_call',
+                        recv   => $node,
+                        method => $member,
+                        args   => \@args,
+                    };
+                    next;
                 }
 
                 $node = {
-                    kind   => 'method_call',
+                    kind   => 'member_access',
                     recv   => $node,
-                    method => $method,
-                    args   => \@args,
+                    member => $member,
                 };
                 next;
             }

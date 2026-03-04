@@ -499,6 +499,14 @@ sub _infer_expr_type {
         return sequence_member_type($elem);
     }
 
+    if ($kind eq 'member_access') {
+        my $recv_t = _infer_expr_type($expr->{recv}, $ctx);
+        my $member = $expr->{member} // '';
+        return 'string' if defined($recv_t) && scalar_is_error($recv_t) && $member eq 'message';
+        return 'string' if defined($recv_t) && $recv_t eq 'error' && $member eq 'message';
+        return undef;
+    }
+
     if ($kind eq 'try') {
         my $inner_t = _infer_expr_type($expr->{expr}, $ctx);
         my $without_error = _type_without_error_union_member($inner_t);
@@ -1002,7 +1010,7 @@ sub _validate_expr {
                 my $bad = is_union_type($lt_eff) ? $lt_eff : $rt_eff;
                 compile_error("Semantic/F053-Type: Unsupported '$op' operand type: $bad");
             }
-            compile_error("Semantic/F053-Type: Type mismatch in '$op'")
+            compile_error("Semantic/F053-Type: Type mismatch in '$op' ($lt_eff and $rt_eff)")
               if !_has_shared_member($lt_eff, $rt_eff);
             return 'bool';
         }
@@ -1035,6 +1043,16 @@ sub _validate_expr {
             compile_error("Semantic/F053-Fallibility: unhandled fallible expression; use '?' or 'or catch(...)'");
         }
         return _infer_expr_type($expr, $ctx);
+    }
+
+    if ($kind eq 'member_access') {
+        my $recv_t = _validate_expr($expr->{recv}, $ctx, $handled);
+        my $member = $expr->{member} // '';
+        compile_error("Semantic/F053-Type: Unsupported member access '$member'")
+          if !defined($member) || $member eq '';
+        compile_error("Semantic/F053-Type: Unsupported member access '$member' on type '$recv_t'")
+          if !defined($recv_t) || !scalar_is_error($recv_t) || $member ne 'message';
+        return 'string';
     }
 
     if ($kind eq 'try') {

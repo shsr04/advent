@@ -100,6 +100,20 @@ C
         push @$out, '  return 0;';
         push @$out, '}';
     }
+    if ($h{any_list_i64}) {
+        push @$out, 'static int metac_any_list_i64(const struct metac_list_list_i64 *src, int (*pred)(struct metac_list_i64)) {';
+        push @$out, '  if (!src || !pred) return 0;';
+        push @$out, '  for (int64_t i = 0; i < src->len; ++i) {';
+        push @$out, '    if (pred(metac_list_list_i64_get(src, i))) return 1;';
+        push @$out, '  }';
+        push @$out, '  return 0;';
+        push @$out, '}';
+        if ($h{any_list_i64_value}) {
+            push @$out, 'static int metac_any_list_i64_value(struct metac_list_list_i64 src, int (*pred)(struct metac_list_i64)) {';
+            push @$out, '  return metac_any_list_i64(&src, pred);';
+            push @$out, '}';
+        }
+    }
 
     if ($h{method_match}) {
         push @$out, 'static struct metac_list_str metac_method_match(const char *text, const char *pattern) {';

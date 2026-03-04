@@ -1,8 +1,9 @@
 function main() {
-  printf("Result: %d\n", countNumbers() or catch(e) {
-    printf("Error! %s\n", e.message)
+  const result = countNumbers() or catch(e) {
+    log("Error! ${e}")
     return 1
-  })
+  }
+  log("Result: ${result}")
 }
 
 function countNumbers(): number | error {
@@ -27,12 +28,11 @@ function countZeroPasses(base: number with range(0,99) + wrap, delta: number): n
   const isNegative = delta < 0
 
   let current: number with range(0,99) + wrap = base
-  let steps: number from () => {
-    if isNegative {
-      steps: number with positive = -delta
-    } else {
-      steps: number with positive = delta
-    }
+  let steps = 0
+  if isNegative {
+    steps = -delta
+  } else {
+    steps = delta
   }
 
   let result = 0

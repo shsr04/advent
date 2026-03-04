@@ -9,7 +9,7 @@ our @EXPORT_OK = qw(
 );
 
 my %EXPR_KINDS = map { $_ => 1 } qw(
-  num str bool null ident list_literal unary binop index try call method_call lambda1 lambda2 call_expr
+  num str bool null ident list_literal unary binop index try call method_call member_access lambda1 lambda2 call_expr
 );
 my %STMT_KINDS = map { $_ => 1 } qw(
   let const const_typed assign typed_assign assign_op incdec

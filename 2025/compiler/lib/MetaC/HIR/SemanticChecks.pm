@@ -251,6 +251,11 @@ sub _expr_signature {
         return undef if !defined($recv) || !defined($idx);
         return 'i(' . $recv . ',' . $idx . ')';
     }
+    if ($kind eq 'member_access') {
+        my $recv = _expr_signature($expr->{recv});
+        return undef if !defined($recv);
+        return 'ma(' . $recv . ',' . ($expr->{member} // '') . ')';
+    }
     if ($kind eq 'try') {
         my $inner = _expr_signature($expr->{expr});
         return undef if !defined($inner);
@@ -308,6 +313,44 @@ sub _nested_required_size_for_receiver {
     return $need;
 }
 
+sub _set_nested_required_size_for_receiver {
+    my ($recv_expr, $ctx, $need) = @_;
+    return if !defined($recv_expr) || ref($recv_expr) ne 'HASH' || ($recv_expr->{kind} // '') ne 'ident';
+    return if !defined($need) || $need !~ /^-?\d+$/;
+    $need = int($need);
+    return if $need < 0;
+    my $name = $recv_expr->{name} // '';
+    return if $name eq '';
+    $ctx->{constraints}{$name} = {} if !defined($ctx->{constraints}{$name}) || ref($ctx->{constraints}{$name}) ne 'HASH';
+    $ctx->{constraints}{$name}{nested_number_list_size} = $need;
+}
+
+sub _nested_size_from_expr {
+    my ($expr, $ctx) = @_;
+    return undef if !defined($expr) || ref($expr) ne 'HASH';
+    my $kind = $expr->{kind} // '';
+    if ($kind eq 'ident') {
+        my $name = $expr->{name} // '';
+        return undef if $name eq '';
+        my $constraints = $ctx->{constraints}{$name};
+        return undef if !defined($constraints) || ref($constraints) ne 'HASH';
+        my $need = $constraints->{nested_number_list_size};
+        return undef if !defined($need) || $need !~ /^-?\d+$/;
+        $need = int($need);
+        return undef if $need < 0;
+        return $need;
+    }
+    if ($kind eq 'method_call') {
+        my $m = $expr->{method} // '';
+        return _nested_size_from_expr($expr->{recv}, $ctx)
+          if $m eq 'sort' || $m eq 'sortBy' || $m eq 'filter' || $m eq 'assert' || $m eq 'slice';
+    }
+    if ($kind eq 'try') {
+        return _nested_size_from_expr($expr->{expr}, $ctx);
+    }
+    return undef;
+}
+
 sub _fn_allows_error_propagation {
     my ($ctx) = @_;
     my $ret = $ctx->{fn_return};
@@ -333,6 +376,36 @@ sub _expr_contains_try {
         }
     }
     return 0;
+}
+
+sub _expr_depends_only_on_immutable_values {
+    my ($expr, $ctx) = @_;
+    return 0 if !defined($expr) || ref($expr) ne 'HASH';
+    my $k = $expr->{kind} // '';
+    return 1 if $k eq 'num' || $k eq 'str' || $k eq 'bool' || $k eq 'null';
+    if ($k eq 'ident') {
+        my $name = $expr->{name} // '';
+        return 0 if $name eq '' || !exists $ctx->{types}{$name};
+        return ($ctx->{mut}{$name} // 0) ? 0 : 1;
+    }
+    if ($k eq 'unary') {
+        return _expr_depends_only_on_immutable_values($expr->{expr}, $ctx);
+    }
+    if ($k eq 'binop') {
+        return _expr_depends_only_on_immutable_values($expr->{left}, $ctx)
+          && _expr_depends_only_on_immutable_values($expr->{right}, $ctx);
+    }
+    return 0;
+}
+
+sub _while_cond_is_immutable_comparison {
+    my ($expr, $ctx) = @_;
+    return 0 if !defined($expr) || ref($expr) ne 'HASH';
+    return 0 if ($expr->{kind} // '') ne 'binop';
+    my $op = $expr->{op} // '';
+    return 0 if $op ne '<' && $op ne '>' && $op ne '<=' && $op ne '>=' && $op ne '==' && $op ne '!=';
+    return _expr_depends_only_on_immutable_values($expr->{left}, $ctx)
+      && _expr_depends_only_on_immutable_values($expr->{right}, $ctx);
 }
 
 sub _constraints_range_partial {
@@ -614,7 +687,10 @@ sub _stmt_seq_terminal_return {
     return 0 if !defined($stmts) || ref($stmts) ne 'ARRAY' || !@$stmts;
     my $last = $stmts->[-1];
     return 0 if !defined($last) || ref($last) ne 'HASH';
-    return (($last->{kind} // '') eq 'return') ? 1 : 0;
+    my $kind = $last->{kind} // '';
+    return 1 if $kind eq 'return';
+    return 1 if $kind eq 'break' || $kind eq 'continue' || $kind eq 'rewind';
+    return 0;
 }
 
 sub _validate_stmt {
@@ -669,6 +745,11 @@ sub _validate_stmt {
         }
         _clear_symbol_facts($ctx, $name);
         _seed_constraint_facts($ctx, $name, $stmt->{constraints});
+        my $nested_need = _nested_size_from_expr($stmt->{expr}, $ctx);
+        if (defined($nested_need) && $name ne '') {
+            $ctx->{constraints}{$name} = {} if !defined($ctx->{constraints}{$name}) || ref($ctx->{constraints}{$name}) ne 'HASH';
+            $ctx->{constraints}{$name}{nested_number_list_size} = $nested_need;
+        }
         my $known_len = _single_known_len_for_expr($stmt->{expr}, $ctx);
         $ctx->{facts}{"len_var:$name:$known_len"} = 1
           if $name ne '' && defined($known_len) && $known_len >= 0;
@@ -1020,6 +1101,13 @@ sub _validate_stmt {
                           if !_list_length_proved($pushed, $ctx, $need);
                     }
                 }
+                if ($m eq 'push') {
+                    my $args = $expr->{args} // [];
+                    my $pushed = (ref($args) eq 'ARRAY') ? $args->[0] : undef;
+                    my $known_len = _single_known_len_for_expr($pushed, $ctx);
+                    _set_nested_required_size_for_receiver($recv, $ctx, $known_len)
+                      if defined($known_len);
+                }
             }
         }
         _validate_expr($stmt->{expr}, $ctx, 0);
@@ -1034,8 +1122,9 @@ sub _validate_stmt {
         compile_error("Semantic/F053-Type: condition must be boolean in '$kind'")
           if !_is_bool_type($ct);
         if ($kind eq 'while') {
-            compile_error("Semantic/F053-Entailment: Conditional comparison in while condition depends only on immutable values")
-              if !_expr_references_mutable($stmt->{cond}, $ctx);
+            if (_while_cond_is_immutable_comparison($stmt->{cond}, $ctx)) {
+                compile_error("Conditional comparison in while condition depends only on immutable values");
+            }
             my %loop_ctx = %$ctx;
             $loop_ctx{types} = _clone_hash($ctx->{types});
             $loop_ctx{mut} = _clone_hash($ctx->{mut});
@@ -1136,6 +1225,18 @@ sub _validate_stmt {
                 delete $loop_ctx{numeric_kinds}{$var};
             }
             _clear_symbol_facts(\%loop_ctx, $var);
+            if (defined($stmt->{iterable}) && ref($stmt->{iterable}) eq 'HASH' && (($stmt->{iterable}{kind} // '') eq 'ident')) {
+                my $iter_name = $stmt->{iterable}{name} // '';
+                if ($iter_name ne '') {
+                    my $iter_constraints = $ctx->{constraints}{$iter_name};
+                    if (defined($iter_constraints) && ref($iter_constraints) eq 'HASH') {
+                        my $nested_need = $iter_constraints->{nested_number_list_size};
+                        if (defined($nested_need) && $nested_need =~ /^-?\d+$/ && int($nested_need) >= 0) {
+                            $loop_ctx{facts}{"len_var:$var:" . int($nested_need)} = 1;
+                        }
+                    }
+                }
+            }
             my $idx_fact = _for_seq_index_bound_fact($stmt->{iterable}, $var, $ctx);
             $loop_ctx{facts}{$idx_fact} = 1 if defined($idx_fact) && $idx_fact ne '';
         }

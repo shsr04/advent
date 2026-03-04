@@ -447,6 +447,61 @@ sub parse_block {
             next;
         }
 
+        # Support nested error handlers inside call arguments:
+        #   outer(..., inner() or catch(e) { ... })
+        # by lowering to:
+        #   const __orcatch_tmp = inner() or catch(e) { ... }
+        #   outer(..., __orcatch_tmp)
+        if ($line =~ /^([A-Za-z_][A-Za-z0-9_]*)\((.*)\s+or\s+catch\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)?\s*\)\s*\{$/) {
+            my ($outer_name, $args_prefix_raw, $err_name) = ($1, trim($2), $3);
+            if ($args_prefix_raw =~ /,/) {
+                my @parts = split_top_level_commas($args_prefix_raw);
+                if (@parts) {
+                    my $fallible_raw = trim(pop @parts);
+                    my @outer_args = map { parse_expr(trim($_)) } grep { trim($_) ne '' } @parts;
+
+                    $$idx_ref++;
+                    my $handler_start = $$idx_ref;
+                    my $close_idx = -1;
+                    for (my $scan = $handler_start; $scan < @$lines; $scan++) {
+                        my $scan_raw = strip_comments($lines->[$scan]);
+                        my $scan_line = trim($scan_raw);
+                        if ($scan_line eq '})') {
+                            $close_idx = $scan;
+                            last;
+                        }
+                    }
+                    compile_error("nested or catch call is missing closing '})'") if $close_idx < 0;
+                    my @handler_lines = @$lines[$handler_start .. $close_idx - 1];
+                    push @handler_lines, '}';
+                    my $handler_idx = 0;
+                    my ($handler_body, $end_reason) = parse_block(\@handler_lines, \$handler_idx, $base_line);
+                    compile_error("or catch handler missing closing brace") if $end_reason ne 'close';
+                    $$idx_ref = $close_idx + 1;
+
+                    my $tmp_name = '__orcatch_tmp_' . (defined($line_no) ? $line_no : $$idx_ref);
+                    push @stmts, {
+                        kind     => 'const_or_catch',
+                        name     => $tmp_name,
+                        expr     => parse_expr($fallible_raw),
+                        err_name => $err_name,
+                        handler  => $handler_body,
+                        line     => $line_no,
+                    };
+                    push @stmts, {
+                        kind => 'expr_stmt',
+                        expr => {
+                            kind => 'call',
+                            name => $outer_name,
+                            args => [ @outer_args, { kind => 'ident', name => $tmp_name } ],
+                        },
+                        line => $line_no,
+                    };
+                    next;
+                }
+            }
+        }
+
         if ($line =~ /^(.*)\s+or\s+catch\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)?\s*\)\s*\{$/) {
             my $inner = trim($1);
             my $err_name = $2;

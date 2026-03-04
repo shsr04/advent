@@ -665,6 +665,11 @@ C
         push @$out, '  }';
         push @$out, '  return 0;';
         push @$out, '}';
+        if ($h{any_i64_value}) {
+            push @$out, 'static int metac_any_i64_value(struct metac_list_i64 src, int (*pred)(int64_t)) {';
+            push @$out, '  return metac_any_i64(&src, pred);';
+            push @$out, '}';
+        }
     }
     if ($h{any_str}) {
         push @$out, 'static int metac_any_str(const struct metac_list_str *src, int (*pred)(const char *)) {';
@@ -674,6 +679,11 @@ C
         push @$out, '  }';
         push @$out, '  return 0;';
         push @$out, '}';
+        if ($h{any_str_value}) {
+            push @$out, 'static int metac_any_str_value(struct metac_list_str src, int (*pred)(const char *)) {';
+            push @$out, '  return metac_any_str(&src, pred);';
+            push @$out, '}';
+        }
     }
     if ($h{filter_i64_cb}) {
         push @$out, 'static struct metac_list_i64 metac_filter_i64_cb(const struct metac_list_i64 *src, int (*pred)(int64_t)) {';

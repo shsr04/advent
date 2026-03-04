@@ -693,6 +693,13 @@ sub _infer_expr_type_hint {
         return defined($non_error) ? $non_error : $inner_t;
     }
 
+    if ($kind eq 'member_access') {
+        my $recv_t = _infer_expr_type_hint($expr->{recv}, $env, $sigs, $seen);
+        my $member = $expr->{member} // '';
+        return 'string' if defined($recv_t) && $recv_t eq 'error' && $member eq 'message';
+        return undef;
+    }
+
     if ($kind eq 'call') {
         my $resolved = $expr->{resolved_call};
         if (defined $resolved && ref($resolved) eq 'HASH') {

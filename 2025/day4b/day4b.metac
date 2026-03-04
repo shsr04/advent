@@ -18,27 +18,14 @@ function removeRolls(): number|error {
   }
   
   let removed = 0
-  
-  let candidates: int[][] = []
-  
-  while true {
-    for const cell in grid.members().filter((x) => x == "@") {
-        const adj = cell.neighbours()
-            .filter((x) => x == "@")
-            .count()
-        if adj < 4 {
-            candidates.push(cell.index())
-        }
+
+  for const cell in grid.members().filter((x) => x == "@") {
+    const adj = cell.neighbours()
+      .filter((x) => x == "@")
+      .count()
+    if adj < 4 {
+      removed++
     }
-    
-    if candidates == [] { break }
-    
-    for cell in candidates {
-        grid.insert("x", cell)?
-        removed++
-    }
-    
-    candidates = []
   }
   
   return removed
