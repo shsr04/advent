@@ -1,7 +1,7 @@
 SHELL := /bin/bash
 
 CC := clang
-CFLAGS ?= -std=c23 -O3 -Wall -Wextra -Wpedantic
+CFLAGS ?= -std=c23 -O3 -Wall -Wextra -Wpedantic 
 MEM_LIMIT := 2147483648
 PERL := prlimit -v=$(MEM_LIMIT) perl
 

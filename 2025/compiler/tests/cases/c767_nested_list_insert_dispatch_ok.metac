@@ -1,0 +1,11 @@
+@Test({
+   "exit" : 0,
+   "stdout" : "34\n"
+})
+function main(): number {
+  let next: (int[] with size(2))[] = [[1, 2]]
+  next.insert([3, 4], 0)
+  const [row, col] = next[0]
+  log(row * 10 + col)
+  return 0
+}

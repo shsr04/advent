@@ -22,6 +22,35 @@ sub _expr_is_stringish {
     return defined($hint) && $hint eq 'const char *' ? 1 : 0;
 }
 
+sub _mark_helpers {
+    my ($ctx, $helpers) = @_;
+    return if !defined($ctx) || ref($ctx) ne 'HASH';
+    return if !defined($helpers) || ref($helpers) ne 'ARRAY';
+    for my $h (@$helpers) {
+        _helper_mark($ctx, $h);
+    }
+}
+
+sub _emit_log_call_for_c_type {
+    my ($value_c, $c_type, $ctx) = @_;
+    my $spec = c_log_strategy_for_c_type($c_type);
+    return undef if !defined($spec) || ref($spec) ne 'HASH';
+    my $call = $spec->{call} // '';
+    return undef if $call eq '';
+    _mark_helpers($ctx, $spec->{helpers});
+    return $call . '(' . $value_c . ')';
+}
+
+sub _emit_log_call_for_type_hint {
+    my ($value_c, $type_hint, $ctx) = @_;
+    my $spec = c_log_strategy_for_type($type_hint);
+    return undef if !defined($spec) || ref($spec) ne 'HASH';
+    my $call = $spec->{call} // '';
+    return undef if $call eq '';
+    _mark_helpers($ctx, $spec->{helpers});
+    return $call . '(' . $value_c . ')';
+}
+
 sub _template_expr_to_c {
     my ($raw, $ctx) = @_;
     return template_expr_to_c(
@@ -181,6 +210,64 @@ sub _with_callback_setup {
     return '((' . $pre . '), (' . $call . '))';
 }
 
+sub _emit_insert_call_by_registry {
+    my (%args) = @_;
+    my $meta = $args{meta};
+    my $recv_expr = $args{recv_expr};
+    my $recv = $args{recv};
+    my $call_args = $args{call_args} // [];
+    my $ctx = $args{ctx};
+    return undef if !defined($meta) || ref($meta) ne 'HASH';
+
+    my $receiver_type = $meta->{receiver_type_hint} // '';
+    my $arg_types = $meta->{arg_type_hints};
+    $arg_types = [] if !defined($arg_types) || ref($arg_types) ne 'ARRAY';
+
+    my $strategy = c_intrinsic_method_strategy_for_types(
+        op_id => 'method.insert.v1',
+        receiver_type => $receiver_type,
+        arg_types => $arg_types,
+    );
+    return undef if !defined($strategy) || ref($strategy) ne 'HASH';
+
+    _mark_helpers($ctx, $strategy->{helpers});
+
+    my $recv_is_ident = defined($recv_expr) && ref($recv_expr) eq 'HASH' && (($recv_expr->{kind} // '') eq 'ident');
+    my $recv_ident = $recv_is_ident ? ($recv_expr->{name} // '') : '';
+    my $suffix = $recv_is_ident ? '' : '_value';
+    my $fn = ($strategy->{stem} // '') . $suffix;
+    return undef if $fn eq '';
+
+    my $value_arg = $call_args->[0];
+    $value_arg = $strategy->{default_value_expr}
+      if !defined($value_arg) || $value_arg eq '';
+    my $index_mode = $strategy->{index_mode} // 'scalar';
+    my $index_arg = $call_args->[1];
+    if (!defined($index_arg) || $index_arg eq '') {
+        $index_arg = ($index_mode eq 'matrix')
+          ? ($strategy->{default_index_matrix_expr} // 'metac_list_i64_empty()')
+          : ($strategy->{default_index_scalar_expr} // '0');
+    }
+
+    my $recv_arg = $recv_is_ident ? ('&' . $recv_ident) : $recv;
+    my @emit_args = ($recv_arg, $value_arg, $index_arg);
+
+    if ($index_mode eq 'matrix' && ($strategy->{supports_matrix} // 0)) {
+        _mark_helpers($ctx, $strategy->{helpers_matrix});
+        my $is_matrix_recv = (defined($receiver_type) && $receiver_type =~ /^matrix</) ? 1 : 0;
+        my $src_ident = $recv_is_ident ? $recv_ident : _root_ident_name($recv_expr);
+        my $mvar = $ctx->{matrix_meta_vars}{$src_ident} // '';
+        if (($strategy->{supports_matrix_meta} // 0) && $is_matrix_recv && $mvar ne '') {
+            $fn = ($strategy->{stem} // '') . '_matrix_meta' . $suffix;
+            push @emit_args, '&' . $mvar;
+        } else {
+            $fn = ($strategy->{stem} // '') . '_matrix' . $suffix;
+        }
+    }
+
+    return $fn . '(' . join(', ', @emit_args) . ')';
+}
+
 sub _expr_to_c {
     my ($expr, $ctx) = @_;
     return '0' if !defined($expr) || ref($expr) ne 'HASH';
@@ -254,6 +341,11 @@ sub _expr_to_c {
             my $name = $recv->{name};
             my $cname = _expr_to_c($recv, $ctx);
             my $ty = $ctx->{var_types}{$name} // '';
+            if ($ty eq 'struct metac_list_list_i64') {
+                _helper_mark($ctx, 'list_i64');
+                _helper_mark($ctx, 'list_list_i64');
+                return "metac_list_list_i64_get(&$cname, $idx)";
+            }
             if ($ty eq 'struct metac_list_i64') {
                 _helper_mark($ctx, 'list_i64');
                 return "metac_list_i64_get(&$cname, $idx)";
@@ -342,18 +434,11 @@ sub _expr_to_c {
                 my $hints = $meta->{arg_type_hints};
                 my $hint = (defined($hints) && ref($hints) eq 'ARRAY' && @$hints) ? ($hints->[0] // '') : '';
                 my $a0 = $args[0] // '0';
-                if (scalar_is_string($hint)) {
-                    _helper_mark($ctx, 'log_str');
-                    return "metac_builtin_log_str($a0)";
-                }
-                if ($hint eq 'float') {
-                    _helper_mark($ctx, 'log_f64');
-                    return "metac_builtin_log_f64($a0)";
-                }
-                if (scalar_is_boolean($hint)) {
-                    _helper_mark($ctx, 'log_bool');
-                    return "metac_builtin_log_bool($a0)";
-                }
+                my $from_hint = _emit_log_call_for_type_hint($a0, $hint, $ctx);
+                return $from_hint if defined($from_hint);
+                my $arg_c = _expr_c_type_hint($expr->{args}[0], $ctx);
+                my $from_c = _emit_log_call_for_c_type($a0, $arg_c, $ctx);
+                return $from_c if defined($from_c);
                 _helper_mark($ctx, 'log_i64');
                 return "metac_builtin_log_i64($a0)";
             }
@@ -382,15 +467,9 @@ sub _expr_to_c {
         }
         if ($target eq 'log') {
             my $a0 = $args[0] // '0';
-            my $hint = _expr_c_type_hint($expr->{args}[0], $ctx);
-            if (defined($hint) && $hint eq 'const char *') {
-                _helper_mark($ctx, 'log_str');
-                return "metac_builtin_log_str($a0)";
-            }
-            if (defined($hint) && $hint eq 'int') {
-                _helper_mark($ctx, 'log_bool');
-                return "metac_builtin_log_bool($a0)";
-            }
+            my $arg_c = _expr_c_type_hint($expr->{args}[0], $ctx);
+            my $from_c = _emit_log_call_for_c_type($a0, $arg_c, $ctx);
+            return $from_c if defined($from_c);
             _helper_mark($ctx, 'log_i64');
             return "metac_builtin_log_i64($a0)";
         }
@@ -754,6 +833,14 @@ sub _expr_to_c {
                 return "metac_method_members($recv)";
             }
             if ($op_id eq 'method.insert.v1') {
+                my $dispatched = _emit_insert_call_by_registry(
+                    meta => $meta,
+                    recv_expr => $recv_expr,
+                    recv => $recv,
+                    call_args => \@args,
+                    ctx => $ctx,
+                );
+                return $dispatched if defined($dispatched) && $dispatched ne '';
                 my $idx_hint = _expr_c_type_hint($expr->{args}[1], $ctx);
                 my $is_matrix_idx = defined($idx_hint) && $idx_hint eq 'struct metac_list_i64' ? 1 : 0;
                 my $receiver_type_hint = $meta->{receiver_type_hint} // '';
@@ -846,32 +933,8 @@ sub _expr_to_c {
             }
             if ($op_id eq 'method.log.v1') {
                 my $recv_hint = _expr_c_type_hint($recv_expr, $ctx);
-                if (defined($recv_hint) && $recv_hint eq 'struct metac_list_i64') {
-                    _helper_mark($ctx, 'list_i64');
-                    _helper_mark($ctx, 'list_i64_render');
-                    _helper_mark($ctx, 'log_str');
-                    _helper_mark($ctx, 'method_log_list_i64');
-                    return "metac_method_log_list_i64($recv)";
-                }
-                if (defined($recv_hint) && $recv_hint eq 'struct metac_list_str') {
-                    _helper_mark($ctx, 'list_str');
-                    _helper_mark($ctx, 'list_str_render');
-                    _helper_mark($ctx, 'log_str');
-                    _helper_mark($ctx, 'method_log_list_str');
-                    return "metac_method_log_list_str($recv)";
-                }
-                if (defined($recv_hint) && $recv_hint eq 'const char *') {
-                    _helper_mark($ctx, 'log_str');
-                    return "metac_builtin_log_str($recv)";
-                }
-                if (defined($recv_hint) && $recv_hint eq 'double') {
-                    _helper_mark($ctx, 'log_f64');
-                    return "metac_builtin_log_f64($recv)";
-                }
-                if (defined($recv_hint) && $recv_hint eq 'int') {
-                    _helper_mark($ctx, 'log_bool');
-                    return "metac_builtin_log_bool($recv)";
-                }
+                my $from_c = _emit_log_call_for_c_type($recv, $recv_hint, $ctx);
+                return $from_c if defined($from_c);
                 _helper_mark($ctx, 'log_i64');
                 return "metac_builtin_log_i64($recv)";
             }

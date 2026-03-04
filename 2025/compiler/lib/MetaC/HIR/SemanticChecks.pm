@@ -190,6 +190,13 @@ sub _list_length_proved {
             return int($meta->{dim} // 0) == $need ? 1 : 0 if defined($meta);
         }
     }
+    if (($expr->{kind} // '') eq 'index') {
+        my $recv = $expr->{recv};
+        my $nested_need = _nested_size_from_expr($recv, $ctx);
+        if (defined($nested_need) && $nested_need =~ /^-?\d+$/) {
+            return int($nested_need) == $need ? 1 : 0;
+        }
+    }
     return 0 if ($expr->{kind} // '') ne 'ident';
     my $name = $expr->{name} // '';
     return 0 if $name eq '';
@@ -821,6 +828,10 @@ sub _validate_stmt {
 
     if ($kind eq 'destructure_list') {
         my $expr_t = _validate_expr($stmt->{expr}, $ctx, 0);
+        if (defined($expr_t) && is_sequence_member_type($expr_t)) {
+            my $smeta = sequence_member_meta($expr_t);
+            $expr_t = $smeta->{elem} if defined($smeta) && defined($smeta->{elem});
+        }
         compile_error("Semantic/F053-Type: list destructuring requires sequence expression")
           if !defined($expr_t) || !is_sequence_type($expr_t);
         my $need = scalar(@{ $stmt->{vars} // [] });

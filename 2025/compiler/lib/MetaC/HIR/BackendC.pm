@@ -16,10 +16,11 @@ use MetaC::HIR::OpRegistry qw(
 );
 use MetaC::HIR::TypedNodes qw(step_payload_to_stmt);
 use MetaC::Support qw(constraint_size_exact);
-use MetaC::HIR::TypeRegistry qw(
-    scalar_c_type
-    scalar_is_boolean
-    scalar_is_string
+use MetaC::Backend::CTypeRegistry qw(
+    type_to_c_type_or_error
+    c_log_strategy_for_c_type
+    c_log_strategy_for_type
+    c_intrinsic_method_strategy_for_types
 );
 use MetaC::TypeSpec qw(
     is_sequence_member_type
@@ -126,55 +127,22 @@ sub _constraint_exact_size {
     return int($n);
 }
 
-sub _strip_error_union {
-    my ($t) = @_;
-    return $t if !defined($t) || $t !~ /\|/;
-    my @parts = map { my $x = $_; $x =~ s/^\s+|\s+$//g; $x } split /\|/, $t;
-    my @non_error = grep { $_ ne 'error' } @parts;
-    return $non_error[0] // $parts[0];
-}
-
 sub _result_type_to_c {
     my ($t) = @_;
     return undef if !defined $t || $t eq '';
-    $t = _strip_error_union($t);
-    my $seq_elem = _sequence_member_elem_type($t);
-    $t = $seq_elem if defined($seq_elem) && $seq_elem ne '';
-    return 'struct metac_list_list_i64' if _is_nested_array_type($t);
-    return 'struct metac_list_str' if _is_string_array_type($t);
-    return 'struct metac_list_str' if _is_string_matrix_type($t);
-    return 'struct metac_list_str' if _is_string_matrix_member_list_type($t);
-    return 'const char *' if _is_string_matrix_member_type($t);
-    return 'int64_t' if defined($t) && $t =~ /^matrix_member</;
-    return 'struct metac_list_i64' if $t =~ /array</;
-    return 'struct metac_list_i64' if defined($t) && $t =~ /^matrix_member_list</;
-    return 'struct metac_list_i64' if $t =~ /matrix</;
-    return 'const char *' if $t =~ /\bstring\b/ || $t =~ /^stringwith/;
-    return 'int' if $t =~ /\bbool(?:ean)?\b/;
-    return 'double' if $t =~ /\bfloat\b/;
-    return 'int64_t' if $t =~ /\b(?:number|int)\b/;
-    return undef;
+    return type_to_c_type_or_error(
+        type => $t,
+        context => 'call result type',
+    );
 }
 
 sub _type_to_c {
     my ($t, $fallback) = @_;
     return $fallback if !defined $t || $t eq '';
-    $t = _strip_error_union($t);
-    my $seq_elem = _sequence_member_elem_type($t);
-    $t = $seq_elem if defined($seq_elem) && $seq_elem ne '';
-    return 'const char *' if $t =~ /^stringwith/;
-    my $scalar_c = scalar_c_type($t);
-    return $scalar_c if defined($scalar_c);
-    return 'struct metac_list_list_i64' if _is_nested_array_type($t);
-    return 'struct metac_list_str' if _is_string_array_type($t);
-    return 'struct metac_list_str' if _is_string_matrix_type($t);
-    return 'struct metac_list_str' if _is_string_matrix_member_list_type($t);
-    return 'const char *' if _is_string_matrix_member_type($t);
-    return 'struct metac_list_i64' if _is_array_type($t);
-    return 'struct metac_list_i64' if defined($t) && $t =~ /^matrix_member_list</;
-    return 'int64_t' if defined($t) && $t =~ /^matrix_member</;
-    return 'struct metac_list_i64' if _is_matrix_type($t);
-    return $fallback;
+    return type_to_c_type_or_error(
+        type => $t,
+        context => 'declared type',
+    );
 }
 
 sub _expr_c_type_hint {
@@ -186,6 +154,8 @@ sub _expr_c_type_hint {
     return 'const char *' if $k eq 'str';
     if ($k eq 'list_literal') {
         my $items = $expr->{items} // [];
+        return 'struct metac_list_list_i64'
+          if @$items && !grep { !defined($_) || ref($_) ne 'HASH' || (($_->{kind} // '') ne 'list_literal') } @$items;
         return 'struct metac_list_str' if @$items && !grep { !defined($_) || ref($_) ne 'HASH' || (($_->{kind} // '') ne 'str') } @$items;
         return 'struct metac_list_i64';
     }

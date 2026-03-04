@@ -66,6 +66,20 @@ static struct metac_list_i64 metac_list_list_i64_get(const struct metac_list_lis
   return *l->data[idx];
 }
 C
+        if ($h{list_list_i64_render}) {
+            push @$out, 'static const char *metac_list_list_i64_render(const struct metac_list_list_i64 *l) {';
+            push @$out, '  static char buf[8192];';
+            push @$out, '  int off = 0;';
+            push @$out, '  off += snprintf(buf + off, sizeof(buf) - (size_t)off, "[");';
+            push @$out, '  int64_t n = l ? l->len : 0;';
+            push @$out, '  for (int64_t i = 0; i < n && off < (int)sizeof(buf); ++i) {';
+            push @$out, '    struct metac_list_i64 item = metac_list_list_i64_get(l, i);';
+            push @$out, '    off += snprintf(buf + off, sizeof(buf) - (size_t)off, "%s%s", (i ? ", " : ""), metac_list_i64_render(&item));';
+            push @$out, '  }';
+            push @$out, '  snprintf(buf + off, sizeof(buf) - (size_t)off, "]");';
+            push @$out, '  return buf;';
+            push @$out, '}';
+        }
         if ($h{method_sortby_pair}) {
             push @$out, 'static struct metac_list_list_i64 metac_method_sortby_pair_lex(struct metac_list_list_i64 recv) {';
             push @$out, '  struct metac_list_list_i64 out = recv;';
@@ -240,6 +254,24 @@ C
             push @$out, '    metac_matrix_record_member_index(meta, idx);';
             push @$out, '  }';
             push @$out, '  return *recv;';
+            push @$out, '}';
+        }
+        if ($h{list_list_i64}) {
+            push @$out, 'static struct metac_list_list_i64 metac_method_insert_list_i64(struct metac_list_list_i64 *recv, struct metac_list_i64 value, int64_t idx) {';
+            push @$out, '  if (!recv) return metac_list_list_i64_empty();';
+            push @$out, '  if (idx >= 0 && idx < recv->len) {';
+            push @$out, '    if (recv->data[idx]) {';
+            push @$out, '      *(recv->data[idx]) = value;';
+            push @$out, '    } else {';
+            push @$out, '      recv->data[idx] = metac_list_list_i64_clone_item(value);';
+            push @$out, '    }';
+            push @$out, '  } else if (recv->len < recv->cap) {';
+            push @$out, '    recv->data[recv->len++] = metac_list_list_i64_clone_item(value);';
+            push @$out, '  }';
+            push @$out, '  return *recv;';
+            push @$out, '}';
+            push @$out, 'static struct metac_list_list_i64 metac_method_insert_list_i64_value(struct metac_list_list_i64 recv, struct metac_list_i64 value, int64_t idx) {';
+            push @$out, '  return metac_method_insert_list_i64(&recv, value, idx);';
             push @$out, '}';
         }
         if ($h{list_str}) {
@@ -477,6 +509,12 @@ C
     if ($h{method_log_list_str}) {
         push @$out, 'static struct metac_list_str metac_method_log_list_str(struct metac_list_str recv) {';
         push @$out, '  metac_builtin_log_str(metac_list_str_render(&recv));';
+        push @$out, '  return recv;';
+        push @$out, '}';
+    }
+    if ($h{method_log_list_list_i64}) {
+        push @$out, 'static struct metac_list_list_i64 metac_method_log_list_list_i64(struct metac_list_list_i64 recv) {';
+        push @$out, '  metac_builtin_log_str(metac_list_list_i64_render(&recv));';
         push @$out, '  return recv;';
         push @$out, '}';
     }

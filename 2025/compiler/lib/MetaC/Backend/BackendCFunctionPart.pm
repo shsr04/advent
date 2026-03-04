@@ -476,6 +476,21 @@ sub _emit_function {
             }
             _emit_stmt($stmt, \@out, 2, \%seen_decl, ($exit_kind eq 'Return' ? 1 : 0), $ctx);
         }
+        if ($exit_kind eq 'WhileExit') {
+            my $has_structured_while = 0;
+            for my $stmt (@stmts) {
+                next if !defined($stmt) || ref($stmt) ne 'HASH';
+                if (($stmt->{kind} // '') eq 'while') {
+                    $has_structured_while = 1;
+                    last;
+                }
+            }
+            if ($has_structured_while) {
+                my $end = $region->{exit}{end_region} // '__missing_region';
+                push @out, "  goto region_$end;";
+                next;
+            }
+        }
         _emit_exit($region->{exit} // {}, \@out, 2, $default_return, $ctx, $name);
     }
 

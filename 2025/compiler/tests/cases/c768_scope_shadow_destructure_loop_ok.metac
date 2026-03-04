@@ -1,0 +1,20 @@
+@Test({
+   "exit" : 0,
+   "stdout" : ""
+})
+function main(): number {
+  let pairs: (int[] with size(2))[] = [[1, 2]]
+
+  for const line in ["a"] {
+    for const i in seq(0, pairs.size() - 1) {
+      const [row, col] = pairs[i]
+      if row > col {
+        return 1
+      }
+    }
+    if line.size() < 0 {
+      return 1
+    }
+  }  
+  return 0
+}

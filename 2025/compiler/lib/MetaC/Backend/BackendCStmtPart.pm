@@ -464,9 +464,10 @@ sub _emit_stmt {
     if ($k eq 'while') {
         my $cond = _expr_to_c($stmt->{cond}, $ctx);
         push @$out, "${sp}while ($cond) {";
+        my %loop_seen = %$seen_decl;
         for my $inner (@{ $stmt->{body} // [] }) {
             local $ctx->{inline_loop_depth} = ($ctx->{inline_loop_depth} // 0) + 1;
-            _emit_stmt($inner, $out, $indent + 2, $seen_decl, 0, $ctx);
+            _emit_stmt($inner, $out, $indent + 2, \%loop_seen, 0, $ctx);
         }
         push @$out, "${sp}}";
         return;
@@ -501,7 +502,6 @@ sub _emit_stmt {
         }
         my $loop_id = '__inline_for_' . ($ctx->{tmp_counter}++);
         my $var = $stmt->{var} // '__item';
-        my $decl = $seen_decl->{$var}++;
 
         if ($iter_ty eq 'struct metac_list_str') {
             _helper_mark($ctx, 'list_str');
@@ -509,7 +509,7 @@ sub _emit_stmt {
             push @$out, "${sp}struct metac_list_str ${loop_id}_iter = $iter_c;";
             push @$out, "${sp}for (int64_t ${loop_id}_idx = 0; ${loop_id}_idx < metac_list_str_size(&${loop_id}_iter); ++${loop_id}_idx) {";
             my $bind = "metac_list_str_get(&${loop_id}_iter, ${loop_id}_idx)";
-            push @$out, $decl ? "${sp}  $var = $bind;" : "${sp}  const char *$var = $bind;";
+            push @$out, "${sp}  const char *$var = $bind;";
             $ctx->{var_types}{$var} = 'const char *';
         } elsif ($iter_ty eq 'struct metac_list_list_i64') {
             _helper_mark($ctx, 'list_i64');
@@ -517,20 +517,21 @@ sub _emit_stmt {
             push @$out, "${sp}struct metac_list_list_i64 ${loop_id}_iter = $iter_c;";
             push @$out, "${sp}for (int64_t ${loop_id}_idx = 0; ${loop_id}_idx < metac_list_list_i64_size(&${loop_id}_iter); ++${loop_id}_idx) {";
             my $bind = "metac_list_list_i64_get(&${loop_id}_iter, ${loop_id}_idx)";
-            push @$out, $decl ? "${sp}  $var = $bind;" : "${sp}  struct metac_list_i64 $var = $bind;";
+            push @$out, "${sp}  struct metac_list_i64 $var = $bind;";
             $ctx->{var_types}{$var} = 'struct metac_list_i64';
         } else {
             _helper_mark($ctx, 'list_i64');
             push @$out, "${sp}struct metac_list_i64 ${loop_id}_iter = $iter_c;";
             push @$out, "${sp}for (int64_t ${loop_id}_idx = 0; ${loop_id}_idx < metac_list_i64_size(&${loop_id}_iter); ++${loop_id}_idx) {";
             my $bind = "metac_list_i64_get(&${loop_id}_iter, ${loop_id}_idx)";
-            push @$out, $decl ? "${sp}  $var = $bind;" : "${sp}  int64_t $var = $bind;";
+            push @$out, "${sp}  int64_t $var = $bind;";
             $ctx->{var_types}{$var} = 'int64_t';
         }
 
+        my %body_seen = %$seen_decl;
         for my $inner (@{ $stmt->{body} // [] }) {
             local $ctx->{inline_loop_depth} = ($ctx->{inline_loop_depth} // 0) + 1;
-            _emit_stmt($inner, $out, $indent + 2, $seen_decl, 0, $ctx);
+            _emit_stmt($inner, $out, $indent + 2, \%body_seen, 0, $ctx);
         }
         push @$out, "${sp}}";
         return;

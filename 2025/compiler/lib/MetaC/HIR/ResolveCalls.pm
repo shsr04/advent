@@ -993,6 +993,10 @@ sub _register_binding_from_stmt {
 
     if ($kind eq 'destructure_list') {
         my $list_t = _infer_expr_type_hint($stmt->{expr}, $env, $sigs, {});
+        if (defined($list_t) && is_sequence_member_type($list_t)) {
+            my $meta = sequence_member_meta($list_t);
+            $list_t = $meta->{elem} if defined($meta) && defined($meta->{elem});
+        }
         my $item_t = sequence_element_type($list_t);
         $item_t = _sequence_member_base_type($item_t);
         return if !defined $item_t;

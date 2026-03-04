@@ -18,11 +18,29 @@ function sumBeams(): number | error {
   
   const start = findStart(grid)
   
-  let next: int[][] = [[1, start-1], [1, start+1]]
+  let next: (int[] with size(2))[] = [[1, start-1], [1, start+1]]
+  let rowPointer = 1
+  let splits = 0
 
-    // ...
+  while true {
+    if rowPointer == grid.size(0) {
+        break
+    }
+    
+    for const i in seq(0, next.size()-1) {
+        const [row,col] = next[i]
+        if grid.at(next[i]) == "." {
+            next.insert([row+1,col], i)
+        } else {
+            next.insert([row+1,col-1], i)
+            next.push([row+1,col+1])
+            sum++
+        }
+        rowPointer = max(rowPointer, row+1)
+    }
+  }
   
-  grid.log()
+  return sum
 }
 
 function findStart(grid: matrix(string) with dim(2)): number {

@@ -7,7 +7,6 @@ our @EXPORT_OK = qw(
     scalar_type_info
     scalar_family
     canonical_scalar_base
-    scalar_c_type
     scalar_is_numeric
     scalar_is_boolean
     scalar_is_string
@@ -23,41 +22,15 @@ our @EXPORT_OK = qw(
 );
 
 my %SCALAR_TYPES = (
-    number => {
-        family => 'numeric',
-        c_type => 'int64_t',
-    },
-    int => {
-        family => 'numeric',
-        c_type => 'int64_t',
-    },
-    float => {
-        family => 'numeric',
-        c_type => 'double',
-    },
-    bool => {
-        family => 'boolean',
-        c_type => 'int',
-    },
-    boolean => {
-        family => 'boolean',
-        c_type => 'int',
-    },
-    string => {
-        family => 'string',
-        c_type => 'const char *',
-    },
-    null => {
-        family => 'null',
-        c_type => 'int',
-    },
-    error => {
-        family => 'error',
-        c_type => 'struct metac_error',
-    },
-    comparison_result => {
-        family => 'comparison',
-    },
+    number => { family => 'numeric' },
+    int => { family => 'numeric' },
+    float => { family => 'numeric' },
+    bool => { family => 'boolean' },
+    boolean => { family => 'boolean' },
+    string => { family => 'string' },
+    null => { family => 'null' },
+    error => { family => 'error' },
+    comparison_result => { family => 'comparison' },
 );
 
 sub scalar_type_info {
@@ -81,13 +54,6 @@ sub scalar_family {
     my $info = scalar_type_info($base);
     return undef if !defined($info);
     return $info->{family};
-}
-
-sub scalar_c_type {
-    my ($type) = @_;
-    my $info = scalar_type_info($type);
-    return undef if !defined($info);
-    return $info->{c_type};
 }
 
 sub scalar_is_numeric {
