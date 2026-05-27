@@ -3,15 +3,35 @@
 This directory contains the active MetaC compiler slice in Perl.
 It is feature-generic within the supported subset: the compiler does not hardcode day/domain identifiers.
 
+## Active Pipeline
+
+The active compiler path is:
+
+```text
+source -> parser -> VNF-HIR lowering -> HIR gates -> HIR semantic checks -> call resolution -> backend
+```
+
+`MetaC::HIR::NodeRegistry` is the canonical registry for statement kinds, exit edge contracts, operation metadata, and backend emitter selection. Parser structures are lowered into typed HIR payloads before backend entry.
+
+Current registry gap:
+
+- Parser statement recognition is registry-dispatched from `MetaC::HIR::NodeRegistry::Statements`; `BlockParse.pm` owns only block line normalization, terminators, inline-if normalization, and dispatch.
+- `compiler/lib/MetaC/Backend/BackendCStmtPart.pm` selects statement emitters through registry ids; the mechanical statement bodies live in `BackendCStmtEmitters.pm` and still need behavior-level splitting into per-emitter routines.
+- `compiler/lib/MetaC/Backend/BackendCExprPart.pm` still contains direct operation-id emission branches for builtin and method calls; registry operation metadata exists, but backend expression emission is not yet fully table-dispatched.
+- Several older F-051-era modules still exceed the 500-line file limit and should be split before more compiler surface is added.
+
 ## Module Layout
 
 - `compiler/metac.pl`: thin CLI entrypoint
 - `compiler/lib/MetaC/Support.pm`: shared helpers (errors, trimming, constraints, CSV-like splitting, emit helpers)
 - `compiler/lib/MetaC/Parser.pm`: source parsing into AST-style statement/expression structures
-- `compiler/lib/MetaC/Codegen.pm`: top-level typing checks and C lowering orchestration
-- `compiler/lib/MetaC/CodegenType.pm`: codegen type helpers (parameter C signatures and number-like conversions)
-- `compiler/lib/MetaC/CodegenScope.pm`: scope table and flow-fact helpers (list arity and nullable facts)
-- `compiler/lib/MetaC/CodegenRuntime.pm`: generated C runtime prelude text
+- `compiler/lib/MetaC/HIR.pm`: active pass orchestration
+- `compiler/lib/MetaC/HIR/NodeRegistry.pm` and `compiler/lib/MetaC/HIR/NodeRegistry/*`: registry facade and data/APIs for statements, exits, calls, methods, and backend emitter ids
+- `compiler/lib/MetaC/HIR/Lowering.pm`: parser output to typed VNF-HIR regions, steps, exits, and edges
+- `compiler/lib/MetaC/HIR/Gates.pm`: structural HIR gates and deterministic HIR dumping
+- `compiler/lib/MetaC/HIR/SemanticChecks*.pm`: upstream type, entailment, and fallibility enforcement
+- `compiler/lib/MetaC/HIR/ResolveCalls.pm`: canonical call/method resolution against registry metadata
+- `compiler/lib/MetaC/HIR/BackendC.pm` and `compiler/lib/MetaC/Backend/*`: mechanical C emission and runtime helper text
 
 ## Compile MetaC -> C
 

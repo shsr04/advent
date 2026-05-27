@@ -45,6 +45,7 @@ require MetaC::Parser::Functions;
 require MetaC::Parser::Regex;
 require MetaC::Parser::Expr;
 require MetaC::Parser::Block;
+require MetaC::Parser::BlockRecognizers;
 require MetaC::Parser::BlockParse;
 
 1;

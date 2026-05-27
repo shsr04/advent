@@ -5,7 +5,8 @@ use Exporter 'import';
 
 use MetaC::Backend::RuntimeHelpers qw(emit_runtime_helpers);
 use MetaC::Backend::TemplateEmitter qw(template_expr_to_c);
-use MetaC::HIR::OpRegistry qw(
+use MetaC::HIR::NodeRegistry qw(
+    backend_emitter_id_for_op
     builtin_is_known
     builtin_op_id
     method_is_known
@@ -13,6 +14,7 @@ use MetaC::HIR::OpRegistry qw(
     method_has_length_semantics
     method_traceability_hint
     method_result_type
+    statement_backend_emitter_id
 );
 use MetaC::HIR::TypedNodes qw(step_payload_to_stmt);
 use MetaC::Support qw(constraint_size_exact);

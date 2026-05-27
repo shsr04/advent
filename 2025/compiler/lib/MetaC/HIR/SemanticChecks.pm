@@ -11,7 +11,7 @@ use MetaC::Support qw(
     constraint_size_exact
 );
 use MetaC::HIR::TypedNodes qw(step_payload_to_stmt);
-use MetaC::HIR::OpRegistry qw(
+use MetaC::HIR::NodeRegistry qw(
     method_has_length_semantics
     method_traceability_hint
     method_has_tag

@@ -3,33 +3,25 @@ use strict;
 use warnings;
 use Exporter 'import';
 
+use MetaC::HIR::NodeRegistry qw(expr_kind_is_known statement_is_known);
+
 our @EXPORT_OK = qw(
     stmt_to_payload
     step_payload_to_stmt
-);
-
-my %EXPR_KINDS = map { $_ => 1 } qw(
-  num str bool null ident list_literal unary binop index try call method_call member_access lambda1 lambda2 call_expr
-);
-my %STMT_KINDS = map { $_ => 1 } qw(
-  let const const_typed assign typed_assign assign_op incdec
-  destructure_match destructure_list destructure_split_or
-  expr_stmt expr_stmt_try const_try_expr const_try_tail_expr const_or_catch const_try_chain
-  if while for_each for_each_try for_lines break continue rewind return
 );
 
 sub _looks_like_expr {
     my ($v) = @_;
     return 0 if !defined($v) || ref($v) ne 'HASH';
     my $kind = $v->{kind} // '';
-    return $EXPR_KINDS{$kind} ? 1 : 0;
+    return expr_kind_is_known($kind);
 }
 
 sub _looks_like_stmt {
     my ($v) = @_;
     return 0 if !defined($v) || ref($v) ne 'HASH';
     my $kind = $v->{kind} // '';
-    return $STMT_KINDS{$kind} ? 1 : 0;
+    return statement_is_known($kind);
 }
 
 sub _encode_misc {

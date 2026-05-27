@@ -5,7 +5,7 @@ use Exporter 'import';
 
 use MetaC::Support qw(compile_error);
 use MetaC::Parser qw(parse_expr);
-use MetaC::HIR::OpRegistry qw(
+use MetaC::HIR::NodeRegistry qw(
     method_callback_contract
     method_callback_shape_label
     builtin_is_known

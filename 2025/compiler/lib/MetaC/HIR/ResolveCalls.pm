@@ -9,7 +9,7 @@ use MetaC::Support qw(
     clear_error_line
 );
 use MetaC::HIR::TypedNodes qw(step_payload_to_stmt stmt_to_payload);
-use MetaC::HIR::OpRegistry qw(
+use MetaC::HIR::NodeRegistry qw(
     user_call_op_id
     user_method_style_allowed
     builtin_is_known

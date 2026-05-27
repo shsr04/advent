@@ -4,7 +4,7 @@ use warnings;
 use Exporter 'import';
 
 use MetaC::Parser qw(parse_expr);
-use MetaC::HIR::OpRegistry qw(
+use MetaC::HIR::NodeRegistry qw(
     builtin_is_known
     builtin_op_id
     method_is_known

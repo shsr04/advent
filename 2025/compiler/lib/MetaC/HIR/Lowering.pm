@@ -6,11 +6,14 @@ use Exporter 'import';
 use MetaC::Support qw(compile_error);
 use MetaC::Parser qw(collect_functions parse_function_params parse_function_body);
 use MetaC::TypeSpec qw(normalize_type_annotation);
-use MetaC::HIR::OpRegistry qw(
+use MetaC::HIR::NodeRegistry qw(
     builtin_is_known
     builtin_may_be_fallible
+    exit_edge_tags
     method_is_known
     method_fallibility_hint
+    statement_step_kind
+    statement_structured_exit
 );
 use MetaC::HIR::TypedNodes qw(stmt_to_payload step_payload_to_stmt);
 
@@ -77,11 +80,7 @@ sub _entry_facts_from_params {
 
 sub _step_kind_from_stmt_kind {
     my ($kind) = @_;
-    return 'Declare' if $kind eq 'let' || $kind eq 'const';
-    return 'Assign' if $kind eq 'assign' || $kind eq 'typed_assign' || $kind eq 'assign_op' || $kind eq 'incdec';
-    return 'Destructure' if $kind =~ /^destructure_/;
-    return 'Eval' if $kind eq 'expr_stmt' || $kind eq 'expr_stmt_try' || $kind eq 'const_try_expr' || $kind eq 'const_try_tail_expr';
-    return 'Control';
+    return statement_step_kind($kind);
 }
 
 sub _step_from_stmt {
@@ -100,43 +99,14 @@ sub _edges_from_regions {
     for my $region (@$regions) {
         my $exit = $region->{exit};
         my $kind = $exit->{kind} // '';
-        my @targets;
-        if ($kind eq 'Goto') {
-            @targets = ([ goto => $exit->{target_region} ]);
-        } elsif ($kind eq 'IfExit') {
-            @targets = (
-                [ then => $exit->{then_region} ],
-                [ else => $exit->{else_region} ],
-                [ join => $exit->{join_region} ],
-            );
-        } elsif ($kind eq 'WhileExit') {
-            @targets = (
-                [ body => $exit->{body_region} ],
-                [ continue => $exit->{continue_region} ],
-                [ break => $exit->{break_region} ],
-                [ rewind => $exit->{rewind_region} ],
-                [ end => $exit->{end_region} ],
-            );
-        } elsif ($kind eq 'ForInExit') {
-            @targets = (
-                [ body => $exit->{body_region} ],
-                [ continue => $exit->{continue_region} ],
-                [ break => $exit->{break_region} ],
-                [ rewind => $exit->{rewind_region} ],
-                [ error => $exit->{error_region} ],
-                [ end => $exit->{end_region} ],
-            );
-        } elsif ($kind eq 'TryExit') {
-            @targets = (
-                [ ok => $exit->{ok_region} ],
-                [ err => $exit->{err_region} ],
-            );
-        } else {
-            next if $kind eq 'Return' || $kind eq 'PropagateError' || $kind eq '';
+        next if $kind eq '';
+        my $tags = exit_edge_tags($kind);
+        if (!@$tags && $kind ne 'Return' && $kind ne 'PropagateError') {
             compile_error("Lowering internal error: unsupported exit kind '$kind'");
         }
-        for my $target (@targets) {
-            my ($tag, $to) = @$target;
+        for my $tag (@$tags) {
+            my $field = $tag eq 'goto' ? 'target_region' : $tag . '_region';
+            my $to = $exit->{$field};
             push @edges, {
                 id          => _next_id($alloc, 'edge'),
                 from_region => $region->{id},
@@ -156,7 +126,7 @@ sub _flat_body_steps {
 
 sub _new_region {
     my (%args) = @_;
-    return {
+    my $region = {
         id                => $args{id},
         steps             => $args{steps},
         exit              => $args{exit},
@@ -164,6 +134,9 @@ sub _new_region {
         facts_out_by_exit => {},
         provenance        => { line => $args{line} // 0 },
     };
+    $region->{parent_region} = $args{parent_region} if defined $args{parent_region};
+    $region->{scope_inherits_from} = $args{scope_inherits_from} if defined $args{scope_inherits_from};
+    return $region;
 }
 
 sub _expand_if_exit {
@@ -182,12 +155,16 @@ sub _expand_if_exit {
             id    => $then_r,
             steps => _flat_body_steps($stmt->{then_body}, $alloc),
             exit  => { kind => 'Goto', target_region => $next },
+            parent_region => $region->{id},
+            scope_inherits_from => $region->{id},
             line  => $stmt->{line},
         ),
         _new_region(
             id    => $else_r,
             steps => _flat_body_steps($stmt->{else_body} // [], $alloc),
             exit  => { kind => 'Goto', target_region => $next },
+            parent_region => $region->{id},
+            scope_inherits_from => $region->{id},
             line  => $stmt->{line},
         ),
     );
@@ -207,6 +184,8 @@ sub _expand_loop_exit {
         id    => $body_r,
         steps => _flat_body_steps($stmt->{body}, $alloc),
         exit  => { kind => 'Goto', target_region => $region->{id} },
+        parent_region => $region->{id},
+        scope_inherits_from => $region->{id},
         line  => $stmt->{line},
     );
 
@@ -254,12 +233,16 @@ sub _expand_try_exit {
             id    => $ok_r,
             steps => [],
             exit  => { kind => 'Goto', target_region => $next },
+            parent_region => $region->{id},
+            scope_inherits_from => $region->{id},
             line  => $stmt->{line},
         ),
         _new_region(
             id    => $err_r,
             steps => [],
             exit  => { kind => 'PropagateError', error_value => '__try_error' },
+            parent_region => $region->{id},
+            scope_inherits_from => $region->{id},
             line  => $stmt->{line},
         ),
     );
@@ -298,14 +281,17 @@ sub _inject_structured_exit_regions {
         my $next = ($region->{exit}{kind} // '') eq 'Goto' ? $region->{exit}{target_region} : undef;
         my @extra;
 
-        @extra = _expand_if_exit($region, $stmt, $next, $alloc) if $kind eq 'if';
-        @extra = _expand_loop_exit(region => $region, stmt => $stmt, next => $next, alloc => $alloc)
-          if $kind eq 'while';
-        @extra = _expand_loop_exit(region => $region, stmt => $stmt, next => $next, alloc => $alloc, for_mode => 1)
-          if $kind eq 'for_each' || $kind eq 'for_each_try';
-        @extra = _expand_try_exit($region, $stmt, $next, $alloc)
-          if ($kind eq 'const_try_expr' || $kind eq 'const_try_tail_expr' || $kind eq 'expr_stmt_try')
-          && _try_expr_may_be_fallible(defined($stmt->{expr}) ? $stmt->{expr} : $stmt->{first});
+        my $structured = statement_structured_exit($kind) // '';
+        if ($structured eq 'IfExit') {
+            @extra = _expand_if_exit($region, $stmt, $next, $alloc);
+        } elsif ($structured eq 'WhileExit') {
+            @extra = _expand_loop_exit(region => $region, stmt => $stmt, next => $next, alloc => $alloc);
+        } elsif ($structured eq 'ForInExit') {
+            @extra = _expand_loop_exit(region => $region, stmt => $stmt, next => $next, alloc => $alloc, for_mode => 1);
+        } elsif ($structured eq 'TryExit') {
+            my $expr = defined($stmt->{expr}) ? $stmt->{expr} : $stmt->{first};
+            @extra = _expand_try_exit($region, $stmt, $next, $alloc) if _try_expr_may_be_fallible($expr);
+        }
 
         push @$regions, @extra if @extra;
     }

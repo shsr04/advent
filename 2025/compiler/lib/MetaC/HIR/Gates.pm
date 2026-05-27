@@ -2,9 +2,10 @@ package MetaC::HIR::Gates;
 use strict;
 use warnings;
 use Exporter 'import';
+use Data::Dumper ();
 
 use MetaC::Support qw(compile_error);
-use MetaC::HIR::OpRegistry qw(method_has_length_semantics);
+use MetaC::HIR::NodeRegistry qw(method_has_length_semantics);
 use MetaC::HIR::TypeRegistry qw(scalar_is_error);
 use MetaC::TypeSpec qw(
     is_union_type
@@ -15,59 +16,13 @@ use MetaC::TypeSpec qw(
 
 our @EXPORT_OK = qw(verify_vnf_hir dump_vnf_hir);
 
-sub _sorted_hash_lines {
-    my ($prefix, $hash, $out) = @_;
-    for my $key (sort keys %$hash) {
-        my $v = $hash->{$key};
-        if (ref($v) eq 'HASH') {
-            push @$out, "$prefix$key:";
-            _sorted_hash_lines($prefix . '  ', $v, $out);
-            next;
-        }
-        if (ref($v) eq 'ARRAY') {
-            push @$out, "$prefix$key:[";
-            for my $item (@$v) {
-                if (ref($item) eq 'HASH') {
-                    push @$out, "$prefix  -";
-                    _sorted_hash_lines($prefix . '    ', $item, $out);
-                } else {
-                    push @$out, "$prefix  - $item";
-                }
-            }
-            push @$out, "$prefix]";
-            next;
-        }
-        $v = '' if !defined $v;
-        push @$out, "$prefix$key:$v";
-    }
-}
-
 sub dump_vnf_hir {
     my ($hir) = @_;
-    my @out;
-    push @out, "version:$hir->{version}";
-    push @out, "fact_lattice.merge_policy:$hir->{fact_lattice}{merge_policy}";
-    for my $fn (@{ $hir->{functions} }) {
-        push @out, "function:$fn->{id}:$fn->{name}:$fn->{return_type}";
-        push @out, "  entry_region:$fn->{entry_region}";
-        for my $region (@{ $fn->{regions} }) {
-            push @out, "  region:$region->{id}";
-            for my $step (@{ $region->{steps} }) {
-                my $payload = $step->{payload} // {};
-                my $sk = $payload->{stmt_kind} // '';
-                my $ln = $payload->{line} // ($step->{provenance}{line} // 0);
-                push @out, "    step:$step->{id}:$step->{kind}:$sk:line=$ln";
-            }
-            my @exit_lines;
-            _sorted_hash_lines('    exit.', $region->{exit}, \@exit_lines);
-            push @out, @exit_lines;
-            for my $tag (sort keys %{ $region->{facts_out_by_exit} // {} }) {
-                my $facts = $region->{facts_out_by_exit}{$tag} // [];
-                push @out, "    facts.$tag:" . join(',', @$facts);
-            }
-        }
-    }
-    return join("\n", @out) . "\n";
+    local $Data::Dumper::Sortkeys = 1;
+    local $Data::Dumper::Terse = 1;
+    local $Data::Dumper::Indent = 1;
+    local $Data::Dumper::Useqq = 1;
+    return Data::Dumper::Dumper($hir);
 }
 
 sub _type_supported {

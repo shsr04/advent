@@ -377,7 +377,7 @@ sub _expr_to_c {
         my $meta = (defined($resolved) && ref($resolved) eq 'HASH') ? $resolved
           : ((defined($canonical) && ref($canonical) eq 'HASH') ? $canonical : {});
         my $call_kind = $meta->{call_kind} // '';
-        my $op_id = $meta->{op_id} // '';
+        my $op_id = backend_emitter_id_for_op($meta->{op_id} // '') // ($meta->{op_id} // '');
         my $target = $meta->{target_name} // ($expr->{name} // '');
         my @args = map { _expr_to_c($_, $ctx) } @{ $expr->{args} // [] };
 
@@ -484,7 +484,7 @@ sub _expr_to_c {
         my $meta = (defined($resolved) && ref($resolved) eq 'HASH') ? $resolved
           : ((defined($canonical) && ref($canonical) eq 'HASH') ? $canonical : {});
         my $call_kind = $meta->{call_kind} // '';
-        my $op_id = $meta->{op_id} // '';
+        my $op_id = backend_emitter_id_for_op($meta->{op_id} // '') // ($meta->{op_id} // '');
         my $target = $meta->{target_name} // ($expr->{method} // '');
         my $recv_expr = $expr->{recv};
         my $recv = _expr_to_c($recv_expr, $ctx);
