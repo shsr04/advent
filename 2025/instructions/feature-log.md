@@ -611,8 +611,8 @@ Use this block for each feature:
     - backend statement/op emitter selection is registry-owned, with reusable emitter routines providing the mechanical C text.
     - remaining registry gaps:
       - parser statement recognition is now registry-dispatched through `statement_recognizers()`; `compiler/lib/MetaC/Parser/BlockParse.pm` keeps only block line normalization, terminators, inline-if normalization, and unknown-line fallback through the registered raw recognizer.
-      - statement backend dispatch is registry-selected through `BackendCStmtPart.pm`, but `BackendCStmtEmitters.pm` still contains the old procedural emitter body and needs behavior-level splitting.
-      - backend expression emission still contains direct operation-id branch trees in `compiler/lib/MetaC/Backend/BackendCExprPart.pm`.
+      - statement backend dispatch is registry-selected through `BackendCStmtPart.pm`; declaration emission has begun moving into behavior-level backend shards, and the remaining statement body should continue to be split by emitter id.
+      - operation metadata now declares explicit `backend_emitter` ids in `NodeRegistry/OperationsData.pm`; backend expression emission consumes emitter ids instead of falling back to raw operation ids.
       - `MetaC::HIR::NodeRegistry` was split into the `NodeRegistry::*` statement, exit, and operation modules on 2026-05-27, and registry contract checks now cover statement recognizer/emitter metadata, exit edge/target metadata, and operation backend emitter ids.
       - several older F-051-era modules still exceed the 500-line file limit and need follow-up splitting.
     - old `MaterializeC`, `Codegen/*`, and `BlockStage*` references below are historical notes, not current filesystem paths.

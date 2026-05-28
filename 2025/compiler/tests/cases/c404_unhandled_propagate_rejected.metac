@@ -1,0 +1,13 @@
+@Test({
+   "compile_err" : "error propagation needs `error` return type"
+})
+function main(): int {
+  const caps = "x".match("[")
+  return caps.size()
+}
+
+function compute(origin: number): number {
+    let grid: matrix(string) with dim(2) = []
+    grid.insert("cool", [origin, origin])?
+    return grid.at([origin+1, origin+1])
+}

@@ -223,6 +223,7 @@ sub _expr_c_type_hint {
 
 
 require MetaC::Backend::BackendCExprPart;
+require MetaC::Backend::ExprEmitters;
 require MetaC::Backend::BackendCStmtPart;
 require MetaC::Backend::BackendCFunctionPart;
 

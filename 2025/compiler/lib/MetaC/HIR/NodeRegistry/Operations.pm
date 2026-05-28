@@ -29,8 +29,8 @@ sub backend_emitter_id_for_op {
     my ($op_id) = @_;
     return undef if !defined($op_id) || $op_id eq '';
     my $spec = op_spec($op_id);
-    return $spec->{backend_emitter} if defined($spec) && defined($spec->{backend_emitter});
-    return $op_id;
+    return undef if !defined($spec);
+    return $spec->{backend_emitter};
 }
 
 sub user_call_op_id {
@@ -423,4 +423,3 @@ sub method_param_contract {
     }
     return undef;
 }
-

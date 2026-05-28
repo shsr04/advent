@@ -367,6 +367,13 @@ sub _fn_allows_error_propagation {
     return 0;
 }
 
+sub _require_error_propagation_return_type {
+    my ($ctx) = @_;
+    return if ($ctx->{fn_name} // '') eq 'main';
+    return if _fn_allows_error_propagation($ctx);
+    compile_error("Semantic/F053-Fallibility: error propagation needs `error` return type");
+}
+
 sub _expr_contains_try {
     my ($expr) = @_;
     return 0 if !defined($expr) || ref($expr) ne 'HASH';
@@ -913,9 +920,10 @@ sub _validate_stmt {
                 }
             }
         }
-        _validate_expr($expr, $ctx, 1);
         compile_error("Semantic/F053-Type: Unsupported try expression in const assignment")
           if !_expr_is_fallible($expr, $ctx);
+        _require_error_propagation_return_type($ctx);
+        _validate_expr($expr, $ctx, 1);
         if ($kind ne 'expr_stmt_try') {
             my $name = $stmt->{name} // '';
             my $inner_t = _infer_expr_type($expr, $ctx);
@@ -939,9 +947,10 @@ sub _validate_stmt {
 
     if ($kind eq 'const_try_tail_expr') {
         my $first = $stmt->{first};
-        _validate_expr($first, $ctx, 1);
         compile_error("Semantic/F053-Type: Unsupported try expression in const assignment")
           if !_expr_is_fallible($first, $ctx);
+        _require_error_propagation_return_type($ctx);
+        _validate_expr($first, $ctx, 1);
 
         my $cur_t = _infer_expr_type($first, $ctx);
         $cur_t = _normalize_fallible_expr_type_for_try_assignment($first, $cur_t, $ctx);
@@ -989,9 +998,10 @@ sub _validate_stmt {
     if ($kind eq 'const_try_chain') {
         my $name = $stmt->{name} // '';
         my $first = $stmt->{first};
-        _validate_expr($first, $ctx, 1);
         compile_error("Semantic/F053-Fallibility: try-expression requires fallible expression")
           if !_expr_is_fallible($first, $ctx);
+        _require_error_propagation_return_type($ctx);
+        _validate_expr($first, $ctx, 1);
         my $cur_t = _infer_expr_type($first, $ctx);
         $cur_t = _normalize_fallible_expr_type_for_try_assignment($first, $cur_t, $ctx);
         my $ok_t = _type_without_error_union_member($cur_t);
@@ -1207,6 +1217,7 @@ sub _validate_stmt {
         }
         my $iter_t = _validate_expr($stmt->{iterable}, $ctx, $kind eq 'for_each_try' ? 1 : 0);
         if ($kind eq 'for_each_try') {
+            _require_error_propagation_return_type($ctx);
             compile_error("Semantic/F053-Fallibility: for_each_try requires fallible iterable expression")
               if !_expr_is_fallible($stmt->{iterable}, $ctx);
             my $ok_iter_t = _type_without_error_union_member($iter_t);

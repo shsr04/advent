@@ -4,8 +4,7 @@ function helper(): int {
 }
 
 @Test({
-   "exit" : 2,
-   "stdout" : ""
+   "compile_err" : "error propagation needs `error` return type"
 })
 function main(): int {
   return helper()

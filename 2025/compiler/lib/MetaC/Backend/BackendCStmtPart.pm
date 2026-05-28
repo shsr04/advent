@@ -55,5 +55,6 @@ sub _emit_stmt_registered {
 }
 
 require MetaC::Backend::BackendCStmtEmitters;
+require MetaC::Backend::BackendCStmtDeclEmitters;
 
 1;

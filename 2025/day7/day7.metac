@@ -8,18 +8,17 @@ function main() {
 
 function sumBeams(): number | error {
   let grid: matrix(string) with dim(2) = []
-  let sum = 0
 
-  for const row in split(STDIN, "\n")? {
+  for const row in STDIN.split("\n")? {
     for const c in row.chars() { 
       grid.insert(c, [row.index(), c.index()])?
     }
   }
   
-  const start = findStart(grid)
+  const startCol = findStartCol(grid)
   
-  let next: (int[] with size(2))[] = [[1, start-1], [1, start+1]]
   let rowPointer = 1
+  let next: (int[] with size(2))[] = [[rowPointer, startCol]]
   let splits = 0
 
   while true {
@@ -29,24 +28,28 @@ function sumBeams(): number | error {
     
     for const i in seq(0, next.size()-1) {
         const [row,col] = next[i]
+        [row,col].log()
         if grid.at(next[i]) == "." {
             next.insert([row+1,col], i)
         } else {
-            next.insert([row+1,col-1], i)
-            next.push([row+1,col+1])
-            sum++
+            const left = [row+1,col-1]
+            const right = [row+1,col+1]
+            next.insert(left, i)
+            next.push(right)
+            log("split <->")
+            splits++
         }
         rowPointer = max(rowPointer, row+1)
     }
   }
   
-  return sum
+  return splits
 }
 
-function findStart(grid: matrix(string) with dim(2)): number {
-  for const y in seq(0, grid.size(1)-1) {
-    if grid.at([0, y]) == "S" {
-      return y
+function findStartCol(grid: matrix(string) with dim(2)): number {
+  for const x in seq(0, grid.size(1)-1) {
+    if grid.at([0, x]) == "S" {
+      return x
     }
   }
 }

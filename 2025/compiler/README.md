@@ -13,11 +13,11 @@ source -> parser -> VNF-HIR lowering -> HIR gates -> HIR semantic checks -> call
 
 `MetaC::HIR::NodeRegistry` is the canonical registry for statement kinds, exit edge contracts, operation metadata, and backend emitter selection. Parser structures are lowered into typed HIR payloads before backend entry.
 
-Current registry gap:
+Current registry status:
 
 - Parser statement recognition is registry-dispatched from `MetaC::HIR::NodeRegistry::Statements`; `BlockParse.pm` owns only block line normalization, terminators, inline-if normalization, and dispatch.
 - `compiler/lib/MetaC/Backend/BackendCStmtPart.pm` selects statement emitters through registry ids; the mechanical statement bodies live in `BackendCStmtEmitters.pm` and still need behavior-level splitting into per-emitter routines.
-- `compiler/lib/MetaC/Backend/BackendCExprPart.pm` still contains direct operation-id emission branches for builtin and method calls; registry operation metadata exists, but backend expression emission is not yet fully table-dispatched.
+- Operation metadata now carries explicit `backend_emitter` ids. Concrete C emission remains backend-owned under `compiler/lib/MetaC/Backend/`; expression emission dispatches on emitter ids, not raw operation ids.
 - Several older F-051-era modules still exceed the 500-line file limit and should be split before more compiler surface is added.
 
 ## Module Layout

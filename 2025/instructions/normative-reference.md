@@ -85,8 +85,8 @@ A function *is* a named block of executable statements.
 The program execution begins at the function `main(): int`. The return value of `main` determines the exit code of the program.
 
 When a function does not specify a return type, it returns no value. The exception is `main`, which implicitly returns `int`.
-A function without a return type *can* use the `return` statement to exit early.
 A function with a return type *must* return a conformant value in all of its execution paths.
+A function without a return type *must not* return a value. Nonetheless, it may use the `return` statement to exit early.
 
 The program must not call any function which is not defined.
 
@@ -180,7 +180,7 @@ For example:
 For example:
 - `number with range(0,100)` is a number from 0 to 100
 - `number with range(0,*)` is a number at least 0
-- `string with size(*)` is a string with any size (equivalent to `string`)
+- `string with size(*)` is a string with any size (functionally equivalent to `string`)
 
 The program must not apply constraints to a type which does not support the constraint.
 
@@ -209,6 +209,7 @@ Type entailment *can* occur in the following constructs:
 - Conditional statement:
   - `if n > 2 { ... }` entails that `n > 2` holds in this scope
   - `if n < 0 { return false } ...` entails that `n >= 0` holds in the subsequent statements
+- Range statement:
   - `for const i in seq(1,10) { ... }` entails `i: number with range(1,10)`
 
 Type entailment can occur *either* for immutable variables *or* for mutable variables that are effectively unmodified in the respective scope.

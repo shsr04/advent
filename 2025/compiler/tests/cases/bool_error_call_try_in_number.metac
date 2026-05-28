@@ -3,7 +3,7 @@
    "stdout" : "Result: 7\n"
 })
 function main() {
-  const result = run()
+  const result = run()?
   log("Result: ${result}")
 }
 
@@ -12,7 +12,7 @@ function maybeFlag(s: string): bool | error {
   return n > 3
 }
 
-function run(): number {
+function run(): number | error {
   const flag = maybeFlag("8")?
   if flag {
     return 7

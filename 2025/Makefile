@@ -7,6 +7,7 @@ PERL := prlimit -v=$(MEM_LIMIT) perl
 
 METAC_SOURCES := $(sort $(wildcard day*/day*.metac))
 COMPILER_SOURCES := compiler/metac.pl $(sort $(shell find compiler/lib -type f -name '*.pm'))
+TEST_LOADERS := $(sort $(shell find compiler/tests -type f -name '*.pl'))
 
 source_to_c = $(dir $1)build/$(notdir $(basename $1)).c
 source_to_bin = $(dir $1)build/$(notdir $(basename $1))
@@ -31,7 +32,7 @@ bins: $(BIN_ARTIFACTS)
 run: $(RUN_OUTPUTS)
 
 compiler-test:
-	$(PERL) compiler/tests/run.pl
+	$(foreach t,$(TEST_LOADERS),$(PERL) $(t) &&) echo "All tests passed."
 
 test: compiler-test
 
