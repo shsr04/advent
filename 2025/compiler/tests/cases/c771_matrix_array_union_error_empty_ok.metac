@@ -1,0 +1,8 @@
+@Test({
+   "exit" : 0,
+   "stdout" : ""
+})
+function main(): number {
+  const x: matrix((int[] with size(2) | boolean[] with size(5) | error)[]) with dim(2) + matrixSize([3,3]) = []
+  return 0
+}

@@ -282,6 +282,9 @@ sub _emit_stmt_body {
         }
         my $target_ty = $ctx->{var_types}{$name} // '';
         if (defined($stmt->{expr}) && ref($stmt->{expr}) eq 'HASH' && (($stmt->{expr}{kind} // '') eq 'list_literal')) {
+            my $src_type = $stmt->{type} // ($ctx->{var_source_types}{$name} // '');
+            my $typed_list_rhs = _list_literal_to_c_for_type($stmt->{expr}, $src_type, $ctx);
+            $rhs = $typed_list_rhs if defined($typed_list_rhs);
             my $items = $stmt->{expr}{items} // [];
             if (ref($items) eq 'ARRAY' && !@$items) {
                 if ($target_ty eq 'struct metac_list_list_i64') {
@@ -307,6 +310,8 @@ sub _emit_stmt_body {
         if ($k eq 'typed_assign' && defined($constraints) && ref($constraints) eq 'HASH') {
             $ctx->{var_constraints}{$name} = $constraints;
         }
+        $ctx->{var_source_types}{$name} = $stmt->{type}
+          if $k eq 'typed_assign' && defined($stmt->{type}) && $stmt->{type} ne '';
         my $mvar = $ctx->{matrix_meta_vars}{$name} // '';
         if ($mvar ne '') {
             my $src = _matrix_meta_alias_source_name_stmt($stmt->{expr});

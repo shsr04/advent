@@ -2,6 +2,7 @@ package MetaC::Backend::CTypeRegistry;
 use strict;
 use warnings;
 use Exporter 'import';
+use Digest::MD5 qw(md5_hex);
 
 use MetaC::HIR::TypeRegistry qw(canonical_scalar_base);
 use MetaC::Support qw(compile_error);
@@ -28,6 +29,8 @@ our @EXPORT_OK = qw(
     c_log_strategy_for_c_type
     c_log_strategy_for_type
     c_intrinsic_method_strategy_for_types
+    ad_hoc_c_type_for_normalized
+    is_ad_hoc_c_type
 );
 
 my %SCALAR_C_TYPE = (
@@ -84,6 +87,17 @@ my %DEFAULT_C_EXPR_FOR_TYPE = (
     'struct metac_list_list_i64' => 'metac_list_list_i64_empty()',
 );
 
+sub ad_hoc_c_type_for_normalized {
+    my ($normalized) = @_;
+    return undef if !defined($normalized) || $normalized eq '';
+    return 'struct metac_ad_hoc_' . substr(md5_hex($normalized), 0, 16);
+}
+
+sub is_ad_hoc_c_type {
+    my ($c_type) = @_;
+    return defined($c_type) && $c_type =~ /^struct metac_ad_hoc_[0-9a-f]{16}$/ ? 1 : 0;
+}
+
 sub scalar_c_type {
     my ($type) = @_;
     return undef if !defined($type) || $type eq '';
@@ -114,16 +128,18 @@ sub _build_type_shape {
         my @member_shapes = map { _build_type_shape($_) } @members;
         return undef if grep { !defined($_) } @member_shapes;
         return {
-            kind    => 'union',
-            members => \@member_shapes,
+            kind       => 'union',
+            normalized => $normalized,
+            members    => \@member_shapes,
         };
     }
 
     my $base = canonical_scalar_base($normalized);
     if (defined($base)) {
         return {
-            kind => 'scalar',
-            base => $base,
+            kind       => 'scalar',
+            normalized => $normalized,
+            base       => $base,
         };
     }
 
@@ -133,8 +149,9 @@ sub _build_type_shape {
         my $elem = _build_type_shape($meta->{elem});
         return undef if !defined($elem);
         return {
-            kind => 'sequence_member',
-            elem => $elem,
+            kind       => 'sequence_member',
+            normalized => $normalized,
+            elem       => $elem,
         };
     }
 
@@ -144,8 +161,9 @@ sub _build_type_shape {
         my $elem = _build_type_shape($meta->{elem});
         return undef if !defined($elem);
         return {
-            kind => 'array',
-            elem => $elem,
+            kind       => 'array',
+            normalized => $normalized,
+            elem       => $elem,
         };
     }
 
@@ -155,8 +173,9 @@ sub _build_type_shape {
         my $elem = _build_type_shape($meta->{elem});
         return undef if !defined($elem);
         return {
-            kind => 'matrix_member',
-            elem => $elem,
+            kind       => 'matrix_member',
+            normalized => $normalized,
+            elem       => $elem,
         };
     }
 
@@ -166,8 +185,9 @@ sub _build_type_shape {
         my $elem = _build_type_shape($meta->{elem});
         return undef if !defined($elem);
         return {
-            kind => 'matrix_member_list',
-            elem => $elem,
+            kind       => 'matrix_member_list',
+            normalized => $normalized,
+            elem       => $elem,
         };
     }
 
@@ -177,9 +197,10 @@ sub _build_type_shape {
         my $elem = _build_type_shape($meta->{elem});
         return undef if !defined($elem);
         return {
-            kind => 'matrix',
-            elem => $elem,
-            dim  => int($meta->{dim} // 0),
+            kind       => 'matrix',
+            normalized => $normalized,
+            elem       => $elem,
+            dim        => int($meta->{dim} // 0),
         };
     }
 
@@ -238,16 +259,11 @@ sub _shape_to_c_type {
         my $scalar_family = _shape_collection_scalar_family($shape);
         return 'const char *' if defined($scalar_family) && $scalar_family eq 'string';
         return 'int64_t' if defined($scalar_family) && $scalar_family eq 'i64';
-
-        my %seen;
-        my @candidates;
-        for my $member (@{ $shape->{members} // [] }) {
-            my $c = _shape_to_c_type($member);
-            next if !defined($c) || $c eq '' || $seen{$c}++;
-            push @candidates, $c;
-        }
-        return undef if @candidates != 1;
-        return $candidates[0];
+        my @non_error = grep {
+            defined($_) && ref($_) eq 'HASH' && (($_->{kind} // '') ne 'scalar' || (($_->{base} // '') ne 'error'))
+        } @{ $shape->{members} // [] };
+        return _shape_to_c_type($non_error[0]) if @non_error == 1;
+        return ad_hoc_c_type_for_normalized($shape->{normalized});
     }
 
     if ($kind eq 'sequence_member' || $kind eq 'matrix_member') {
@@ -266,7 +282,7 @@ sub _shape_to_c_type {
         return 'struct metac_list_list_i64'
           if defined($elem_c) && $elem_c eq 'struct metac_list_i64';
 
-        return undef;
+        return ad_hoc_c_type_for_normalized($shape->{normalized});
     }
 
     return undef;

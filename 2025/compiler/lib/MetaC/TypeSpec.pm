@@ -161,19 +161,19 @@ sub _normalize_single_type {
     my $t = trim($type // '');
     $t = _strip_outer_parens($t);
     $t = _strip_outer_parens(_type_without_top_level_constraints($t));
-    $t =~ s/\s+//g;
     if ($t =~ /^(.*)\[\]$/) {
         my $inner = normalize_type_annotation($1);
         return _build_array_type(elem => $inner);
     }
-    return 'number' if $t eq 'int';
-    return 'number' if $t eq 'float';
-    return 'bool' if $t eq 'boolean';
     my $matrix_inner = _matrix_inner_type($t);
     if (defined $matrix_inner) {
         my $inner = normalize_type_annotation($matrix_inner);
         return _build_matrix_type(elem => $inner, dim => 2, sizes => undef);
     }
+    $t =~ s/\s+//g;
+    return 'number' if $t eq 'int';
+    return 'number' if $t eq 'float';
+    return 'bool' if $t eq 'boolean';
     return $t;
 }
 sub _type_without_top_level_constraints {

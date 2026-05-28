@@ -1178,12 +1178,58 @@ sub _with_line_context {
     return $ret;
 }
 
+sub _child_region_envs_for_exit {
+    my (%args) = @_;
+    my $exit = $args{exit};
+    my $env = $args{env};
+    my $sigs = $args{sigs};
+    return () if !defined($exit) || ref($exit) ne 'HASH';
+
+    my $kind = $exit->{kind} // '';
+    if ($kind eq 'IfExit') {
+        return (
+            [ $exit->{then_region}, _clone_env($env) ],
+            [ $exit->{else_region}, _clone_env($env) ],
+        );
+    }
+    if ($kind eq 'WhileExit') {
+        return ([ $exit->{body_region}, _clone_env($env) ]);
+    }
+    if ($kind eq 'ForInExit') {
+        my $body_env = _clone_env($env);
+        my $item = $exit->{item_name};
+        if (defined($item) && $item ne '') {
+            my $iter_t = _infer_expr_type_hint($exit->{iterable_expr}, $env, $sigs, {});
+            my $ok = _type_without_error_union_member($iter_t);
+            $iter_t = $ok if defined($ok) && $ok ne '';
+            my $item_t = _iterable_item_type_hint($iter_t);
+            $body_env->{$item} = $item_t if defined($item_t) && $item_t ne '';
+        }
+        return ([ $exit->{body_region}, $body_env ]);
+    }
+    if ($kind eq 'TryExit') {
+        my $ok_env = _clone_env($env);
+        my $err_env = _clone_env($env);
+        $err_env->{__try_error} = 'error';
+        return (
+            [ $exit->{ok_region}, $ok_env ],
+            [ $exit->{err_region}, $err_env ],
+        );
+    }
+    return ();
+}
+
 sub _resolve_region_calls {
     my (%args) = @_;
     my $region = $args{region};
     my $env = $args{env};
     my $sigs = $args{sigs};
+    my $region_by_id = $args{region_by_id} // {};
+    my $seen_region = $args{seen_region} // {};
     return if !defined($region) || ref($region) ne 'HASH';
+
+    my $rid = $region->{id} // '';
+    return if $rid ne '' && $seen_region->{$rid}++;
 
     for my $step (@{ $region->{steps} // [] }) {
         my $line = $step->{provenance}{line};
@@ -1211,9 +1257,22 @@ sub _resolve_region_calls {
             _resolve_expr(expr => $exit->{$k}, env => $env, sigs => $sigs, seen => {})
               if defined $exit->{$k} && ref($exit->{$k}) eq 'HASH';
         }
-        _register_exit_bindings(exit => $exit, env => $env, sigs => $sigs);
         return;
     });
+
+    for my $child (_child_region_envs_for_exit(exit => $exit, env => $env, sigs => $sigs)) {
+        my ($child_id, $child_env) = @$child;
+        next if !defined($child_id) || $child_id eq '';
+        my $child_region = $region_by_id->{$child_id};
+        next if !defined($child_region);
+        _resolve_region_calls(
+            region       => $child_region,
+            env          => $child_env,
+            sigs         => $sigs,
+            region_by_id => $region_by_id,
+            seen_region  => $seen_region,
+        );
+    }
 }
 
 sub _resolve_function_calls {
@@ -1230,13 +1289,26 @@ sub _resolve_function_calls {
         for my $rid (@$schedule) {
             my $region = $region_by_id{$rid};
             next if !defined $region;
-            _resolve_region_calls(region => $region, env => $env, sigs => $sigs);
+            _resolve_region_calls(
+                region       => $region,
+                env          => $env,
+                sigs         => $sigs,
+                region_by_id => \%region_by_id,
+                seen_region  => {},
+            );
         }
     }
 
     for my $region (@{ $fn->{regions} // [] }) {
         next if %scheduled && $scheduled{$region->{id}};
-        _resolve_region_calls(region => $region, env => $env, sigs => $sigs);
+        next if defined($region->{parent_region}) || defined($region->{scope_inherits_from});
+        _resolve_region_calls(
+            region       => $region,
+            env          => $env,
+            sigs         => $sigs,
+            region_by_id => \%region_by_id,
+            seen_region  => {},
+        );
     }
 }
 

@@ -42,10 +42,11 @@ sub _emit_exit {
     if ($k eq 'ForInExit') {
         my $loop = $exit->{loop_id} // 'L0';
         my $item = $exit->{item_name} // '__item';
+        my $loop_meta = $ctx->{loop_meta}{$loop} // {};
+        my $item_c = $loop_meta->{item_c_name} // $item;
         my $body = $exit->{body_region} // '__missing_region';
         my $end = $exit->{end_region} // '__missing_region';
         my $iter = $exit->{iterable_expr};
-        my $loop_meta = $ctx->{loop_meta}{$loop} // {};
         my $iter_ty = $loop_meta->{iter_c_type} // 'struct metac_list_i64';
         my $iter_c = _expr_to_c($iter, $ctx);
         push @$out, "${sp}if (!__loop_init_$loop) {";
@@ -67,11 +68,11 @@ sub _emit_exit {
         push @$out, "${sp}}";
         push @$out, "${sp}if (__loop_idx_$loop < __loop_len_$loop) {";
         if ($iter_ty eq 'struct metac_list_str') {
-            push @$out, "${sp}  $item = metac_list_str_get(&__loop_iter_$loop, __loop_idx_$loop);";
+            push @$out, "${sp}  $item_c = metac_list_str_get(&__loop_iter_$loop, __loop_idx_$loop);";
         } elsif ($iter_ty eq 'struct metac_list_list_i64') {
-            push @$out, "${sp}  $item = metac_list_list_i64_get(&__loop_iter_$loop, __loop_idx_$loop);";
+            push @$out, "${sp}  $item_c = metac_list_list_i64_get(&__loop_iter_$loop, __loop_idx_$loop);";
         } else {
-            push @$out, "${sp}  $item = metac_list_i64_get(&__loop_iter_$loop, __loop_idx_$loop);";
+            push @$out, "${sp}  $item_c = metac_list_i64_get(&__loop_iter_$loop, __loop_idx_$loop);";
         }
         push @$out, "${sp}  __loop_idx_$loop++;";
         push @$out, "${sp}  goto region_$body;";
@@ -232,9 +233,13 @@ sub _collect_forin_loops {
         my $item_ty = $iter_ty eq 'struct metac_list_str' ? 'const char *'
           : ($iter_ty eq 'struct metac_list_list_i64' ? 'struct metac_list_i64' : 'int64_t');
         my $item_name = $exit->{item_name} // '__item';
+        my $item_c_name = "__loop_item_${id}_${item_name}";
+        $item_c_name =~ s/[^A-Za-z0-9_]/_/g;
         push @loops, {
             loop_id => $id,
             item_name => $item_name,
+            item_c_name => $item_c_name,
+            body_region => $exit->{body_region},
             iter_c_type => $iter_ty,
             item_c_type => $item_ty,
             index_expr => $index_expr,
@@ -242,6 +247,26 @@ sub _collect_forin_loops {
         $var_types{$item_name} = $item_ty if defined($item_name) && $item_name ne '';
     }
     return \@loops;
+}
+
+sub _region_aliases {
+    my ($rid, $regions_by_id, $region_aliases) = @_;
+    my @chain;
+    my %seen;
+    my $cur = $rid;
+    while (defined($cur) && $cur ne '' && !$seen{$cur}++) {
+        push @chain, $cur;
+        my $region = $regions_by_id->{$cur};
+        last if !defined($region) || ref($region) ne 'HASH';
+        $cur = $region->{parent_region};
+    }
+    my %aliases;
+    for my $id (reverse @chain) {
+        my $a = $region_aliases->{$id};
+        next if !defined($a) || ref($a) ne 'HASH';
+        $aliases{$_} = $a->{$_} for keys %$a;
+    }
+    return \%aliases;
 }
 
 sub _emit_function {
@@ -262,6 +287,7 @@ sub _emit_function {
     my $ctx = {
         helpers => {},
         var_types => {},
+        var_source_types => {},
         var_constraints => {},
         matrix_meta_vars => {},
         generated_globals => {},
@@ -278,12 +304,15 @@ sub _emit_function {
         _helper_mark($ctx, 'list_i64');
         _helper_mark($ctx, 'list_list_i64');
     }
+    _mark_type_helpers($ctx, $fn->{return_type}) if ($name // '') ne 'main';
     for my $p (@{ $fn->{params} // [] }) {
         my $pn = $p->{name} // '';
         next if $pn eq '';
         my $pt = _type_to_c($p->{type}, 'int64_t');
         $ctx->{var_types}{$pn} = $pt;
+        $ctx->{var_source_types}{$pn} = $p->{type} if defined($p->{type}) && $p->{type} ne '';
         $ctx->{var_constraints}{$pn} = $p->{constraints} if defined($p->{constraints});
+        _mark_type_helpers($ctx, $p->{type});
         _helper_mark($ctx, 'list_i64') if $pt eq 'struct metac_list_i64';
         _helper_mark($ctx, 'list_str') if $pt eq 'struct metac_list_str';
         if ($pt eq 'struct metac_list_list_i64') {
@@ -327,6 +356,7 @@ sub _emit_function {
     for my $loop (@$loops) {
         my $lid = $loop->{loop_id};
         my $item = $loop->{item_name};
+        my $item_c = $loop->{item_c_name} // $item;
         my $iter_ty = $loop->{iter_c_type} // 'struct metac_list_i64';
         my $item_ty = $loop->{item_c_type} // 'int64_t';
         my $iter_init = 'metac_list_i64_empty()';
@@ -346,14 +376,18 @@ sub _emit_function {
         push @out, "  int64_t __loop_len_$lid = 0;";
         push @out, "  $iter_ty __loop_iter_$lid = $iter_init;";
         if ($item_ty eq 'const char *') {
-            push @out, qq{  const char *$item = "";};
+            push @out, qq{  const char *$item_c = "";};
         } elsif ($item_ty eq 'struct metac_list_i64') {
             _helper_mark($ctx, 'list_i64');
-            push @out, "  struct metac_list_i64 $item = metac_list_i64_empty();";
+            push @out, "  struct metac_list_i64 $item_c = metac_list_i64_empty();";
         } else {
-            push @out, "  int64_t $item = 0;";
+            push @out, "  int64_t $item_c = 0;";
         }
         $ctx->{var_types}{$item} = $item_ty;
+        $ctx->{var_types}{$item_c} = $item_ty;
+        if (defined($loop->{body_region}) && ($loop->{body_region} // '') ne '') {
+            $ctx->{region_ident_alias}{ $loop->{body_region} }{$item} = $item_c;
+        }
         my $idx_expr = $loop->{index_expr};
         if (defined($idx_expr) && $idx_expr ne '') {
             if ($idx_expr =~ /metac_sort_index_at/) {
@@ -379,6 +413,12 @@ sub _emit_function {
     for my $region (@ordered_regions) {
         my $rid = $region->{id} // '__missing_region';
         my $exit_kind = $region->{exit}{kind} // '';
+        my %saved_alias = %{ $ctx->{ident_alias} // {} };
+        my $region_aliases = _region_aliases($rid, \%regions_by_id, $ctx->{region_ident_alias} // {});
+        if (%$region_aliases) {
+            my %merged_alias = (%saved_alias, %$region_aliases);
+            $ctx->{ident_alias} = \%merged_alias;
+        }
         $ctx->{current_region_exit_kind} = $exit_kind;
         $ctx->{current_region_exit_target} = ($exit_kind eq 'Goto') ? ($region->{exit}{target_region}) : undef;
         push @out, "region_$rid: ;";
@@ -466,6 +506,7 @@ sub _emit_function {
                 push @out, "  }";
                 $ctx->{current_region_exit_kind} = $saved_kind;
                 $ctx->{current_region_exit_target} = $saved_target;
+                $ctx->{ident_alias} = \%saved_alias;
                 next;
             }
         }
@@ -488,10 +529,12 @@ sub _emit_function {
             if ($has_structured_while) {
                 my $end = $region->{exit}{end_region} // '__missing_region';
                 push @out, "  goto region_$end;";
+                $ctx->{ident_alias} = \%saved_alias;
                 next;
             }
         }
         _emit_exit($region->{exit} // {}, \@out, 2, $default_return, $ctx, $name);
+        $ctx->{ident_alias} = \%saved_alias;
     }
 
     push @out, "  return $default_return;";

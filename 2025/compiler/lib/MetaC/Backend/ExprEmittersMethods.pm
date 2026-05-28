@@ -91,6 +91,12 @@ sub _emit_method_size {
                         _helper_mark($ctx, 'list_list_i64');
                         return 'metac_list_list_i64_size(&' . $recv_expr->{name} . ')';
                     }
+                    my $src_type = $ctx->{var_source_types}{ $recv_expr->{name} // '' } // '';
+                    my $ops = c_type_collection_ops_for_type($src_type);
+                    if (defined($ops) && ref($ops) eq 'HASH') {
+                        _mark_type_helpers($ctx, $src_type);
+                        return $ops->{size} . '(&' . $recv_expr->{name} . ')';
+                    }
                 }
                 if (defined($meta->{receiver_type_hint}) && _is_array_type($meta->{receiver_type_hint})) {
                     if (defined($recv_expr) && ref($recv_expr) eq 'HASH' && ($recv_expr->{kind} // '') eq 'ident') {
@@ -133,6 +139,12 @@ sub _emit_method_push {
                         _helper_mark($ctx, 'list_str');
                         _helper_mark($ctx, 'list_str_push');
                         return 'metac_list_str_push(&' . $recv_expr->{name} . ', ' . ($args[0] // '""') . ')';
+                    }
+                    my $src_type = $ctx->{var_source_types}{ $recv_expr->{name} // '' } // '';
+                    my $ops = c_type_collection_ops_for_type($src_type);
+                    if (defined($ops) && ref($ops) eq 'HASH') {
+                        _mark_type_helpers($ctx, $src_type);
+                        return $ops->{push} . '(&' . $recv_expr->{name} . ', ' . ($args[0] // $ops->{elem_default}) . ')';
                     }
                     _helper_mark($ctx, 'list_i64');
                     return 'metac_list_i64_push(&' . $recv_expr->{name} . ', ' . ($args[0] // '0') . ')';

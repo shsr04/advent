@@ -24,6 +24,11 @@ use MetaC::Backend::CTypeRegistry qw(
     c_log_strategy_for_type
     c_intrinsic_method_strategy_for_types
 );
+use MetaC::Backend::CTypeFactory qw(
+    c_type_helper_keys_for_type
+    c_type_default_expr_for_type
+    c_type_collection_ops_for_type
+);
 use MetaC::TypeSpec qw(
     is_sequence_member_type
     sequence_member_meta
@@ -36,6 +41,14 @@ sub _helper_mark {
     my ($ctx, $name) = @_;
     return if !defined($ctx) || ref($ctx) ne 'HASH' || !defined($name) || $name eq '';
     $ctx->{helpers}{$name} = 1;
+}
+
+sub _mark_type_helpers {
+    my ($ctx, $type) = @_;
+    return if !defined($type) || $type eq '';
+    for my $helper (@{ c_type_helper_keys_for_type($type) }) {
+        _helper_mark($ctx, $helper);
+    }
 }
 
 sub _c_escape {
@@ -223,6 +236,7 @@ sub _expr_c_type_hint {
 
 
 require MetaC::Backend::BackendCExprPart;
+require MetaC::Backend::BackendCListLiteralPart;
 require MetaC::Backend::ExprEmitters;
 require MetaC::Backend::BackendCStmtPart;
 require MetaC::Backend::BackendCFunctionPart;

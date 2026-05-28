@@ -11,6 +11,9 @@ sub _emit_declare_stmt {
     my $c_ty = _type_to_c($stmt->{type}, $inferred // 'int64_t');
     my $rhs = _expr_to_c($stmt->{expr}, $ctx);
     my $constraints = $stmt->{constraints};
+    _mark_type_helpers($ctx, $stmt->{type});
+    my $typed_list_rhs = _list_literal_to_c_for_type($stmt->{expr}, $stmt->{type}, $ctx);
+    $rhs = $typed_list_rhs if defined($typed_list_rhs);
     if ($c_ty eq 'struct metac_list_str' && defined($stmt->{expr}) && ref($stmt->{expr}) eq 'HASH' && ($stmt->{expr}{kind} // '') eq 'list_literal') {
         _helper_mark($ctx, 'list_str');
         my @items = @{ $stmt->{expr}{items} // [] };
@@ -45,6 +48,7 @@ sub _emit_declare_stmt {
     _helper_mark($ctx, 'list_list_i64') if $c_ty eq 'struct metac_list_list_i64';
     push @$out, $decl ? "${sp}$name = $rhs;" : "${sp}$c_ty $name = $rhs;";
     $ctx->{var_types}{$name} = $c_ty;
+    $ctx->{var_source_types}{$name} = $stmt->{type} if defined($stmt->{type}) && $stmt->{type} ne '';
     $ctx->{var_constraints}{$name} = $constraints if $name ne '';
     my $mmeta = _matrix_meta_for_type($stmt->{type});
     if (defined($mmeta) && ref($mmeta) eq 'HASH' && $name ne '') {

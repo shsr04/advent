@@ -264,8 +264,12 @@ The following general-purpose symbols and operations are available:
 
 A comparison operation *can* only occur between two operands which share at least one basic type. Two operands are equal if they contain exactly the same values. Otherwise, they are not equal.
 
+The following comparison operators are available:
+- `==(a, b): boolean` is true exactly if `a` and `b` *are* equal
+- `!=(a, b): boolean` is true exactly if `a` and `b` *are not* equal
+
 When ordering elements of the same type, the following comparison operations are available:
-- `<type>.compareTo(other: type): ComparisonResult`
+- `<type>.compareTo(other: <type>): ComparisonResult`
   - Returns an opaque type which indicates if the target value is `less than`, `equal` or `greater than` the `<other>` value.
 - `ComparisonResult.andThen(next: ComparisonResult): ComparisonResult`
   - Returns the subsequent comparison result, which is applied only if the preceding comparison produced an `equal` result. This allows chaining comparisons for staged execution.
@@ -275,7 +279,9 @@ The built-in types use the following default comparison operation:
 - String: lexicographical comparison
 - Sequence: first by size, then recursive element-wise comparison
 - Matrix: dimension-array comparison
-- Boolean: *no predefined comparison*
+- Boolean: equality comparison
+- Null: equality comparison
+- Error: identity comparison
 
 ### 5.2 Mathematical operations
 

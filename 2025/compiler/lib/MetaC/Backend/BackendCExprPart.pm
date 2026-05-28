@@ -355,6 +355,12 @@ sub _expr_to_c {
                 _helper_mark($ctx, 'list_str_get');
                 return "metac_list_str_get(&$cname, $idx)";
             }
+            my $src_type = $ctx->{var_source_types}{$name} // '';
+            my $ops = c_type_collection_ops_for_type($src_type);
+            if (defined($ops) && ref($ops) eq 'HASH') {
+                _mark_type_helpers($ctx, $src_type);
+                return $ops->{get} . "(&$cname, $idx)";
+            }
             if ($ty eq 'const char *') {
                 _helper_mark($ctx, 'string_index');
                 return "metac_string_code_at($cname, $idx)";

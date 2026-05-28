@@ -1,0 +1,17 @@
+@Test({
+  "stdout": "Result: 3\n",
+  "exit": 0
+})
+function main() {
+  let total = 0
+
+  for const row in split("ab", "\n")? {
+    for const c in row.chars() {
+      total += c.size()
+    }
+  }
+
+  let row = 1
+  total += row
+  log("Result: ${total}")
+}

@@ -16,31 +16,28 @@ function sumBeams(): number | error {
   }
   
   const startCol = findStartCol(grid)
-  
-  let rowPointer = 1
-  let next: (int[] with size(2))[] = [[rowPointer, startCol]]
+  let activeCols: int[] = [startCol]
+  let row = 1
   let splits = 0
 
-  while true {
-    if rowPointer == grid.size(0) {
-        break
+  while row < grid.size(0) {
+    let next: int[] = []
+
+    for const col in activeCols {
+      if col < 0 || col >= grid.size(1) { continue }
+
+      const cell = grid.at([row, col])
+      if cell == "^" {
+        next = pushUnique(next, col - 1)
+        next = pushUnique(next, col + 1)
+        splits++
+      } else {
+        next = pushUnique(next, col)
+      }
     }
     
-    for const i in seq(0, next.size()-1) {
-        const [row,col] = next[i]
-        [row,col].log()
-        if grid.at(next[i]) == "." {
-            next.insert([row+1,col], i)
-        } else {
-            const left = [row+1,col-1]
-            const right = [row+1,col+1]
-            next.insert(left, i)
-            next.push(right)
-            log("split <->")
-            splits++
-        }
-        rowPointer = max(rowPointer, row+1)
-    }
+    activeCols = next
+    row++
   }
   
   return splits
@@ -52,4 +49,13 @@ function findStartCol(grid: matrix(string) with dim(2)): number {
       return x
     }
   }
+}
+
+function pushUnique(xs: number[], value: number): number[] {
+  let out = xs
+  if out.any(x => x == value) {
+    return out
+  }
+  out.push(value)
+  return out
 }

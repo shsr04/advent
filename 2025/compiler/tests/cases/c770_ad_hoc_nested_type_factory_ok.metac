@@ -1,0 +1,11 @@
+@Test({
+   "exit" : 0,
+   "stdout" : "1\n"
+})
+function main(): number {
+  let cube: ((int[] with size(2))[] with size(1))[] = []
+  const plane: (int[] with size(2))[] with size(1) = [[1, 2]]
+  cube.push(plane)
+  log(cube.size())
+  return 0
+}
